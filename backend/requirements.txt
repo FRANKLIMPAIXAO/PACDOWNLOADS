@@ -20,3 +20,11 @@ python-multipart==0.0.20
 # --- Robô SEFAZ (opcional; só necessário se USE_MOCK_SEFAZ=false) ---
 # Após instalar, rodar: playwright install chromium
 playwright==1.48.0
+# Stealth mode pra burlar detecção do Cloudflare/portais SEFAZ
+playwright-stealth==2.0.3
+# Resolução de Cloudflare Turnstile no portal SEFAZ-GO
+2captcha-python==1.5.5
+
+# --- brazilfiscalreport: geração de DANFE PDF local a partir de XML ---
+# Usado em /documentos/{id}/pdf quando documento é saída e Focus não tem PDF
+brazilfiscalreport==2.1.0
