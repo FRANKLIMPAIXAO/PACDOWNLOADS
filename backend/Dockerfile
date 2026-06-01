@@ -45,8 +45,13 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 
-# Instala Chromium do Playwright (uma vez no build)
-RUN playwright install chromium && playwright install-deps chromium
+# Instala Chromium do Playwright (uma vez no build).
+# NOTA: NÃO chamamos `playwright install-deps` porque ele tenta instalar
+# pacotes Ubuntu 20.04 (ttf-unifont, ttf-ubuntu-font-family) que não
+# existem em Debian Trixie (base do python:3.12-slim). As libs nativas
+# (libnss3, libatk1.0-0, libdrm2, libgbm1, fonts-liberation, ...) já estão
+# instaladas via apt-get acima — cobrem 100% do que o Chromium precisa.
+RUN playwright install chromium
 
 # Código do app
 COPY . .
