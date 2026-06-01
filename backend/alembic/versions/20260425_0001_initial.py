@@ -30,8 +30,11 @@ def upgrade() -> None:
     op.create_index("ix_empresas_id", "empresas", ["id"])
     op.create_index("ix_empresas_cnpj", "empresas", ["cnpj"], unique=True)
 
+    # Deixa o create_table criar o ENUM sozinho (default do SQLAlchemy).
+    # Antes a migration tinha um .create() explícito + uso na Column, mas
+    # isso gerava DUAS instruções "CREATE TYPE tipodocumento" no Postgres
+    # (a segunda falhava). Em SQLite nem percebia (ENUM vira VARCHAR).
     tipo_documento = sa.Enum("NFE", "CTE", "NFSE", name="tipodocumento")
-    tipo_documento.create(op.get_bind(), checkfirst=True)
     op.create_table(
         "documentos_fiscais",
         sa.Column("id", sa.Integer(), primary_key=True),
