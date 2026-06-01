@@ -159,12 +159,30 @@ class RoboSefazService:
         # Lê o último resumo gerado (gerado SEMPRE no fim do main_async)
         resumo_path = self._ultimo_resumo(after=antes)
         if resumo_path is None:
-            # Sem resumo → falha
-            stderr_tail = (proc.stderr or "")[-2000:]
+            # Sem resumo → falha. Pega stderr (final 5KB, vasodá pro traceback Python)
+            # E também stdout (1KB do final) — Playwright às vezes loga erro real lá.
+            stderr_tail = (proc.stderr or "")[-5000:]
+            stdout_tail = (proc.stdout or "")[-1000:]
+            # Procura linhas "Error:" no stderr inteiro (a mensagem real do
+            # Playwright fica entre prints normais e o traceback Python).
+            err_lines = []
+            for line in (proc.stderr or "").splitlines():
+                low = line.lower()
+                if any(k in low for k in [
+                    "error:", "browser was not", "executable doesn", "missing",
+                    "cannot find", "permission denied", "no such",
+                ]):
+                    err_lines.append(line.strip()[:300])
+            chave_errors = " | ".join(err_lines[-5:]) if err_lines else "(nenhuma)"
+
             return self._falhar(
                 execucao,
-                f"Agente terminou exit={proc.returncode} sem gerar resumo. "
-                f"stderr_tail={stderr_tail!r}",
+                (
+                    f"Agente terminou exit={proc.returncode} sem gerar resumo. "
+                    f"erros_detectados=[{chave_errors}] "
+                    f"stdout_tail={stdout_tail!r} "
+                    f"stderr_tail={stderr_tail!r}"
+                ),
             )
 
         try:

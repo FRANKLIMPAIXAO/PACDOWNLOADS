@@ -248,6 +248,24 @@ async def criar_context(
     if BROWSER_EXECUTABLE_PATH:
         launch_kwargs["executable_path"] = BROWSER_EXECUTABLE_PATH
 
+    # Log diag pré-launch — quando falha em prod, esses prints ajudam a achar
+    # o erro real (path do chromium, PLAYWRIGHT_BROWSERS_PATH, args).
+    import os as _os
+    print(f"[diag] PLAYWRIGHT_BROWSERS_PATH={_os.environ.get('PLAYWRIGHT_BROWSERS_PATH','<default>')}", flush=True)
+    print(f"[diag] launch_kwargs={launch_kwargs}", flush=True)
+    try:
+        # Lista o que tem no path do chromium pra confirmar instalação
+        bp = _os.environ.get('PLAYWRIGHT_BROWSERS_PATH', '')
+        if bp and _os.path.isdir(bp):
+            print(f"[diag] {bp} contains: {_os.listdir(bp)[:20]}", flush=True)
+        # Lista também o default cache (~/.cache/ms-playwright) caso esteja lá
+        from pathlib import Path as _P
+        default_cache = _P.home() / ".cache" / "ms-playwright"
+        if default_cache.is_dir():
+            print(f"[diag] {default_cache} contains: {list(default_cache.iterdir())[:10]}", flush=True)
+    except Exception as _e:
+        print(f"[diag] listdir erro: {_e}", flush=True)
+
     browser = await pw.chromium.launch(**launch_kwargs)
     context = await browser.new_context(
         accept_downloads=True,
