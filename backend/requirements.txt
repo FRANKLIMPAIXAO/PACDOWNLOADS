@@ -23,7 +23,7 @@ playwright==1.48.0
 # Stealth mode pra burlar detecção do Cloudflare/portais SEFAZ
 playwright-stealth==2.0.3
 # Resolução de Cloudflare Turnstile no portal SEFAZ-GO
-2captcha-python==1.5.5
+2captcha-python==1.5.1
 
 # --- brazilfiscalreport: geração de DANFE PDF local a partir de XML ---
 # Usado em /documentos/{id}/pdf quando documento é saída e Focus não tem PDF
