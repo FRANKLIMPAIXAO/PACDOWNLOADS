@@ -7,6 +7,9 @@ pydantic==2.11.7
 pydantic-settings==2.10.1
 python-dotenv==1.1.1
 requests==2.32.4
+# Usado pelo agent/sefaz-go/pac_client.py pra chamar a API do PAC (upload zip,
+# listar empresas, marcar status execução). Async HTTP client.
+httpx==0.27.0
 celery[redis]==5.5.3
 redis==5.2.1
 pandas==2.3.1
