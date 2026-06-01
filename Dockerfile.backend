@@ -54,9 +54,18 @@ WORKDIR /app
 COPY backend/requirements.txt /app/requirements.txt
 RUN pip install -r requirements.txt
 
-# Chromium do Playwright (uma vez no build). Não chama install-deps —
-# as libs nativas acima cobrem tudo. install-deps quebra em Debian Trixie.
-RUN playwright install chromium
+# Chromium do Playwright. CRITICAL: instalamos em /opt/playwright-browsers em
+# vez do default ~/.cache/ms-playwright porque:
+# - install roda como root → vai pra /root/.cache (default)
+# - container roda como user 'pac' (uid 1000, criado abaixo) → NÃO tem acesso
+#   a /root → erro 'browser not found' em pw.chromium.launch()
+# A env PLAYWRIGHT_BROWSERS_PATH redireciona pro path compartilhado, e o
+# chown abaixo garante acesso do user pac.
+# NOTA: install-deps NÃO chamado (já temos libs nativas via apt-get acima;
+# install-deps tenta pacotes Ubuntu 20.04 que não existem em Debian Trixie).
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers
+RUN mkdir -p /opt/playwright-browsers \
+    && playwright install chromium
 
 # --- Código (muda mais — vai por último pro cache pegar deps acima) ---
 COPY backend/ /app/
@@ -68,9 +77,10 @@ RUN mkdir -p /app/storage/xmls /app/storage/cnds /app/storage/sitfis \
              /app/storage/parcsn /app/storage/guias_dctfweb /app/storage/guias_fgts \
              /app/certs /app/logs
 
-# Usuário não-root pra segurança
+# Usuário não-root pra segurança. Inclui /opt/playwright-browsers no chown
+# pra user pac conseguir abrir o Chromium em runtime (pw.chromium.launch).
 RUN useradd -m -u 1000 pac \
-    && chown -R pac:pac /app /agent
+    && chown -R pac:pac /app /agent /opt/playwright-browsers
 USER pac
 
 EXPOSE 8000
