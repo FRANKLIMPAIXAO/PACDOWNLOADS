@@ -1,0 +1,791 @@
+"use client";
+
+import { DragEvent, ReactNode, useEffect, useMemo, useState } from "react";
+
+import { DataTable } from "../../components/data-table";
+import { ProtectedRoute } from "../../components/protected-route";
+import { ApiError } from "../../lib/api";
+import {
+  Documento,
+  TipoDocumento,
+  UploadResultado,
+  baixarPdfDocumento,
+  baixarXmlDocumento,
+  baixarZipDocumentos,
+  formatBrl,
+  formatDate,
+  listarDocumentos,
+  manifestarDocumento,
+  manifestarTodasEmpresa,
+  uploadEmMassa,
+  verificarCanceladas,
+} from "../../lib/documentos";
+import { Empresa, listarEmpresas } from "../../lib/empresas";
+
+const TIPOS: TipoDocumento[] = ["NFE", "CTE", "NFSE"];
+
+export default function DocumentosPage() {
+  return (
+    <ProtectedRoute>
+      <DocumentosContent />
+    </ProtectedRoute>
+  );
+}
+
+type FiltroCancelada = "ativas" | "canceladas" | "todas";
+
+function DocumentosContent() {
+  const [empresas, setEmpresas] = useState<Empresa[]>([]);
+  const [documentos, setDocumentos] = useState<Documento[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+  const [empresaId, setEmpresaId] = useState<number | "">("");
+  const [tipo, setTipo] = useState<TipoDocumento | "">("");
+  const [filtroCancelada, setFiltroCancelada] = useState<FiltroCancelada>("ativas");
+  // Filtro de datas — default: último mês
+  const [dataInicio, setDataInicio] = useState<string>(() => {
+    const d = new Date();
+    d.setUTCMonth(d.getUTCMonth() - 1);
+    return d.toISOString().slice(0, 10);
+  });
+  const [dataFim, setDataFim] = useState<string>(() => new Date().toISOString().slice(0, 10));
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [refreshTick, setRefreshTick] = useState(0);
+  const [uploadModalOpen, setUploadModalOpen] = useState(false);
+  const [uploadResultado, setUploadResultado] = useState<UploadResultado | null>(null);
+
+  function handleUploadConcluido(r: UploadResultado) {
+    setUploadResultado(r);
+    setRefreshTick((t) => t + 1);
+  }
+
+  function aplicarPeriodoRapido(opcao: "mes-atual" | "mes-anterior" | "30d" | "60d" | "90d" | "ano" | "tudo") {
+    const hoje = new Date();
+    const fim = hoje.toISOString().slice(0, 10);
+    let inicio = fim;
+    if (opcao === "mes-atual") {
+      inicio = new Date(hoje.getFullYear(), hoje.getMonth(), 1).toISOString().slice(0, 10);
+    } else if (opcao === "mes-anterior") {
+      const primDiaAnterior = new Date(hoje.getFullYear(), hoje.getMonth() - 1, 1);
+      const ultDiaAnterior = new Date(hoje.getFullYear(), hoje.getMonth(), 0);
+      setDataInicio(primDiaAnterior.toISOString().slice(0, 10));
+      setDataFim(ultDiaAnterior.toISOString().slice(0, 10));
+      return;
+    } else if (opcao === "30d") {
+      const d = new Date(); d.setDate(d.getDate() - 30);
+      inicio = d.toISOString().slice(0, 10);
+    } else if (opcao === "60d") {
+      const d = new Date(); d.setDate(d.getDate() - 60);
+      inicio = d.toISOString().slice(0, 10);
+    } else if (opcao === "90d") {
+      const d = new Date(); d.setDate(d.getDate() - 90);
+      inicio = d.toISOString().slice(0, 10);
+    } else if (opcao === "ano") {
+      inicio = new Date(hoje.getFullYear(), 0, 1).toISOString().slice(0, 10);
+    } else if (opcao === "tudo") {
+      setDataInicio("");
+      setDataFim("");
+      return;
+    }
+    setDataInicio(inicio);
+    setDataFim(fim);
+  }
+
+  async function handleBaixar(documentoId: number, tipoArq: "xml" | "pdf") {
+    setBusyId(`${tipoArq}-${documentoId}`);
+    setError(null);
+    try {
+      if (tipoArq === "xml") await baixarXmlDocumento(documentoId);
+      else await baixarPdfDocumento(documentoId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Falha ao baixar arquivo.");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function handleBaixarLote(arquivo: "xml" | "pdf" | "ambos") {
+    setBusyId(`lote-${arquivo}`);
+    setError(null);
+    setToast(null);
+    const cancFiltro =
+      filtroCancelada === "ativas" ? false
+        : filtroCancelada === "canceladas" ? true
+        : undefined;
+    try {
+      await baixarZipDocumentos({
+        empresaId: empresaId || undefined,
+        tipoDocumento: (tipo || undefined) as TipoDocumento | undefined,
+        cancelada: cancFiltro,
+        dataInicio: dataInicio || undefined,
+        dataFim: dataFim || undefined,
+        arquivo,
+      });
+      setToast(`Download ZIP iniciado (${arquivo.toUpperCase()}).`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Falha ao baixar lote.");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function handleManifestar(documentoId: number) {
+    setBusyId(`manifest-${documentoId}`);
+    setError(null);
+    setToast(null);
+    try {
+      const r = await manifestarDocumento(documentoId, "ciencia");
+      if (r.ja_estava_manifestado) {
+        setToast(`NF ja estava manifestada (${r.manifestado_em?.slice(0, 10)}).`);
+      } else {
+        const extras: string[] = [];
+        if (r.xml_atualizado) extras.push("XML completo OK");
+        if (r.pdf_baixado) extras.push("DANFE PDF OK");
+        const detalhe = extras.length
+          ? ` (${extras.join(" + ")})`
+          : " (Focus ainda sincronizando — DANFE chega em ~5min)";
+        setToast(`Manifestada · SEFAZ ${r.status_sefaz ?? "OK"}${detalhe}.`);
+      }
+      setRefreshTick((t) => t + 1);
+    } catch (err) {
+      if (err instanceof ApiError) setError(err.message);
+      else setError("Falha ao manifestar.");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function handleManifestarTodas() {
+    if (!empresaId) {
+      setError("Selecione uma empresa pra manifestar em lote.");
+      return;
+    }
+    setBusyId("manifest-todas");
+    setError(null);
+    setToast(null);
+    try {
+      const r = await manifestarTodasEmpresa(Number(empresaId));
+      setToast(
+        `Lote: ${r.manifestadas} novas · ${r.ja_manifestadas} ja estavam · ` +
+        `${r.pdf_baixadas} DANFE PDFs + ${r.xml_atualizadas} XMLs completos baixados · ` +
+        `${r.erros} erros.`,
+      );
+      setRefreshTick((t) => t + 1);
+    } catch (err) {
+      if (err instanceof ApiError) setError(err.message);
+      else setError("Falha ao manifestar em lote.");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  useEffect(() => {
+    listarEmpresas().then(setEmpresas).catch(() => setEmpresas([]));
+  }, []);
+
+  useEffect(() => {
+    setDocumentos(null);
+    setError(null);
+    const cancFiltro =
+      filtroCancelada === "ativas" ? false
+        : filtroCancelada === "canceladas" ? true
+        : undefined;
+    listarDocumentos({
+      empresaId: empresaId || undefined,
+      tipo: (tipo || undefined) as TipoDocumento | undefined,
+      cancelada: cancFiltro,
+      dataInicio: dataInicio || undefined,
+      dataFim: dataFim || undefined,
+    })
+      .then(setDocumentos)
+      .catch((err) => {
+        if (err instanceof ApiError) setError(err.message);
+        else setError("Falha ao carregar documentos.");
+      });
+  }, [empresaId, tipo, filtroCancelada, dataInicio, dataFim, refreshTick]);
+
+  async function handleVerificarCanceladas() {
+    setBusyId("verificar-cancel");
+    setError(null);
+    setToast(null);
+    try {
+      const r = await verificarCanceladas(empresaId || undefined);
+      setToast(
+        `Verificadas ${r.verificadas} NFes · ${r.novas_canceladas} novas canceladas detectadas.`
+      );
+      setRefreshTick((t) => t + 1);
+    } catch (err) {
+      if (err instanceof ApiError) setError(err.message);
+      else setError("Falha na verificacao de canceladas.");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  const empresaPorId = useMemo(() => {
+    const map = new Map<number, Empresa>();
+    for (const e of empresas) map.set(e.id, e);
+    return map;
+  }, [empresas]);
+
+  const pendentesManifestacao = useMemo(() => {
+    if (!documentos) return 0;
+    // Conta só ENTRADAS não-manifestadas (saídas não precisam manifestação).
+    // Saída = CNPJ emitente (pos 6-20 da chave) bate com CNPJ da empresa
+    // OU campo origem='emitida'.
+    return documentos.filter((d) => {
+      if (d.tipo_documento !== "NFE") return false;
+      if (d.json_original?.manifestado_em) return false;
+      if (d.origem === "emitida") return false;  // saída marcada
+      const emp = empresaPorId.get(d.empresa_id);
+      if (emp && d.chave_acesso && d.chave_acesso.length >= 20) {
+        const cnpjEmitente = d.chave_acesso.slice(6, 20);
+        const cnpjEmpresa = (emp.cnpj || "").replace(/\D/g, "");
+        if (cnpjEmitente === cnpjEmpresa) return false;  // saída detectada pela chave
+      }
+      return true;
+    }).length;
+  }, [documentos, empresaPorId]);
+
+  /** True se o doc é SAÍDA (NFe emitida pela própria empresa).
+   * Saídas NÃO precisam ser manifestadas — a SEFAZ já tem o XML completo
+   * porque a empresa enviou ao autorizar. Manifestação é só pra NFes
+   * RECEBIDAS de fornecedores (entradas).
+   *
+   * Lógica: compara CNPJ emitente (extraído da chave NFe, posições 6-20)
+   * com CNPJ da empresa do PAC. Fallback: campo `origem` se vier preenchido.
+   */
+  const ehSaidaPropria = (d: NonNullable<typeof documentos>[number]): boolean => {
+    if (d.origem === "emitida") return true;
+    const emp = empresaPorId.get(d.empresa_id);
+    if (!emp || !d.chave_acesso || d.chave_acesso.length < 20) return false;
+    const cnpjEmitente = d.chave_acesso.slice(6, 20);
+    const cnpjEmpresa = (emp.cnpj || "").replace(/\D/g, "");
+    return cnpjEmitente === cnpjEmpresa;
+  };
+
+  const rows: ReactNode[][] = useMemo(() => {
+    if (!documentos) return [];
+    return documentos.map((d) => {
+      const manifestadoEm = d.json_original?.manifestado_em;
+      const isNFe = d.tipo_documento === "NFE";
+      const ehSaida = ehSaidaPropria(d);
+
+      const statusVenda = d.cancelada ? (
+        <span
+          key={`st-${d.id}`}
+          className="pill pill-err"
+          title={
+            d.motivo_cancelamento
+              ? `Cancelada em ${d.cancelada_em || "?"}: ${d.motivo_cancelamento}`
+              : "Cancelada"
+          }
+          style={{ fontSize: "0.72rem" }}
+        >
+          ✗ Cancelada
+        </span>
+      ) : (
+        <span
+          key={`st-${d.id}`}
+          className="pill pill-ok"
+          style={{ fontSize: "0.72rem" }}
+        >
+          Ativa
+        </span>
+      );
+
+      const manifestStatus = manifestadoEm ? (
+        <span
+          key={`mn-${d.id}`}
+          className="pill pill-ok"
+          title={`Manifestada em ${manifestadoEm}`}
+          style={{ fontSize: "0.72rem" }}
+        >
+          ✓ {formatDate(manifestadoEm)}
+        </span>
+      ) : ehSaida ? (
+        // NFe própria (saída/venda): NÃO manifesta — a empresa que emitiu já
+        // tem o XML completo na SEFAZ. Manifestação é só pra ENTRADAS.
+        <span
+          key={`mn-${d.id}`}
+          className="pill pill-muted"
+          title="NFe emitida pela própria empresa (saída). Manifestação não se aplica — só pra notas recebidas de fornecedores."
+          style={{ fontSize: "0.72rem" }}
+        >
+          Saída
+        </span>
+      ) : isNFe ? (
+        <button
+          key={`mn-${d.id}`}
+          type="button"
+          className="btn-secondary"
+          style={{ padding: "4px 10px", fontSize: "0.78rem" }}
+          onClick={() => handleManifestar(d.id)}
+          disabled={busyId === `manifest-${d.id}`}
+          title="Registra Ciência da Operação na SEFAZ e tenta baixar DANFE PDF"
+        >
+          {busyId === `manifest-${d.id}` ? "..." : "Manifestar"}
+        </button>
+      ) : (
+        <span key={`mn-${d.id}`} className="muted" style={{ fontSize: "0.78rem" }}>
+          —
+        </span>
+      );
+
+      return [
+        empresaPorId.get(d.empresa_id)?.razao_social || `#${d.empresa_id}`,
+        d.tipo_documento,
+        d.numero || "—",
+        formatDate(d.data_emissao),
+        d.nome_emitente || "—",
+        formatBrl(d.valor_total),
+        <code key={`chave-${d.id}`} style={{ fontSize: "0.78rem" }}>
+          {d.chave_acesso.slice(0, 12)}…{d.chave_acesso.slice(-6)}
+        </code>,
+        statusVenda,
+        manifestStatus,
+        <div key={`acoes-${d.id}`} style={{ display: "flex", gap: 6 }}>
+          <button
+            type="button"
+            className="btn-secondary"
+            style={{ padding: "4px 10px", fontSize: "0.78rem" }}
+            onClick={() => handleBaixar(d.id, "xml")}
+            disabled={busyId === `xml-${d.id}`}
+            title="Baixa o XML como arquivo"
+          >
+            {busyId === `xml-${d.id}` ? "..." : "⬇ XML"}
+          </button>
+          <button
+            type="button"
+            className="btn-secondary"
+            style={{ padding: "4px 10px", fontSize: "0.78rem" }}
+            onClick={() => handleBaixar(d.id, "pdf")}
+            disabled={busyId === `pdf-${d.id}`}
+            title="Baixa o DANFE PDF (disponivel apos manifestacao + sync Focus)"
+          >
+            {busyId === `pdf-${d.id}` ? "..." : "⬇ PDF"}
+          </button>
+        </div>,
+      ];
+    });
+  }, [documentos, empresaPorId, busyId]);
+
+  return (
+    <>
+      <header className="page-header">
+        <div>
+          <h2>Central de documentos</h2>
+          <p className="muted">
+            Filtre por empresa ou tipo. Resultados ordenados pelos mais recentes.
+          </p>
+        </div>
+        <div style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
+        <button
+          type="button"
+          className="btn-primary"
+          onClick={() => { setUploadResultado(null); setUploadModalOpen(true); }}
+          title="Importar XMLs em massa (ZIP da SEFAZ-GO ou arquivos individuais)"
+          style={{ alignSelf: "end" }}
+        >
+          ⬆ Importar XMLs
+        </button>
+        <div className="page-actions form-grid" style={{ gridTemplateColumns: "200px 100px 140px 140px 140px" }}>
+          <label>
+            <span>Empresa</span>
+            <select value={empresaId} onChange={(e) => setEmpresaId(e.target.value ? Number(e.target.value) : "")}>
+              <option value="">Todas</option>
+              {empresas.map((e) => (
+                <option key={e.id} value={e.id}>{e.razao_social}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>Tipo</span>
+            <select value={tipo} onChange={(e) => setTipo(e.target.value as TipoDocumento | "")}>
+              <option value="">Todos</option>
+              {TIPOS.map((t) => (
+                <option key={t} value={t}>{t}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>Status</span>
+            <select
+              value={filtroCancelada}
+              onChange={(e) => setFiltroCancelada(e.target.value as FiltroCancelada)}
+            >
+              <option value="ativas">Ativas</option>
+              <option value="canceladas">Canceladas</option>
+              <option value="todas">Todas</option>
+            </select>
+          </label>
+          <label>
+            <span>Emissão de</span>
+            <input
+              type="date"
+              value={dataInicio}
+              onChange={(e) => setDataInicio(e.target.value)}
+              max={dataFim || undefined}
+            />
+          </label>
+          <label>
+            <span>Emissão até</span>
+            <input
+              type="date"
+              value={dataFim}
+              onChange={(e) => setDataFim(e.target.value)}
+              min={dataInicio || undefined}
+            />
+          </label>
+        </div>
+        </div>
+      </header>
+
+      {uploadModalOpen ? (
+        <UploadModal
+          empresaIdFiltro={empresaId || undefined}
+          resultado={uploadResultado}
+          onClose={() => setUploadModalOpen(false)}
+          onConcluido={handleUploadConcluido}
+        />
+      ) : null}
+
+      {/* Atalhos rápidos de período */}
+      <section
+        className="panel"
+        style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", padding: "10px 14px", marginBottom: 8 }}
+      >
+        <span className="muted" style={{ fontSize: "0.82rem", marginRight: 6 }}>
+          Período rápido:
+        </span>
+        {([
+          { id: "mes-atual", label: "Mês atual" },
+          { id: "mes-anterior", label: "Mês anterior" },
+          { id: "30d", label: "30 dias" },
+          { id: "60d", label: "60 dias" },
+          { id: "90d", label: "90 dias" },
+          { id: "ano", label: "Ano corrente" },
+          { id: "tudo", label: "Sem filtro" },
+        ] as const).map((opt) => (
+          <button
+            key={opt.id}
+            type="button"
+            className="btn-secondary"
+            style={{ padding: "4px 12px", fontSize: "0.78rem" }}
+            onClick={() => aplicarPeriodoRapido(opt.id)}
+          >
+            {opt.label}
+          </button>
+        ))}
+      </section>
+
+      <section
+        className="panel"
+        style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", padding: "12px 14px" }}
+      >
+        <span className="muted" style={{ fontSize: "0.82rem" }}>
+          Ações em lote{empresaId ? " (empresa selecionada)" : " (todas as empresas)"}
+          {dataInicio || dataFim ? " (com filtro de período)" : ""}:
+        </span>
+        <button
+          type="button"
+          className="btn-primary"
+          onClick={handleManifestarTodas}
+          disabled={!empresaId || busyId === "manifest-todas" || pendentesManifestacao === 0}
+          title={
+            !empresaId
+              ? "Selecione uma empresa primeiro"
+              : pendentesManifestacao === 0
+              ? "Nenhuma NFe pendente"
+              : `Manifesta ${pendentesManifestacao} NFes pendentes + tenta baixar DANFE PDFs`
+          }
+        >
+          {busyId === "manifest-todas"
+            ? "Manifestando..."
+            : pendentesManifestacao > 0
+            ? `Manifestar ${pendentesManifestacao} pendente(s)`
+            : "Manifestar todas"}
+        </button>
+        <button
+          type="button"
+          className="btn-secondary"
+          onClick={() => handleBaixarLote("xml")}
+          disabled={busyId === "lote-xml" || !documentos || documentos.length === 0}
+          title="Baixa ZIP com TODOS os XMLs filtrados"
+        >
+          {busyId === "lote-xml" ? "Gerando ZIP..." : "⬇ ZIP de XMLs"}
+        </button>
+        <button
+          type="button"
+          className="btn-secondary"
+          onClick={() => handleBaixarLote("pdf")}
+          disabled={busyId === "lote-pdf" || !documentos || documentos.length === 0}
+          title="Baixa ZIP com TODOS os DANFE PDFs disponíveis"
+        >
+          {busyId === "lote-pdf" ? "Gerando ZIP..." : "⬇ ZIP de PDFs"}
+        </button>
+        <button
+          type="button"
+          className="btn-secondary"
+          onClick={() => handleBaixarLote("ambos")}
+          disabled={busyId === "lote-ambos" || !documentos || documentos.length === 0}
+          title="Baixa ZIP com XML + PDF (lado a lado, mesma chave)"
+        >
+          {busyId === "lote-ambos" ? "Gerando ZIP..." : "⬇ ZIP XML + PDF"}
+        </button>
+        <span style={{ width: 1, height: 24, background: "var(--border)", margin: "0 4px" }} />
+        <button
+          type="button"
+          className="btn-secondary"
+          onClick={handleVerificarCanceladas}
+          disabled={busyId === "verificar-cancel"}
+          title="Varre XMLs locais e marca como cancelada quando detectar evento SEFAZ"
+        >
+          {busyId === "verificar-cancel" ? "Verificando..." : "🔍 Verificar cancelamentos"}
+        </button>
+      </section>
+
+      {toast ? <p className="toast">{toast}</p> : null}
+      {error ? <p className="toast toast-error">{error}</p> : null}
+
+      {documentos === null ? (
+        <section className="panel"><p className="muted">Carregando documentos...</p></section>
+      ) : documentos.length === 0 ? (
+        <section className="panel">
+          <div className="empty-state">
+            Nenhum documento encontrado. Cadastre uma empresa e execute o robo de distribuicao.
+          </div>
+        </section>
+      ) : (
+        <DataTable
+          headers={[
+            "Empresa", "Tipo", "Numero", "Emissao", "Emitente", "Valor", "Chave",
+            "Status", "Manifestada", "Acoes",
+          ]}
+          rows={rows}
+          subtitle={
+            `${documentos.length} documento(s)` +
+            (filtroCancelada === "ativas" ? " (somente ativas — canceladas ocultas)" : "") +
+            (filtroCancelada === "canceladas" ? " (somente canceladas)" : "") +
+            "."
+          }
+        />
+      )}
+    </>
+  );
+}
+
+// ============ Modal de upload em massa ============
+
+function UploadModal({
+  empresaIdFiltro,
+  resultado,
+  onClose,
+  onConcluido,
+}: {
+  empresaIdFiltro?: number;
+  resultado: UploadResultado | null;
+  onClose: () => void;
+  onConcluido: (r: UploadResultado) => void;
+}) {
+  const [arquivo, setArquivo] = useState<File | null>(null);
+  const [enviando, setEnviando] = useState(false);
+  const [erro, setErro] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState(false);
+
+  async function handleEnviar() {
+    if (!arquivo) {
+      setErro("Selecione um arquivo .zip ou .xml.");
+      return;
+    }
+    setEnviando(true);
+    setErro(null);
+    try {
+      const r = await uploadEmMassa(arquivo, empresaIdFiltro);
+      onConcluido(r);
+    } catch (err) {
+      if (err instanceof ApiError) setErro(err.message);
+      else setErro("Falha no upload.");
+    } finally {
+      setEnviando(false);
+    }
+  }
+
+  function onDrop(e: DragEvent<HTMLDivElement>) {
+    e.preventDefault();
+    setDragOver(false);
+    const f = e.dataTransfer.files?.[0];
+    if (f) setArquivo(f);
+  }
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.6)",
+        zIndex: 100,
+        display: "grid",
+        placeItems: "center",
+        padding: 20,
+      }}
+      onClick={onClose}
+    >
+      <section
+        className="panel"
+        style={{ maxWidth: 720, width: "100%", maxHeight: "85vh", overflow: "auto" }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <header className="page-header" style={{ alignItems: "center" }}>
+          <h3>Importar XMLs em massa</h3>
+          <button type="button" className="btn-secondary" onClick={onClose}>
+            ✕ Fechar
+          </button>
+        </header>
+
+        <p className="muted" style={{ margin: 0, fontSize: "0.86rem" }}>
+          Aceita <strong>ZIP</strong> (ex: <code>29508531000171_01052026_16052026_5250.zip</code> da
+          SEFAZ-GO) ou <strong>XML individual</strong>. Sistema detecta automaticamente
+          tipo (NFe/NFCe/CTe/NFSe) e empresa pelo CNPJ no XML.
+        </p>
+
+        {/* Área drag-drop */}
+        <div
+          onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={onDrop}
+          style={{
+            marginTop: 12,
+            padding: "32px 24px",
+            border: `2px dashed ${dragOver ? "var(--accent)" : "var(--border)"}`,
+            borderRadius: 12,
+            textAlign: "center",
+            background: dragOver ? "var(--bg-2, var(--bg-1))" : "var(--bg-1)",
+            transition: "all 0.15s",
+          }}
+        >
+          <p style={{ margin: 0, fontSize: "1rem" }}>
+            {arquivo ? `📄 ${arquivo.name} (${(arquivo.size / 1024).toFixed(1)} KB)` : "📁 Arraste o arquivo aqui"}
+          </p>
+          <p className="muted" style={{ margin: "8px 0 12px 0", fontSize: "0.82rem" }}>
+            ou clique abaixo para selecionar
+          </p>
+          <input
+            type="file"
+            accept=".zip,.xml"
+            onChange={(e) => setArquivo(e.target.files?.[0] ?? null)}
+            style={{ margin: "0 auto" }}
+          />
+        </div>
+
+        {empresaIdFiltro ? (
+          <p className="muted" style={{ fontSize: "0.78rem", marginTop: 8 }}>
+            ℹ️ Empresa selecionada no filtro vai ser usada como fallback se XML não
+            tiver CNPJ destinatário (caso de resNFe DF-e).
+          </p>
+        ) : null}
+
+        {erro ? <p className="toast toast-error">{erro}</p> : null}
+
+        {!resultado ? (
+          <div className="form-actions">
+            <button type="button" className="btn-secondary" onClick={onClose}>
+              Cancelar
+            </button>
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={handleEnviar}
+              disabled={enviando || !arquivo}
+            >
+              {enviando ? "Importando..." : "Importar"}
+            </button>
+          </div>
+        ) : (
+          <UploadResultadoView resultado={resultado} onClose={onClose} />
+        )}
+      </section>
+    </div>
+  );
+}
+
+function UploadResultadoView({
+  resultado,
+  onClose,
+}: {
+  resultado: UploadResultado;
+  onClose: () => void;
+}) {
+  return (
+    <div style={{ marginTop: 12 }}>
+      <p className="section-divider">Resultado da importação</p>
+      <section className="grid" style={{ marginBottom: 12 }}>
+        <article className="metric metric--emerald">
+          <span>Persistidos</span>
+          <strong>{resultado.persistidos}</strong>
+          <p>novos no banco</p>
+        </article>
+        <article className="metric metric--cyan">
+          <span>Duplicados</span>
+          <strong>{resultado.duplicados}</strong>
+          <p>já existentes</p>
+        </article>
+        <article
+          className={resultado.empresa_nao_cadastrada > 0 ? "metric metric--amber" : "metric metric--cyan"}
+        >
+          <span>Sem empresa</span>
+          <strong>{resultado.empresa_nao_cadastrada}</strong>
+          <p>CNPJ não cadastrado</p>
+        </article>
+        <article
+          className={resultado.erros > 0 ? "metric metric--rose" : "metric metric--cyan"}
+        >
+          <span>Erros</span>
+          <strong>{resultado.erros}</strong>
+          <p>de {resultado.total_arquivos} total</p>
+        </article>
+      </section>
+
+      {resultado.detalhes.length > 0 ? (
+        <details>
+          <summary style={{ cursor: "pointer", marginBottom: 8 }}>
+            Detalhes ({resultado.detalhes.length} arquivo(s))
+          </summary>
+          <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "grid", gap: 4, maxHeight: 300, overflow: "auto" }}>
+            {resultado.detalhes.map((d, i) => (
+              <li
+                key={i}
+                style={{
+                  padding: "6px 10px",
+                  border: "1px solid var(--border)",
+                  borderRadius: 6,
+                  background: "var(--bg-1)",
+                  fontSize: "0.78rem",
+                }}
+              >
+                <span className={`pill ${
+                  d.status === "ok" ? "pill-ok"
+                  : d.status === "duplicado" ? "pill-warn"
+                  : d.status === "erro" ? "pill-err"
+                  : "pill-muted"
+                }`} style={{ marginRight: 8 }}>
+                  {d.status}
+                </span>
+                <code style={{ fontSize: "0.72rem" }}>{d.arquivo}</code>
+                {d.tipo ? <span className="muted" style={{ marginLeft: 8 }}>{d.tipo}</span> : null}
+                {d.origem ? <span className="muted" style={{ marginLeft: 8 }}>· {d.origem}</span> : null}
+                {d.mensagem ? <div className="muted" style={{ marginTop: 4 }}>{d.mensagem}</div> : null}
+              </li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
+
+      <div className="form-actions">
+        <button type="button" className="btn-primary" onClick={onClose}>
+          Fechar e ver documentos
+        </button>
+      </div>
+    </div>
+  );
+}

@@ -1,0 +1,144 @@
+# ============================================================================
+# PAC Download — .gitignore
+# CRITICAL: este arquivo IMPEDE que credenciais e dados de clientes vão pro Git.
+# Antes de qualquer push, valida com `git status` que .env, certs e XMLs NÃO
+# aparecem na lista de "to be committed".
+# ============================================================================
+
+# --- Secrets e configs locais ---
+.env
+.env.local
+.env.*.local
+.env.production
+.env.staging
+**/.env
+**/.env.local
+**/.env.production
+backend/.env*
+frontend/.env*
+agent/**/.env*
+
+# Tokens / chaves em arquivo separado
+*.token
+*.secret
+secrets/
+.secrets/
+
+# --- Certificados digitais A1 (PFX/P12) — DADOS DOS CLIENTES ---
+*.pfx
+*.p12
+*.pem
+*.key
+*.crt
+*.cer
+backend/storage/certs/
+backend/certs/
+agent/**/certs/
+**/storage/certs/**
+
+# --- Storage local (dados de produção dos clientes) ---
+backend/storage/
+backend/data/
+storage/
+data/
+agent/sefaz-go/downloads/
+agent/sefaz-go/logs/
+
+# Bancos SQLite locais
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+*.db-wal
+*.db-shm
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+.venv/
+venv/
+env/
+ENV/
+
+# Alembic — versões SÃO commitadas, mas migrations geradas localmente que
+# ainda não foram validadas podem ser excluídas via prefixo wip_
+backend/alembic/versions/wip_*
+
+# --- Node / Next.js ---
+node_modules/
+.next/
+.next-build/
+out/
+.nuxt/
+dist/
+.vercel/
+.turbo/
+
+# Logs Next/Node
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# --- IDE / Editor ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- OS ---
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+ehthumbs.db
+
+# --- Logs gerais ---
+*.log
+logs/
+**/logs/**
+
+# --- Playwright / browser automation ---
+playwright-report/
+test-results/
+.playwright/
+agent/**/screenshots/
+agent/**/debug/
+
+# --- Excel/CSV de produção (pode ter CNPJ/dados cliente) ---
+clientes.xlsx
+*clientes*.xlsx
+*clients*.xlsx
+import_*.csv
+
+# --- Artefatos de desenvolvimento ---
+_test_*.zip
+_temp_*
+scratch/
+notes_pessoais.md
+TODO_LOCAL.md
+
+# --- Docker volumes locais ---
+.docker-data/
+volumes/
+
+# --- Arquivos de teste manual ---
+test_*.py.local
+*.test.local.*

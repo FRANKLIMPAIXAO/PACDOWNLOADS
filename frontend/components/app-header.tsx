@@ -1,0 +1,59 @@
+"use client";
+
+import Link from "next/link";
+import { usePathname, useRouter } from "next/navigation";
+
+import { useAuth } from "../lib/auth-context";
+
+export function AppHeader() {
+  const { user, logout } = useAuth();
+  const router = useRouter();
+  const pathname = usePathname();
+
+  // Esconde header em paginas de auth (login/register).
+  if (pathname === "/login" || pathname === "/register") {
+    return null;
+  }
+
+  function handleLogout() {
+    logout();
+    router.replace("/login");
+  }
+
+  return (
+    <header className="topbar">
+      <div className="brand">
+        {/* Logo SVG em /public/logo.svg */}
+        <img src="/logo.svg" alt="PAC Download" className="brand-logo" />
+        <div>
+          <h1>PAC Download</h1>
+          <p>Central fiscal para escritorios contabeis</p>
+        </div>
+      </div>
+      <div className="topbar-right">
+        <nav className="nav">
+          <Link href="/">Dashboard</Link>
+          <Link href="/empresas">Empresas</Link>
+          <Link href="/documentos">Documentos</Link>
+          <Link href="/apuracoes">Apuracoes</Link>
+          <Link href="/prevencao">Prevencao</Link>
+          <Link href="/relatorios">Relatorios</Link>
+          <Link href="/robo-sefaz">Robô SEFAZ</Link>
+          <Link href="/das">DAS Simples</Link>
+          <Link href="/parcelamentos-simples">PARCSN</Link>
+          <Link href="/parcelamentos-pgfn">PGFN</Link>
+          <Link href="/dctfweb">DCTFWeb</Link>
+          <Link href="/fgts">FGTS</Link>
+        </nav>
+        {user ? (
+          <div className="user-chip">
+            <span className="user-email" title={user.email}>{user.email}</span>
+            <button type="button" className="btn-ghost" onClick={handleLogout}>
+              Sair
+            </button>
+          </div>
+        ) : null}
+      </div>
+    </header>
+  );
+}

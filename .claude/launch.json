@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "frontend",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "cd /d C:\\dev\\pac-xml-downloader\\frontend && npm run dev"],
+      "port": 3000
+    }
+  ]
+}

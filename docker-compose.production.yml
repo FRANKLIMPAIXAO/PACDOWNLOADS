@@ -1,0 +1,162 @@
+# Stack completa de producao para PAC Download.
+# Uso: docker compose -f docker-compose.production.yml up -d
+# Pre-req: criar `backend/.env` baseado em `backend/.env.production.example`.
+
+services:
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-pac_xml}
+      POSTGRES_USER: ${POSTGRES_USER:-pac}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD}
+    # Tuning para VPS KVM 4 (16 GB RAM) — 120 empresas
+    # Dedica ~1.5 GB ao Postgres. Para KVM 8, dobrar shared_buffers e
+    # effective_cache_size.
+    command: >
+      postgres
+      -c shared_buffers=512MB
+      -c effective_cache_size=1536MB
+      -c work_mem=16MB
+      -c maintenance_work_mem=128MB
+      -c wal_buffers=16MB
+      -c default_statistics_target=100
+      -c random_page_cost=1.1
+      -c effective_io_concurrency=200
+      -c max_connections=50
+      -c log_min_duration_statement=500
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-pac}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # Nao expor porta para fora — apenas rede interna
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-pac}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-pac_xml}
+      REDIS_URL: redis://redis:6379/0
+      STORAGE_PATH: /app/storage/xmls
+    # 4 workers uvicorn = 1 por vCPU no KVM 4. proxy-headers/forwarded-allow-ips
+    # para HTTPS funcionar atras do nginx.
+    command: ["python", "-m", "uvicorn", "app.main:app",
+              "--host", "0.0.0.0", "--port", "8000",
+              "--workers", "4", "--proxy-headers",
+              "--forwarded-allow-ips", "*"]
+    volumes:
+      - storage_data:/app/storage
+      - ./backend/certs:/app/certs:ro     # certificado e-CNPJ do escritorio (read-only)
+      - logs_data:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-pac}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-pac_xml}
+      REDIS_URL: redis://redis:6379/0
+      STORAGE_PATH: /app/storage/xmls
+    # Concurrency 4 = bom para KVM 4 (4 vCPU). max-tasks-per-child=100 evita
+    # acumulo de memoria em runs longos.
+    command: ["celery", "-A", "app.workers.celery_app.celery_app", "worker",
+              "--loglevel=info", "--concurrency=4", "--max-tasks-per-child=100"]
+    volumes:
+      - storage_data:/app/storage
+      - ./backend/certs:/app/certs:ro
+      - logs_data:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-pac}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-pac_xml}
+      REDIS_URL: redis://redis:6379/0
+    command: ["celery", "-A", "app.workers.celery_app.celery_app", "beat", "--loglevel=info"]
+    depends_on:
+      - redis
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${PUBLIC_API_URL:?defina PUBLIC_API_URL}
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_URL: ${PUBLIC_API_URL}
+    depends_on:
+      - backend
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - certbot_data:/etc/letsencrypt
+      - certbot_www:/var/www/certbot
+    depends_on:
+      - backend
+      - frontend
+
+  certbot:
+    image: certbot/certbot:latest
+    volumes:
+      - certbot_data:/etc/letsencrypt
+      - certbot_www:/var/www/certbot
+    # Renovacao automatica a cada 12h
+    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew --webroot -w /var/www/certbot --quiet; sleep 12h & wait $${!}; done;'"
+
+volumes:
+  postgres_data:
+  redis_data:
+  storage_data:
+  logs_data:
+  certbot_data:
+  certbot_www:
