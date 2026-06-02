@@ -133,6 +133,18 @@ class RoboSefazService:
         env = os.environ.copy()
         env.setdefault("HEADLESS", "true")
 
+        # Bridge entre nomenclatura backend e agent:
+        # - Backend (config.py) usa CAPTCHA_API_KEY
+        # - Agent (pac_sefaz_agent.py) usa TWOCAPTCHA_API_KEY
+        # Se CAPTCHA_API_KEY estiver setado mas TWOCAPTCHA_API_KEY não,
+        # copia o valor pro agent enxergar. Idem PAC_API_URL/EMAIL/PASSWORD
+        # que o agent usa pra falar com o próprio backend.
+        if env.get("CAPTCHA_API_KEY") and not env.get("TWOCAPTCHA_API_KEY"):
+            env["TWOCAPTCHA_API_KEY"] = env["CAPTCHA_API_KEY"]
+        env.setdefault("PAC_API_URL", "http://127.0.0.1:8000")
+        env.setdefault("PAC_EMAIL", "admin@pacxml.com.br")
+        env.setdefault("PAC_PASSWORD", env.get("FIRST_SUPERUSER_PASSWORD", "admin123"))
+
         antes = datetime.now()
         logger.info(
             "Iniciando agente SEFAZ-GO: cmd=%s timeout=%ss execucao_id=%s",
