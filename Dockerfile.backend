@@ -7,8 +7,16 @@
 #
 # Build context no Easypanel = `.` (raiz)
 # Dockerfile path no Easypanel = `Dockerfile.backend`
+#
+# BASE IMAGE: usamos mcr.microsoft.com/playwright/python (imagem oficial
+# Microsoft) em vez de python:3.12-slim porque ela vem com TODAS as libs
+# do sistema que Chromium precisa pré-instaladas (libcups2t64, libnspr4,
+# libxshmfence1, libatspi2.0-0, etc). Resolve "Host system is missing
+# dependencies to run browsers" sem precisar caçar pacote por pacote em
+# Debian Trixie (onde playwright install-deps quebra).
+# Tag v1.48.0-jammy: Ubuntu 22.04 (jammy) + Playwright 1.48.0 + Python 3.12.
 
-FROM python:3.12-slim AS base
+FROM mcr.microsoft.com/playwright/python:v1.48.0-jammy AS base
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -16,56 +24,24 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     TZ=America/Sao_Paulo
 
-# Dependências do sistema:
-# - psycopg (libpq) → Postgres
-# - cryptography (.pfx → PEM no Integra/SEFAZ)
-# - Playwright Chromium (libs gráficas nativas — substituem playwright install-deps)
-# - postgresql-client → pg_dump em backup
+# Deps mínimas pra Postgres + .pfx (Playwright já vem na base)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
     libpq-dev \
     libssl-dev \
     libffi-dev \
-    curl \
-    ca-certificates \
     postgresql-client \
-    # Libs do Chromium para Playwright (cobrem 100% sem install-deps)
-    libnss3 \
-    libatk1.0-0 \
-    libatk-bridge2.0-0 \
-    libdrm2 \
-    libxcomposite1 \
-    libxdamage1 \
-    libxfixes3 \
-    libxrandr2 \
-    libgbm1 \
-    libxkbcommon0 \
-    libpango-1.0-0 \
-    libcairo2 \
-    libasound2 \
-    fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 
-# Backend mora em /app, agent em /agent — separados pra match com o que o
-# robo_sefaz_service.py espera (Path(__file__).parents[3] / "agent" / "sefaz-go").
+# Backend mora em /app, agent em /agent
 WORKDIR /app
 
 # --- Camadas com cache: deps Python primeiro (mudam pouco) ---
 COPY backend/requirements.txt /app/requirements.txt
 RUN pip install -r requirements.txt
 
-# Chromium do Playwright. CRITICAL: instalamos em /opt/playwright-browsers em
-# vez do default ~/.cache/ms-playwright porque:
-# - install roda como root → vai pra /root/.cache (default)
-# - container roda como user 'pac' (uid 1000, criado abaixo) → NÃO tem acesso
-#   a /root → erro 'browser not found' em pw.chromium.launch()
-# A env PLAYWRIGHT_BROWSERS_PATH redireciona pro path compartilhado, e o
-# chown abaixo garante acesso do user pac.
-# NOTA: install-deps NÃO chamado (já temos libs nativas via apt-get acima;
-# install-deps tenta pacotes Ubuntu 20.04 que não existem em Debian Trixie).
-ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers
-RUN mkdir -p /opt/playwright-browsers \
-    && playwright install chromium
+# Chromium já vem instalado no path padrão da imagem
+# (/ms-playwright/chromium-*/chrome-linux/chrome). PLAYWRIGHT_BROWSERS_PATH
+# fica vazio e Playwright usa o default que a imagem configurou.
 
 # --- Código (muda mais — vai por último pro cache pegar deps acima) ---
 COPY backend/ /app/
@@ -77,11 +53,10 @@ RUN mkdir -p /app/storage/xmls /app/storage/cnds /app/storage/sitfis \
              /app/storage/parcsn /app/storage/guias_dctfweb /app/storage/guias_fgts \
              /app/certs /app/logs
 
-# Usuário não-root pra segurança. Inclui /opt/playwright-browsers no chown
-# pra user pac conseguir abrir o Chromium em runtime (pw.chromium.launch).
-RUN useradd -m -u 1000 pac \
-    && chown -R pac:pac /app /agent /opt/playwright-browsers
-USER pac
+# A imagem Microsoft Playwright já vem com user `pwuser` (uid 1000) configurado.
+# Damos acesso a /app, /agent e ao chromium cache que veio na imagem.
+RUN chown -R pwuser:pwuser /app /agent /ms-playwright || true
+USER pwuser
 
 EXPOSE 8000
 
