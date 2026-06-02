@@ -2,7 +2,7 @@
 
 > Índice de handoffs + estado atual. Pra detalhes, ler o handoff mais recente.
 
-## Estado atual (27/05/2026)
+## Estado atual (01/06/2026) — 🚀 PRODUÇÃO NO AR
 
 Sistema fiscal completo pra escritório contábil PAC INTELIGENCIA TRIBUTARIA
 (CNPJ 37.165.535/0001-22 — Franklim Paixão). Foco: 120 empresas clientes.
@@ -35,7 +35,8 @@ Sistema fiscal completo pra escritório contábil PAC INTELIGENCIA TRIBUTARIA
 
 | Data | Arquivo | O que cobriu |
 |---|---|---|
-| **27/05/2026** | `HANDOFF_2026-05-27_PROD-PREP.md` | Card FGTS dashboard + fix CLAVEAUX batch + fix polling Robô + cadastro 5 empresas Excel + auditoria Postgres + plano deploy Easypanel/Supabase |
+| **01/06/2026** 🚀 | `HANDOFF_2026-06-01_PRODUCAO-NO-AR.md` | **SISTEMA EM PRODUÇÃO**: GitHub + Easypanel + Supabase + Robô SEFAZ baixou 3 XMLs reais. 14 bugs fixados em cascata. 3 gaps detectados (CND, caixa postal mock; UI Focus faltante). |
+| 27/05/2026 | `HANDOFF_2026-05-27_PROD-PREP.md` | Card FGTS dashboard + fix CLAVEAUX batch + fix polling Robô + cadastro 5 empresas Excel + auditoria Postgres + plano deploy Easypanel/Supabase |
 | 26/05/2026 | `HANDOFF_2026-05-26_INFOSIMPLES-FGTS-PGFN.md` | Provider Infosimples + cache TTL + CND FGTS/Estadual + FGTS Digital (guias) + PGFN manual + dashboard PGFN |
 | 25/05/2026 | `HANDOFF_2026-05-25_PARTE-2_DASHBOARD-ROBO.md` | Dashboard consolidado + Robô SEFAZ filtro empresa + AGIMED 4 bugs (CNPJ filial, sem resultados, modal, histórico) |
 | 25/05/2026 | `HANDOFF_2026-05-25_PRODUCAO-COMPLETA.md` | Integra Contador (DAS/PARCSN/DCTFWeb) + DANFE local + saída vs entrada |
@@ -71,14 +72,23 @@ npm run dev
 # Login: admin@pacxml.com.br / admin123
 ```
 
-## Próximas frentes (backlog priorizado)
+## Próximas frentes (backlog 02/06/2026)
 
-1. **[AMANHÃ] GitHub + Docker + Easypanel auto-deploy** — VPS2 (IP 72.62.111.136) já tem Easypanel + frontend up. Faltam: repo GitHub, Dockerfiles, conectar Easypanel ao Git
-2. **Setup Supabase Postgres** — connection string pra DATABASE_URL de prod
-3. **Resolver token Infosimples 601** — destrava CND FGTS, Estadual e Guia FGTS Digital
-4. **Testes batch multi-empresa** — escalar para 10+ empresas reais (3 já com cert A1)
-5. **#20** DAS valor real no sync — GERARDASCOBRANCA17 por compet.
-6. **#22** PARCSN OBTERPARC164 — investigar ER_N002
-7. **Cron mensal FGTS Digital** automático (similar Robô SEFAZ-GO)
-8. **Comprar domínio + Let's Encrypt SSL** — quando VPS estável
-9. **Multi-UF agente SEFAZ** (SP) — quando expandir
+### URGENTE — desbloquear funcionalidades reais
+1. **Desligar `USE_MOCK_INTEGRA`** → habilita SITFIS (CND Federal), Caixa Postal, DAS, PARCSN, DCTFWeb real
+2. **Subir cert do escritório `pac.pfx`** → `/app/certs/escritorio.pfx` (volume Easypanel)
+3. **Desligar `USE_MOCK_INFOSIMPLES`** → habilita CND FGTS, Estadual, Guia FGTS Digital reais
+4. **Desligar `USE_MOCK_FOCUS_NFE`** + setar FOCUS_MASTER_TOKEN → DF-e real
+5. **Criar UI Focus NFe distribuição** em `/documentos` (botão "Sincronizar via Focus")
+6. **Subir certs A1 CLAVEAUX + AGIMED** em prod (JOVELINO já tá)
+
+### IMPORTANTE
+7. **#20** DAS valor real no sync — GERARDASCOBRANCA17 por compet.
+8. **#22** PARCSN OBTERPARC164 — investigar ER_N002
+9. **Cron Celery beat mensal** Robô SEFAZ + FGTS Digital
+10. **Backup automático** Supabase + storage
+
+### BOM TER
+11. Comprar domínio `pacdownload.com.br` (Registro.br)
+12. Limpar 404 rota órfã `integra/procuracao` no frontend
+13. Multi-UF agente SEFAZ (SP)
