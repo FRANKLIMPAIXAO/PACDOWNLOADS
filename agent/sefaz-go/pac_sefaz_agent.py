@@ -323,6 +323,12 @@ def resolver_turnstile_2captcha(sitekey: str, url: str) -> str:
     return token
 
 
+# Variável module-level pra carry-over do último erro de Turnstile.
+# Sem mudar API de resolver_e_injetar_turnstile (que retorna bool),
+# permite expor mensagem real no res.motivo quando falha.
+ULTIMO_ERRO_TURNSTILE: str = ""
+
+
 async def resolver_e_injetar_turnstile(page: Page) -> bool:
     """Pipeline completo de resolver Turnstile via 2Captcha + injetar no DOM.
 
@@ -333,6 +339,8 @@ async def resolver_e_injetar_turnstile(page: Page) -> bool:
     4. Dispara callback do widget (`data-callback="pegarTokenSuccess"`)
     5. Sucesso quando input tem value populado
     """
+    global ULTIMO_ERRO_TURNSTILE
+    ULTIMO_ERRO_TURNSTILE = ""
     log = logging.getLogger("turnstile")
 
     # Extrai sitekey + callback do HTML
@@ -348,7 +356,8 @@ async def resolver_e_injetar_turnstile(page: Page) -> bool:
         }
     """)
     if not info or not info.get("sitekey"):
-        log.error("Não achei widget .cf-turnstile na página")
+        ULTIMO_ERRO_TURNSTILE = "widget .cf-turnstile não encontrado no DOM"
+        log.error(ULTIMO_ERRO_TURNSTILE)
         return False
 
     sitekey = info["sitekey"]
@@ -376,14 +385,16 @@ async def resolver_e_injetar_turnstile(page: Page) -> bool:
         except asyncio.TimeoutError:
             continue
         except Exception as exc:  # noqa: BLE001
-            log.error("Falha no 2Captcha: %s", exc)
+            ULTIMO_ERRO_TURNSTILE = f"2Captcha API: {type(exc).__name__}: {exc}"[:300]
+            log.error(ULTIMO_ERRO_TURNSTILE)
             return False
     if token is None:
         # captcha terminou; busca o resultado
         try:
             token = await captcha_task
         except Exception as exc:  # noqa: BLE001
-            log.error("Falha no 2Captcha: %s", exc)
+            ULTIMO_ERRO_TURNSTILE = f"2Captcha API: {type(exc).__name__}: {exc}"[:300]
+            log.error(ULTIMO_ERRO_TURNSTILE)
             return False
 
     # Re-confirma que a página ainda está viva
@@ -701,7 +712,7 @@ async def processar_empresa(
         # Passo 4: Resolve Cloudflare Turnstile via 2Captcha + injeta no DOM
         # (Cloudflare bloqueia auto-resolve em browsers automatizados)
         if not await resolver_e_injetar_turnstile(page):
-            res.motivo = "Falha ao resolver Turnstile via 2Captcha"
+            res.motivo = f"Falha ao resolver Turnstile via 2Captcha: {ULTIMO_ERRO_TURNSTILE or 'erro desconhecido'}"
             log.error(res.motivo)
             return res
 
@@ -792,7 +803,7 @@ async def processar_empresa(
         if not token_atual or len(token_atual) < 50:
             log.warning("Token Turnstile sumiu/expirou — resolvendo de novo...")
             if not await resolver_e_injetar_turnstile(page):
-                res.motivo = "Falha ao re-resolver Turnstile antes de Pesquisar"
+                res.motivo = f"Falha ao re-resolver Turnstile antes de Pesquisar: {ULTIMO_ERRO_TURNSTILE or 'erro desconhecido'}"
                 log.error(res.motivo)
                 return res
 
