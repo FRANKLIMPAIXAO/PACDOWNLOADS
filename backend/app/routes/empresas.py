@@ -242,13 +242,38 @@ def auto_cadastrar_focus(empresa_id: int, db: Session = Depends(get_db)) -> dict
     )
 
     # Reusa o sync_empresa que já faz POST/PUT no Focus + salva token
-    data = EmpresaIntegracaoService(db).sync_empresa(
-        empresa_id,
-        payload,
-        certificado_bytes=pfx_path.read_bytes(),
-        certificado_filename=pfx_path.name,
-        certificado_password=senha_cert,
-    )
+    try:
+        data = EmpresaIntegracaoService(db).sync_empresa(
+            empresa_id,
+            payload,
+            certificado_bytes=pfx_path.read_bytes(),
+            certificado_filename=pfx_path.name,
+            certificado_password=senha_cert,
+        )
+    except requests.HTTPError as exc:
+        # Vem com body Focus já incluído via custom _request — propaga detail
+        msg = str(exc)
+        # Detecta CNPJ já cadastrado (Focus retorna 422 com mensagem específica)
+        if "ja cadastrad" in msg.lower() or "cnpj ja" in msg.lower():
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Empresa {empresa.cnpj} já está cadastrada na sua conta Focus NFe. "
+                    "Use a opção 'Importar token gerado no painel Focus' em vez de "
+                    "auto-cadastrar (o token dela já existe lá)."
+                ),
+            ) from exc
+        raise HTTPException(
+            status_code=502,
+            detail=f"Focus NFe rejeitou o cadastro: {msg[:500]}",
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=500,
+            detail=f"Erro inesperado no auto-cadastro: {type(exc).__name__}: {exc}",
+        ) from exc
 
     # Re-fetch pra confirmar token salvo
     db.refresh(empresa)

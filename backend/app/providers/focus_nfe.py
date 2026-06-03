@@ -389,7 +389,35 @@ class FocusNFeProvider:
             files=files,
             timeout=60,
         )
-        response.raise_for_status()
+        # IMPORTANTE: substitui raise_for_status() padrão pra incluir o BODY
+        # do erro na exceção. Focus retorna mensagens úteis em 4xx/5xx (qual
+        # campo faltou, qual validação falhou, etc), mas raise_for_status()
+        # padrão joga apenas "500 Server Error" sem contexto.
+        if response.status_code >= 400:
+            try:
+                # JSONDecodeError herda de ValueError; pega ambos com um catch
+                body = response.json() if response.content else {}
+            except ValueError:
+                body = response.text[:1000] if response.text else ""
+            # Mensagem amigável: tenta extrair `mensagem`/`erros`/`mensagens`
+            # do JSON Focus, senão usa texto cru.
+            detalhe = ""
+            if isinstance(body, dict):
+                detalhe = (
+                    body.get("mensagem")
+                    or body.get("codigo")
+                    or " | ".join(
+                        m.get("mensagem", "") if isinstance(m, dict) else str(m)
+                        for m in (body.get("erros") or body.get("mensagens") or [])
+                    )
+                    or str(body)[:500]
+                )
+            else:
+                detalhe = str(body)[:500]
+            raise requests.HTTPError(
+                f"{response.status_code} {response.reason} - {detalhe}",
+                response=response,
+            )
         if not expect_json or response.status_code == 204 or not response.content:
             return None
         return response.json()
