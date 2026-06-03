@@ -286,10 +286,14 @@ class IntegraContadorService:
         empresa = self.get_empresa_or_404(empresa_id)
 
         # --- Etapa 1: obter protocolo (com retry no cooldown Serpro) ---
+        # IMPORTANTE: os waits abaixo foram reduzidos pra somar < 40s no pior
+        # caso, cabendo no timeout do Traefik (~60s) em prod. Se Serpro estiver
+        # em cooldown prolongado, devolve 503 pedindo retry — melhor que 502
+        # genérico do proxy. TODO: mover pra Celery background (task #81).
         protocolo: str | None = None
         sol_dados: dict = {}
-        proto_max = 3 if _settings.use_mock_integra else 6
-        proto_wait_s = 0 if _settings.use_mock_integra else 30
+        proto_max = 3 if _settings.use_mock_integra else 2  # era 6
+        proto_wait_s = 0 if _settings.use_mock_integra else 8  # era 30
         for tentativa in range(1, proto_max + 1):
             try:
                 solicitacao = self.provider.sitfis_solicitar_protocolo(empresa.cnpj)
@@ -311,11 +315,13 @@ class IntegraContadorService:
 
         tempo_espera = int(sol_dados.get("tempoEspera") or 0)
         if tempo_espera and not _settings.use_mock_integra:
-            time.sleep(min(tempo_espera, 30))
+            time.sleep(min(tempo_espera, 8))  # era 30
 
         pdf_b64 = ""
         relatorio_dados: dict = {}
-        for tentativa in range(1, max_tentativas + 1):
+        # max_tentativas vem do parametro; pra prod reduzimos pra 2 (era ate 5)
+        max_efetivo = max_tentativas if _settings.use_mock_integra else min(max_tentativas, 2)
+        for tentativa in range(1, max_efetivo + 1):
             try:
                 relatorio = self.provider.sitfis_emitir_relatorio(
                     empresa.cnpj, protocolo
@@ -327,13 +333,17 @@ class IntegraContadorService:
             wait = int(relatorio_dados.get("tempoEspera") or 0)
             if pdf_b64:
                 break
-            if tentativa >= max_tentativas:
+            if tentativa >= max_efetivo:
                 raise HTTPException(
                     status_code=504,
-                    detail="SITFIS nao retornou PDF dentro do tempo limite.",
+                    detail=(
+                        "SITFIS nao retornou PDF dentro do tempo limite. "
+                        "Aguarde alguns segundos e tente novamente — o protocolo "
+                        f"foi solicitado ({protocolo})."
+                    ),
                 )
             if not _settings.use_mock_integra:
-                time.sleep(min(max(wait, 5), 30))
+                time.sleep(min(max(wait, 5), 8))  # era min(max(wait,5),30)
 
         # Salva PDF no storage
         storage_root = Path(_settings.storage_path).parent / "sitfis"
