@@ -145,6 +145,179 @@ def importar_focus_token(
     return EmpresaIntegracaoService(db).importar_token(empresa_id, payload.token)
 
 
+@router.post("/{empresa_id}/focus/auto-cadastrar")
+def auto_cadastrar_focus(empresa_id: int, db: Session = Depends(get_db)) -> dict:
+    """Cadastra a empresa no Focus NFe REUTILIZANDO o cert A1 já salvo no PAC.
+
+    Pré-requisitos:
+    - FOCUS_MASTER_TOKEN configurado no .env do backend
+    - Empresa tem cert A1 cadastrado (cert_a1_path + senha cifrada)
+    - Empresa NÃO tem focus_token ainda (idempotente: se já tem, retorna ele)
+
+    Fluxo:
+    1. Lê o .pfx do disco (storage local ou volume)
+    2. Decifra a senha do cert
+    3. Monta payload pra Focus com dados da empresa (CNPJ, nome, endereço…)
+    4. Chama EmpresaIntegracaoService.sync_empresa (POST /v2/empresas)
+    5. Salva o token retornado em empresa.focus_token (cifrado)
+
+    Devolve dict com {ja_tinha_token, token_salvo, focus_response}.
+    """
+    from pathlib import Path as _Path
+    empresa = db.get(Empresa, empresa_id)
+    if not empresa:
+        raise HTTPException(status_code=404, detail="Empresa nao encontrada")
+
+    # Idempotente: se já tem token, retorna sem refazer (poupa chamada Focus)
+    if empresa.focus_token:
+        return {
+            "ja_tinha_token": True,
+            "token_salvo": True,
+            "mensagem": "Empresa ja tem focus_token cadastrado.",
+        }
+
+    # Validações pré-cadastro
+    if not empresa.cert_a1_path:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Empresa sem cert A1 cadastrado. Sobe o .pfx em /empresas/{id} "
+                "antes de auto-cadastrar no Focus."
+            ),
+        )
+    pfx_path = _Path(empresa.cert_a1_path)
+    if not pfx_path.exists():
+        raise HTTPException(
+            status_code=410,
+            detail=(
+                f"Cert path no banco aponta pra arquivo inexistente "
+                f"({pfx_path.name}). Re-faz upload do cert."
+            ),
+        )
+
+    senha_cert = empresa.get_cert_a1_senha()
+    if not senha_cert:
+        raise HTTPException(
+            status_code=500,
+            detail="Senha do cert nao decifravel (Fernet/SECRET_KEY desalinhado?)",
+        )
+
+    # Validações cadastrais mínimas (Focus exige)
+    faltando = []
+    if not empresa.razao_social: faltando.append("razao_social")
+    if not empresa.cnpj: faltando.append("cnpj")
+    if not empresa.logradouro: faltando.append("logradouro")
+    if not empresa.numero: faltando.append("numero")
+    if not empresa.municipio: faltando.append("municipio")
+    if not empresa.uf: faltando.append("uf")
+    if not empresa.cep: faltando.append("cep")
+    if faltando:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Campos cadastrais faltando pra Focus: {', '.join(faltando)}. "
+                "Edita a empresa e preenche antes de auto-cadastrar."
+            ),
+        )
+
+    # Monta payload Focus (modelo EmpresaFocusPayload)
+    payload = EmpresaFocusPayload(
+        cnpj=empresa.cnpj,
+        nome=empresa.razao_social,
+        nome_fantasia=empresa.nome_fantasia,
+        inscricao_estadual=empresa.inscricao_estadual,
+        inscricao_municipal=empresa.inscricao_municipal,
+        fone=empresa.telefone,
+        email=empresa.email_contato,
+        regime_tributario=empresa.regime_tributario,
+        endereco={
+            "logradouro": empresa.logradouro,
+            "numero": empresa.numero or "S/N",
+            "complemento": empresa.complemento,
+            "bairro": empresa.bairro,
+            "cidade": empresa.municipio,
+            "uf": empresa.uf,
+            "cep": (empresa.cep or "").replace("-", "").replace(".", ""),
+        },
+    )
+
+    # Reusa o sync_empresa que já faz POST/PUT no Focus + salva token
+    data = EmpresaIntegracaoService(db).sync_empresa(
+        empresa_id,
+        payload,
+        certificado_bytes=pfx_path.read_bytes(),
+        certificado_filename=pfx_path.name,
+        certificado_password=senha_cert,
+    )
+
+    # Re-fetch pra confirmar token salvo
+    db.refresh(empresa)
+    return {
+        "ja_tinha_token": False,
+        "token_salvo": bool(empresa.focus_token),
+        "focus_response": data,
+    }
+
+
+@router.post("/focus/auto-cadastrar-todas")
+def auto_cadastrar_focus_todas(db: Session = Depends(get_db)) -> dict:
+    """Itera empresas ativas com cert A1 sem focus_token e auto-cadastra todas.
+
+    Idempotente: empresas que já tem token são puladas.
+    Devolve resumo: {tentadas, sucesso, ja_tinham, falhas, detalhes}.
+    """
+    from pathlib import Path as _Path
+    empresas = db.scalars(
+        select(Empresa).where(Empresa.ativo == True).order_by(Empresa.id)  # noqa: E712
+    ).all()
+
+    elegiveis = [
+        e for e in empresas
+        if e.cert_a1_path and _Path(e.cert_a1_path).exists() and not e.focus_token
+    ]
+
+    resultado = {
+        "elegiveis": len(elegiveis),
+        "sucesso": 0,
+        "falhas": 0,
+        "ja_tinham": sum(1 for e in empresas if e.focus_token),
+        "sem_cert": sum(1 for e in empresas if e.ativo and not e.cert_a1_path),
+        "detalhes": [],
+    }
+
+    for empresa in elegiveis:
+        try:
+            r = auto_cadastrar_focus(empresa.id, db=db)
+            if r.get("token_salvo"):
+                resultado["sucesso"] += 1
+                resultado["detalhes"].append({
+                    "empresa_id": empresa.id,
+                    "cnpj": empresa.cnpj,
+                    "razao_social": empresa.razao_social[:50],
+                    "status": "ok",
+                })
+        except HTTPException as exc:
+            resultado["falhas"] += 1
+            resultado["detalhes"].append({
+                "empresa_id": empresa.id,
+                "cnpj": empresa.cnpj,
+                "razao_social": empresa.razao_social[:50],
+                "status": "erro",
+                "erro": str(exc.detail)[:300],
+            })
+        except Exception as exc:  # noqa: BLE001
+            resultado["falhas"] += 1
+            resultado["detalhes"].append({
+                "empresa_id": empresa.id,
+                "cnpj": empresa.cnpj,
+                "razao_social": empresa.razao_social[:50],
+                "status": "erro",
+                "erro": f"{type(exc).__name__}: {exc}"[:300],
+            })
+
+    return resultado
+
+
 @router.get("/{empresa_id}/focus/status", response_model=StatusIntegracaoEmpresaRead)
 def status_integracao_focus(empresa_id: int, db: Session = Depends(get_db)) -> StatusIntegracaoEmpresaRead:
     return EmpresaIntegracaoService(db).status_integracao(empresa_id)

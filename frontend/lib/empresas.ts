@@ -197,6 +197,50 @@ export function importarFocusToken(empresaId: number, token: string) {
   });
 }
 
+// --- Auto-cadastro Focus (reusa cert A1 já salvo no PAC) ---
+
+export type AutoCadastrarResultado = {
+  ja_tinha_token: boolean;
+  token_salvo: boolean;
+  mensagem?: string;
+  focus_response?: Record<string, unknown>;
+};
+
+export type AutoCadastrarTodasResultado = {
+  elegiveis: number;
+  sucesso: number;
+  falhas: number;
+  ja_tinham: number;
+  sem_cert: number;
+  detalhes: Array<{
+    empresa_id: number;
+    cnpj: string;
+    razao_social: string;
+    status: "ok" | "erro";
+    erro?: string;
+  }>;
+};
+
+/** Cadastra UMA empresa no Focus reusando o cert A1 já cadastrado no PAC.
+ *
+ * Pré-req: backend tem FOCUS_MASTER_TOKEN + empresa tem cert_a1_path com .pfx existente.
+ * Idempotente: empresa que já tem focus_token retorna `ja_tinha_token=true`.
+ */
+export function autoCadastrarFocus(empresaId: number) {
+  return apiFetch<AutoCadastrarResultado>(
+    `/api/v1/empresas/${empresaId}/focus/auto-cadastrar`,
+    { method: "POST" },
+  );
+}
+
+/** Cadastra TODAS as empresas elegíveis (ativa + cert A1 + sem focus_token). */
+export function autoCadastrarFocusTodas() {
+  return apiFetch<AutoCadastrarTodasResultado>(
+    `/api/v1/empresas/focus/auto-cadastrar-todas`,
+    { method: "POST" },
+  );
+}
+
 export function cadastrarOuAtualizarFocus(
   empresaId: number,
   payload: EmpresaFocusPayload,
