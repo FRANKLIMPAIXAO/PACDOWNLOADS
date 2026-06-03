@@ -179,25 +179,34 @@ class FocusNFeProvider:
         certificado_password: str,
         dry_run: bool = False,
     ) -> dict[str, Any]:
-        """Cadastra uma empresa na Focus NFe (POST /v2/empresas, multipart).
+        """Cadastra uma empresa na Focus NFe (POST /v2/empresas, JSON).
 
         `token_master` deve ser o token-mestre da conta Focus (configurado em
-        `FOCUS_MASTER_TOKEN`). Apos o cadastro, a Focus retorna o token especifico
-        da empresa no campo `token_producao` ou `token_homologacao`.
+        `FOCUS_MASTER_TOKEN`). Apos o cadastro, a Focus retorna o token
+        especifico da empresa no campo `token_producao` ou `token_homologacao`.
+
+        IMPORTANTE: A doc oficial Focus (criar_empresa) exige JSON com o
+        certificado em base64 no campo `arquivo_certificado_base64`, NAO
+        multipart/form-data. Mandar multipart faz a Focus rejeitar com 500
+        generico — bug que travou CLAVEAUX por horas.
 
         Se `dry_run=True`, manda `?dry_run=1` na URL — a Focus valida o payload
         e retorna o que CRIARIA, sem persistir. Útil pra testar correção sem
         gastar uma criação real.
+
+        `certificado_filename` é mantido na assinatura por compat, mas IGNORADO
+        — a Focus em JSON pega só o conteudo base64 e a senha.
         """
         if settings.use_mock_focus_nfe:
             return self._mock_empresa(payload.get("cnpj") or payload.get("cpf_cnpj") or "")
 
         # Normaliza tipos (regime string → int, numero/cep/IE/IM → int).
-        # Sem isso, Focus retorna 500 genérico.
         normalized = self._normalizar_payload_empresa(payload)
+        # Cert + senha vao no JSON, nao no multipart.
+        import base64 as _b64
+        normalized["arquivo_certificado_base64"] = _b64.b64encode(certificado_bytes).decode("ascii")
+        normalized["senha_certificado"] = certificado_password
 
-        files = {"arquivo_certificado": (certificado_filename, certificado_bytes, "application/x-pkcs12")}
-        data = {**normalized, "senha_certificado": certificado_password}
         # Timeout reduzido pra 45s (margem antes do Traefik default ~60s cortar).
         # Cadastro com upload .pfx é a chamada mais lenta da Focus — se passar de
         # 45s, devolvemos requests.Timeout limpo (vira HTTP 504 no nosso wrap)
@@ -205,7 +214,7 @@ class FocusNFeProvider:
         params = {"dry_run": "1"} if dry_run else None
         return self._request(
             token_master, "POST", EMPRESAS_ENDPOINT,
-            params=params, data=data, files=files, timeout=45,
+            params=params, json=normalized, timeout=45,
         )
 
     def consultar_empresa(self, token: str, cnpj: str) -> dict[str, Any]:
@@ -254,24 +263,22 @@ class FocusNFeProvider:
         certificado_filename: str | None = None,
         certificado_password: str | None = None,
     ) -> dict[str, Any]:
-        """PUT /v2/empresas/{cnpj}. Aceita atualizar dados e/ou trocar certificado."""
+        """PUT /v2/empresas/{cnpj}. Aceita atualizar dados e/ou trocar certificado.
+
+        Igual ao cadastrar_empresa: usa JSON com arquivo_certificado_base64
+        (NUNCA multipart — Focus rejeita).
+        """
         if settings.use_mock_focus_nfe:
             return self._mock_empresa(cnpj)
         # Mesma normalização de tipos do POST — Focus exige INT em regime/numero/cep/IE/IM.
         data = self._normalizar_payload_empresa(dict(payload or {}))
-        files = None
         if certificado_bytes is not None:
-            if not certificado_filename or certificado_password is None:
-                raise ValueError("Para atualizar certificado, envie filename e senha.")
-            files = {
-                "arquivo_certificado": (
-                    certificado_filename,
-                    certificado_bytes,
-                    "application/x-pkcs12",
-                )
-            }
+            if certificado_password is None:
+                raise ValueError("Para atualizar certificado, envie a senha.")
+            import base64 as _b64
+            data["arquivo_certificado_base64"] = _b64.b64encode(certificado_bytes).decode("ascii")
             data["senha_certificado"] = certificado_password
-        return self._request(token, "PUT", EMPRESA_ENDPOINT.format(cnpj=cnpj), data=data, files=files)
+        return self._request(token, "PUT", EMPRESA_ENDPOINT.format(cnpj=cnpj), json=data)
 
     def excluir_empresa(self, token: str, cnpj: str) -> None:
         if settings.use_mock_focus_nfe:

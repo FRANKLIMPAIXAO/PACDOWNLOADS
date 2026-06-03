@@ -47,6 +47,11 @@ class EmpresaFocusPayload(BaseModel):
     habilita_nfse: bool | None = None
     discrimina_impostos: bool | None = None
     enviar_email_destinatario: bool | None = None
+    # Datas de inicio do recebimento DF-e (formato YYYY-MM-DD).
+    # IMPORTANTE Focus: documentos anteriores sao ignorados; apos definida,
+    # NAO PODE ser alterada. Default em auto_cadastrar = data do cadastro.
+    data_inicio_recebimento_nfe: str | None = None
+    data_inicio_recebimento_cte: str | None = None
     endereco: EnderecoFocusSchema
 
     @field_validator("cnpj")

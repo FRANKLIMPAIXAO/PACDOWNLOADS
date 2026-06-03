@@ -272,10 +272,16 @@ def auto_cadastrar_focus(
     # IMPORTANTE: habilita_nfe + habilita_nfce + discrimina_impostos +
     # enviar_email_destinatario sao obrigatorios pra Focus aceitar o cadastro.
     # Sem eles, /v2/empresas retorna 500 generico. Defaults conservadores:
-    # - habilita_nfe=True (todo cliente PAC precisa NFe entrada/saida)
+    # - habilita_nfe=True (todo cliente PAC recebe NFes de fornecedores)
     # - habilita_nfce=False (NFCe sai sob demanda — empresa pede)
+    # - habilita_cte=True (recebimento de CTe de frete, comum em ind/comercio)
+    # - habilita_nfse=False (servico depende do municipio — ativa caso a caso)
     # - discrimina_impostos=True (Lei 12.741/2012 obriga)
     # - enviar_email_destinatario=True (padrao Focus pro destinatario receber XML)
+    # - data_inicio_recebimento_nfe/cte = hoje (UMA VEZ definida, nao muda mais —
+    #   por isso usamos a data do cadastro como ponto zero do DF-e).
+    from datetime import date as _date
+    hoje_iso = _date.today().isoformat()
     payload = EmpresaFocusPayload(
         cnpj=empresa.cnpj,
         nome=empresa.razao_social,
@@ -287,8 +293,12 @@ def auto_cadastrar_focus(
         regime_tributario=empresa.regime_tributario,
         habilita_nfe=True,
         habilita_nfce=False,
+        habilita_cte=True,
+        habilita_nfse=False,
         discrimina_impostos=True,
         enviar_email_destinatario=True,
+        data_inicio_recebimento_nfe=hoje_iso,
+        data_inicio_recebimento_cte=hoje_iso,
         endereco={
             "logradouro": empresa.logradouro,
             "numero": empresa.numero or "S/N",
@@ -351,6 +361,81 @@ def auto_cadastrar_focus(
         "ja_tinha_token": False,
         "token_salvo": bool(empresa.focus_token) and not dry_run,
         "dry_run": dry_run,
+        "focus_response": data,
+    }
+
+
+@router.post("/{empresa_id}/focus/ativar-recebimento")
+def ativar_recebimento_dfe(
+    empresa_id: int,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Ativa o recebimento DFe (NFe + CTe) de uma empresa JA cadastrada na Focus.
+
+    Use pra empresas que foram cadastradas na Focus SEM `data_inicio_recebimento_nfe`
+    (ex: CLAVEAUX foi criada via API direta com payload minimo). Sem essa data,
+    a Focus NAO popula as NFes recebidas no DF-e — sincronizacao retorna 0
+    documentos.
+
+    A Focus exige data_inicio uma SO vez na vida da empresa — apos definida nao
+    muda mais. Por isso este endpoint so tenta o PUT (se Focus rejeitar com
+    'ja definida', orienta usuario a esperar a populacao automatica).
+
+    Usa o token da PROPRIA empresa (nao o master) pra fazer o PUT.
+    """
+    from datetime import date as _date
+    empresa = db.get(Empresa, empresa_id)
+    if not empresa:
+        raise HTTPException(status_code=404, detail="Empresa nao encontrada")
+
+    token = empresa.get_focus_token()
+    if not token:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Empresa sem focus_token. Cadastra ela na Focus primeiro "
+                "(botao Auto-cadastrar) ou importa o token manualmente."
+            ),
+        )
+
+    hoje_iso = _date.today().isoformat()
+    payload_focus = {
+        "habilita_nfe": True,
+        "habilita_cte": True,
+        "data_inicio_recebimento_nfe": hoje_iso,
+        "data_inicio_recebimento_cte": hoje_iso,
+    }
+
+    try:
+        from app.providers.focus_nfe import FocusNFeProvider
+        provider = FocusNFeProvider()
+        data = provider.atualizar_empresa(token, empresa.cnpj, payload=payload_focus)
+    except requests.HTTPError as exc:
+        msg = str(exc)
+        if "ja definida" in msg.lower() or "ja_definida" in msg.lower():
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"data_inicio_recebimento ja foi definida pra essa empresa "
+                    f"na Focus e nao pode ser alterada. Focus disse: {msg[:300]}"
+                ),
+            ) from exc
+        raise HTTPException(
+            status_code=502,
+            detail=f"Focus rejeitou a atualizacao: {msg[:500]}",
+        ) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=500,
+            detail=f"Erro inesperado: {type(exc).__name__}: {exc}",
+        ) from exc
+
+    return {
+        "ok": True,
+        "empresa_id": empresa.id,
+        "cnpj": empresa.cnpj,
+        "data_inicio_recebimento_nfe": hoje_iso,
+        "data_inicio_recebimento_cte": hoje_iso,
         "focus_response": data,
     }
 
