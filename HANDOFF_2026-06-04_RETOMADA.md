@@ -40,37 +40,49 @@ Franklim testou robô SEFAZ-GO na AGIMED no fim do dia 03/06 e deu erro "Redis n
 3. Tentar conectar manualmente via console do backend: `redis-cli -u $REDIS_URL ping`
 4. Olhar `app/workers/celery_app.py` pra ver como o config carrega REDIS_URL
 
-### Bug 2: PDF SITFIS salvo no disco está corrompido (task #86)
+### Bug 2: PDF SITFIS aberto era MOCK ANTIGO, não bug do código atual (task #86)
 
-SITFIS REAL funcionou:
-- Serpro retornou protocolo válido (base64 ~250 chars, validade 60d)
-- Backend salvou em `/app/storage/sitfis/01060996000193/<timestamp>.pdf`
+**Descoberta no último teste do dia (03/06 às ~22h)** — debug rodou no SITFIS-5 e
+revelou que ERA MOCK ANTIGO:
 
-Mas browser tenta abrir o PDF e dá **"Falha ao carregar documento PDF"**. Bytes salvos são inválidos.
-
-**Causa provável** (em ordem):
-1. Encoding base64 URL-safe (`-_` em vez de `+/`) e nosso `base64.b64decode` quebra silenciosamente
-2. `parse_dados` retornou `{"_raw": ...}` em vez de dict com campo `pdf` (JSON da Serpro mal formado?)
-3. PDF Serpro veio em outro formato (XML PDF? PNG? algo?)
-
-**Endpoint debug criado** (commit `92e571f`, pendente deploy):
 ```
-GET /api/v1/empresas/7/integra/sitfis/{situacao_id}/debug
+protocolo: "MOCK-PROT-01060996000193-1780447106"    ← MOCK explícito
+protocolo_len: 35                                    ← real seria 250+ chars
+pdf_size_bytes: 40                                   ← real seria 50-200 KB
+first_chars: "%PDF-1.4 mock SITFIS para..."         ← texto literal "mock"
+gerada_em: 2026-06-03T00:38:26                      ← gerado 00:38 madrugada
 ```
 
-Retorna `header_hex`, `is_pdf`, `first_chars`, `protocolo_len`, `solicitacao_keys`, etc.
+SITFIS-5 foi gerado às **00:38h da madrugada de 03/06** — MUITO ANTES de ativarmos
+`USE_MOCK_INTEGRA=false` (foi por volta das 19h). Por isso é mock — funcionamento
+correto. O "Falha ao carregar PDF" vinha do navegador não conseguir renderizar
+um PDF de 40 bytes com header válido mas conteúdo só de texto fake.
 
-**Plano amanhã**:
-1. Deploy `92e571f`
-2. Rodar fetch no DevTools Console:
-   ```javascript
-   fetch('https://backend.72.62.111.136.nip.io/api/v1/empresas/7/integra/sitfis/5/debug', {
-     headers:{'Authorization':'Bearer '+localStorage.getItem('pac_xml_token')}
-   }).then(r=>r.json()).then(j=>console.log(JSON.stringify(j,null,2)))
-   ```
-3. Olhar `header_hex` — se não for `255044462d` (= `%PDF-`), problema é encoding
-4. Se for base64 URL-safe: trocar `base64.b64decode(pdf_b64)` por `base64.urlsafe_b64decode(pdf_b64)` em `integra_contador_service.py:355`
-5. Se for outro formato: investigar `parse_dados` e formato real do retorno Serpro
+**Pendente verificar amanhã**: SITFIS-3 e SITFIS-4 (validade 180d = CND Federal
+oficial). Esses provavelmente são os REAIS gerados após mock=false. Rodar:
+
+```javascript
+fetch('https://backend.72.62.111.136.nip.io/api/v1/empresas/7/integra/sitfis/3/debug', {
+  headers:{'Authorization':'Bearer '+localStorage.getItem('pac_xml_token')}
+}).then(r=>r.json()).then(j=>console.log('SITFIS-3:', JSON.stringify(j,null,2)))
+
+fetch('https://backend.72.62.111.136.nip.io/api/v1/empresas/7/integra/sitfis/4/debug', {
+  headers:{'Authorization':'Bearer '+localStorage.getItem('pac_xml_token')}
+}).then(r=>r.json()).then(j=>console.log('SITFIS-4:', JSON.stringify(j,null,2)))
+```
+
+**Critério pra ser REAL**:
+- `protocolo` NÃO começa com `MOCK-PROT-`
+- `protocolo_len` ~250 chars (base64)
+- `pdf_size_bytes` > 10000 (PDF Serpro real)
+- `first_chars` começa com `%PDF-` mas tem binário ilegível depois (PDF comprimido)
+
+Se SITFIS-3 e 4 também forem mock → significa que o botão "Atualizar SITFIS"
+estava chamando algum cache ou retornou mock por outro motivo (apesar do flag
+mock=false). Aí investigar caminho de mock no código.
+
+Se SITFIS-3/4 forem REAIS → PDF SITFIS real funciona, problema era só interpretar
+o SITFIS-5 mock antigo como sendo falha.
 
 ---
 
