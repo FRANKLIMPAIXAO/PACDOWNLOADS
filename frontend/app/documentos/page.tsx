@@ -650,6 +650,14 @@ function SyncFocusModal({
     useState<SincronizarFocusEmpresaResultado | null>(null);
   const [resultadoMulti, setResultadoMulti] =
     useState<SincronizarFocusMultiResultado | null>(null);
+  // Progresso do loop automático (apenas modo empresa)
+  const [progresso, setProgresso] = useState<{
+    lote: number;
+    baixados: number;
+    duplicados: number;
+    erros: number;
+    finalizado: boolean;
+  } | null>(null);
 
   // Validação simples: SEFAZ guarda só 90 dias
   const intervalLongo = useMemo(() => {
@@ -658,6 +666,9 @@ function SyncFocusModal({
     const f = new Date(fim).getTime();
     return (f - ini) / (1000 * 60 * 60 * 24) > 90;
   }, [inicio, fim]);
+
+  // Limite de seguranca: max 40 lotes (~1000 NFes) caso loop NSU nao convergir
+  const MAX_LOTES = 40;
 
   async function handleSync() {
     if (empresaId === "") {
@@ -676,13 +687,66 @@ function SyncFocusModal({
     setErro(null);
     setResultadoEmpresa(null);
     setResultadoMulti(null);
+    setProgresso(null);
     try {
       if (empresaId === "todas") {
+        // Multi: backend itera todas — uma chamada só (sem loop frontend)
         const r = await sincronizarFocusMultiempresas(inicio, fim);
         setResultadoMulti(r);
       } else {
-        const r = await sincronizarFocusEmpresa(empresaId as number, inicio, fim);
-        setResultadoEmpresa(r);
+        // Empresa única: loop automatico enquanto tem_mais=true.
+        // Backend limita ~25 NFes por chamada pra nao estourar Traefik;
+        // aqui acumulamos lotes ate Focus dizer "nao tem mais" ou MAX_LOTES.
+        const acumulado = {
+          processados: 0,
+          baixados: 0,
+          duplicados: 0,
+          erros: 0,
+          tem_mais: false as boolean,
+        };
+        let lote = 0;
+        while (lote < MAX_LOTES) {
+          lote++;
+          setProgresso({
+            lote,
+            baixados: acumulado.baixados,
+            duplicados: acumulado.duplicados,
+            erros: acumulado.erros,
+            finalizado: false,
+          });
+          const r = await sincronizarFocusEmpresa(
+            empresaId as number, inicio, fim,
+          );
+          acumulado.processados += r.processados;
+          acumulado.baixados += r.baixados;
+          acumulado.duplicados += r.duplicados;
+          acumulado.erros += r.erros;
+          acumulado.tem_mais = r.tem_mais;
+          setProgresso({
+            lote,
+            baixados: acumulado.baixados,
+            duplicados: acumulado.duplicados,
+            erros: acumulado.erros,
+            finalizado: false,
+          });
+          // Para o loop quando nao tem mais OU se nada foi processado
+          // (NSU nao avancou — proteje contra loop infinito).
+          if (!r.tem_mais || r.processados === 0) break;
+        }
+        setResultadoEmpresa({
+          processados: acumulado.processados,
+          baixados: acumulado.baixados,
+          duplicados: acumulado.duplicados,
+          erros: acumulado.erros,
+          tem_mais: acumulado.tem_mais,  // se ainda tem após MAX_LOTES
+        });
+        setProgresso({
+          lote,
+          baixados: acumulado.baixados,
+          duplicados: acumulado.duplicados,
+          erros: acumulado.erros,
+          finalizado: true,
+        });
       }
       onConcluido();
     } catch (e) {
@@ -791,18 +855,37 @@ function SyncFocusModal({
 
           {erro ? <div className="toast toast-error">{erro}</div> : null}
 
-          {resultadoEmpresa ? (
+          {/* Progresso ao vivo durante o loop automatico */}
+          {busy && progresso ? (
+            <div className="toast" style={{ background: "rgba(59,130,246,0.1)", border: "1px solid rgba(59,130,246,0.3)" }}>
+              ⏳ <strong>Sincronizando lote {progresso.lote}/{MAX_LOTES}</strong> ·{" "}
+              {progresso.baixados} XMLs baixados ·{" "}
+              {progresso.duplicados} duplicados ·{" "}
+              {progresso.erros} erros
+              <div style={{ marginTop: 6, height: 4, background: "rgba(255,255,255,0.1)", borderRadius: 2 }}>
+                <div style={{
+                  width: `${Math.min(100, (progresso.lote / MAX_LOTES) * 100)}%`,
+                  height: "100%",
+                  background: "rgb(59,130,246)",
+                  borderRadius: 2,
+                  transition: "width 0.3s",
+                }} />
+              </div>
+            </div>
+          ) : null}
+
+          {resultadoEmpresa && !busy ? (
             <div className={resultadoEmpresa.erros > 0 ? "toast toast-warn" : "toast toast-ok"}>
               {resultadoEmpresa.erros > 0 ? "⚠" : "✅"}{" "}
               <strong>{resultadoEmpresa.baixados}</strong> XMLs baixados ·{" "}
               <strong>{resultadoEmpresa.duplicados}</strong> duplicados ·{" "}
               <strong>{resultadoEmpresa.erros}</strong> erros ·{" "}
-              <small>({resultadoEmpresa.processados} processados nesta rodada)</small>
+              <small>({resultadoEmpresa.processados} processados em {progresso?.lote || 1} lote(s))</small>
               {resultadoEmpresa.tem_mais ? (
                 <div style={{ marginTop: 8, padding: 8, background: "rgba(245,158,11,0.1)", borderRadius: 4 }}>
-                  ⚠ <strong>Ainda há NFes pra baixar.</strong> O backend limita a{" "}
-                  ~25 NFes por chamada (evita timeout). Clica <strong>▶ Sincronizar</strong>{" "}
-                  de novo pra continuar do NSU atual.
+                  ⚠ <strong>Limite de {MAX_LOTES} lotes atingido.</strong> Ainda
+                  pode haver NFes pra baixar — clica <strong>▶ Sincronizar</strong>{" "}
+                  de novo (NSU avançou, vai continuar de onde parou).
                 </div>
               ) : null}
             </div>
@@ -846,7 +929,11 @@ function SyncFocusModal({
               onClick={handleSync}
               disabled={busy || empresasComFocus.length === 0 || empresaId === ""}
             >
-              {busy ? "Sincronizando..." : "▶ Sincronizar"}
+              {busy && progresso
+                ? `Lote ${progresso.lote} · ${progresso.baixados} baixados`
+                : busy
+                ? "Sincronizando..."
+                : "▶ Sincronizar"}
             </button>
           </div>
         </div>
