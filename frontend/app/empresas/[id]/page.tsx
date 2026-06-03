@@ -30,6 +30,7 @@ import {
   cadastrarOuAtualizarFocus,
   deletarCertificado,
   executarRoboDistribuicao,
+  autoCadastrarFocus,
   importarFocusToken,
   inativarEmpresa,
   obterEmpresa,
@@ -725,6 +726,54 @@ function FocusCard({
   onChanged: () => void;
 }) {
   const [mode, setMode] = useState<FocusMode>("view");
+  const [autoBusy, setAutoBusy] = useState(false);
+  const [autoMsg, setAutoMsg] = useState<{
+    ok: boolean;
+    text: string;
+  } | null>(null);
+
+  // Empresa elegível pro auto-cadastro: tem cert A1 no PAC + não tem focus_token
+  const podeAutoCadastrar = !!empresa.tem_certificado_a1 && !focus?.tem_token;
+
+  async function handleAutoCadastrar() {
+    const ok = confirm(
+      `Auto-cadastrar ${empresa.razao_social} no Focus NFe?\n\n` +
+      `Vai usar o cert A1 já salvo no PAC + dados cadastrais (CNPJ, endereço, ` +
+      `IE/IM) pra cadastrar via POST /v2/empresas com o FOCUS_MASTER_TOKEN do ` +
+      `escritório. O token retornado fica salvo automaticamente (cifrado).\n\n` +
+      `Não precisa subir certificado nem preencher endereço — o sistema já tem.\n\n` +
+      `Continuar?`,
+    );
+    if (!ok) return;
+    setAutoBusy(true);
+    setAutoMsg(null);
+    try {
+      const r = await autoCadastrarFocus(empresa.id);
+      if (r.token_salvo) {
+        setAutoMsg({
+          ok: true,
+          text: r.ja_tinha_token
+            ? "Empresa já tinha token Focus salvo."
+            : "✅ Empresa cadastrada na Focus + token salvo automaticamente.",
+        });
+        onChanged();
+      } else {
+        setAutoMsg({
+          ok: false,
+          text: r.mensagem || "Cadastro feito mas token não foi salvo.",
+        });
+      }
+    } catch (err) {
+      const msg = err instanceof ApiError
+        ? err.message
+        : err instanceof Error
+        ? err.message
+        : "Falha desconhecida no auto-cadastro.";
+      setAutoMsg({ ok: false, text: msg });
+    } finally {
+      setAutoBusy(false);
+    }
+  }
 
   return (
     <section className="panel info-card">
@@ -760,12 +809,57 @@ function FocusCard({
         </p>
       )}
 
+      {/* Botão DESTAQUE: auto-cadastro reusando cert + dados que já estão no PAC.
+          Só aparece se faz sentido (tem cert + não tem token). */}
+      {podeAutoCadastrar ? (
+        <div
+          style={{
+            background: "rgba(16, 185, 129, 0.08)",
+            border: "1px solid rgba(16, 185, 129, 0.25)",
+            borderRadius: 8,
+            padding: 12,
+            marginTop: 12,
+            marginBottom: 8,
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+            <div>
+              <strong>🔗 Auto-cadastrar (recomendado)</strong>
+              <p className="muted" style={{ margin: "4px 0 0", fontSize: 13 }}>
+                Reusa o cert A1 + endereço + CNPJ que já estão no PAC. Sem
+                redigitar nada.
+              </p>
+            </div>
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={handleAutoCadastrar}
+              disabled={autoBusy}
+            >
+              {autoBusy ? "Cadastrando..." : "▶ Auto-cadastrar agora"}
+            </button>
+          </div>
+          {autoMsg ? (
+            <div
+              className={autoMsg.ok ? "toast toast-ok" : "toast toast-error"}
+              style={{ marginTop: 10, fontSize: 13 }}
+            >
+              {autoMsg.text}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
       <div className="page-actions">
         <button type="button" className="btn-secondary" onClick={() => setMode(mode === "import" ? "view" : "import")}>
           {mode === "import" ? "Cancelar import" : "Importar token Focus"}
         </button>
         <button type="button" className="btn-secondary" onClick={() => setMode(mode === "cadastro" ? "view" : "cadastro")}>
-          {mode === "cadastro" ? "Cancelar cadastro" : (focus?.tem_token ? "Atualizar empresa + cert" : "Cadastrar empresa na Focus")}
+          {mode === "cadastro"
+            ? "Cancelar cadastro"
+            : focus?.tem_token
+            ? "Atualizar empresa + cert"
+            : "Cadastrar manualmente (subir cert novo)"}
         </button>
         {focus?.tem_token ? (
           <button type="button" className="btn-secondary" onClick={() => setMode(mode === "renovar" ? "view" : "renovar")}>
