@@ -99,6 +99,9 @@ function EmpresasContent() {
               : `🔗 Auto-cadastrar ${elegiveisAutoCad.length} no Focus`}
           </button>
         ) : null}
+        <Link href="/empresas/importar" className="btn-ghost">
+          ⬆ Importar XLSX (Jettax)
+        </Link>
         <Link href="/empresas/novo" className="btn-primary">
           + Nova empresa
         </Link>

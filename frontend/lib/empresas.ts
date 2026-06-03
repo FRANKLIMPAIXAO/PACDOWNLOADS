@@ -241,6 +241,40 @@ export function autoCadastrarFocusTodas() {
   );
 }
 
+// --- Importador XLSX Jettax ---
+
+export type ImportXlsxItem = {
+  cnpj: string;
+  razao_social: string;
+  status: "criada" | "atualizada" | "ignorada" | "erro";
+  empresa_id?: number;
+  mensagem?: string;
+};
+
+export type ImportXlsxResultado = {
+  linhas_lidas: number;
+  criadas: number;
+  atualizadas: number;
+  ignoradas: number;
+  erros: number;
+  dry_run: boolean;
+  detalhes: ImportXlsxItem[];
+};
+
+/** Importa a carteira do Jettax 360 (XLSX) pro PAC.
+ *
+ * Backend faz UPSERT por CNPJ — cria nova ou atualiza existente.
+ * `dryRun=true` simula sem persistir (recomendado pra primeira execução).
+ */
+export function importarXlsxJettax(arquivo: File, dryRun = false) {
+  const form = new FormData();
+  form.append("arquivo_xlsx", arquivo);
+  return apiFetch<ImportXlsxResultado>(
+    `/api/v1/empresas/importar-xlsx?dry_run=${dryRun ? "true" : "false"}`,
+    { method: "POST", body: form },
+  );
+}
+
 export function cadastrarOuAtualizarFocus(
   empresaId: number,
   payload: EmpresaFocusPayload,
