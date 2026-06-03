@@ -10,7 +10,7 @@
 1. **HOJE fizemos** 4 commits novos sobre Focus (auto-cadastrar reusando cert A1 + UI individual + diagnóstico + timeout/try-except). Tudo no `origin/main`.
 2. **Easypanel não está propagando o código novo**. Logs em prod mostram código pré-`132b9e7` (linha 104 = sync_empresa direto, sem try/except). Stack mostra Python 3.10 do `mcr.microsoft.com/playwright/python:v1.48.0-jammy` (imagem correta), mas com source code antigo.
 3. **Cache buster commitado** (`9d86c8f`) no `Dockerfile.backend` pra invalidar TODAS camadas. Amanhã testamos o deploy.
-4. **Empresa de teste**: CLAVEAUX (id=7). Já está cadastrada na conta Focus → comportamento esperado após fix: HTTP 409 com mensagem "use Importar Token" (não mais 502/Failed to fetch).
+4. **DESCOBERTA TARDE — CLAVEAUX NÃO ESTÁ no painel Focus** (confirmado por screenshot do `app-v2.focusnfe.com.br/minhas_empresas/empresas`). Empresas presentes: HC GESTÃO, JOVELINO, ROCA, LULIT, PAC INTELIGENCIA. Minha hipótese inicial de "CNPJ duplicado" estava ERRADA. Focus 500 da CLAVEAUX vem de outra causa — investigar amanhã (ver seção "🔍 Investigar Focus 500 CLAVEAUX").
 5. **Próximo após validar Focus**: ativar Integra Contador REAL (cert escritório + `USE_MOCK_INTEGRA=false`).
 
 ---
@@ -79,6 +79,72 @@ Easypanel mostra deploys verdes mas a imagem em runtime é antiga. Causa raiz n�
 
 ---
 
+## 🔍 Investigar Focus 500 CLAVEAUX (referência rápida)
+
+### Por que descartamos "CNPJ duplicado"
+
+Screenshot do painel Focus (`app-v2.focusnfe.com.br/minhas_empresas/empresas`)
+em 02/06/2026 à noite mostra estas empresas cadastradas na conta do escritório:
+
+| Nome | CNPJ | Status |
+|---|---|---|
+| HC GESTÃO DE CONTRATOS | 47.870.071/0001-09 | Válido até 19/02/2027 |
+| JOVELINO E ACILDA LTDA | 10.930.732/0001-34 | ✅ Funcionou ontem |
+| ROCA LTDA | 63.052.142/0001-12 | Válido até 07/10/2026 |
+| LULIT SOLUTIONS | 38.387.077/0001-39 | Válido até 18/09/2026 |
+| PAC INTELIGENCIA TRIBUTARIA | 37.165.535/0001-22 | Exclusivo |
+
+**CLAVEAUX (Indústria de Laticínios) NÃO aparece**. Logo, Focus 500 ao
+cadastrar NÃO é por duplicidade.
+
+### Stack do erro (do log que pegamos)
+
+```
+File "/app/app/routes/empresas.py", line 104, in cadastrar_ou_atualizar_focus
+    return EmpresaIntegracaoService(db).sync_empresa(...)
+File "/app/app/services/empresa_integracao.py", line 74, in sync_empresa
+    data = self.provider.cadastrar_empresa(...)
+File "/app/app/providers/focus_nfe.py", line 108, in cadastrar_empresa
+    return self._request(token_master, "POST", EMPRESAS_ENDPOINT, ...)
+requests.exceptions.HTTPError: 500 Internal Server Error - {'status': 500, 'error': 'Internal Server Error'}
+```
+
+(Nota: linha 104 mostra código ANTIGO — stack vai mudar quando deploy
+`9d86c8f` propagar. Mas a chamada Focus que retorna 500 é a mesma.)
+
+### Hipóteses por ordem de probabilidade
+
+1. **Senha do cert errada** (mais provável). Quando subimos o `.pfx` da
+   CLAVEAUX no PAC, a senha pode ter sido digitada errada ou veio com espaço
+   no final. O PAC SALVA cifrado sem validar, então a senha errada só explode
+   na hora de usar — no Focus, vira 500.
+   - Testar:
+     ```bash
+     openssl pkcs12 -in claveaux.pfx -info -noout -password pass:'SENHA-AQUI'
+     ```
+     Se devolver `MAC verified OK` = senha certa. Se `MAC verify failed` =
+     senha errada.
+
+2. **Cert vencido**. CLAVEAUX tem cert A1 vencido ou prestes a vencer →
+   Focus rejeita. Checar `cert_a1_validade_ate` no PAC.
+
+3. **CNPJ irregular na Receita**. Se `situacao_cadastral` da CLAVEAUX no PAC
+   não for "Ativa" (pode ser "Suspensa", "Baixada", "Inapta") → Focus rejeita.
+
+4. **Endereço/IE mal formatado**. Comparar campos cadastrais CLAVEAUX vs
+   JOVELINO. CEP precisa de 8 dígitos, IE GO tem 9 dígitos.
+
+5. **Focus tá com bug** intermitente — pouco provável, mas possível.
+
+### Workaround pra desbloquear (se a investigação demorar)
+
+Cadastrar CLAVEAUX MANUALMENTE pelo painel Focus
+(`app-v2.focusnfe.com.br/minhas_empresas/empresas` → botão laranja **ADICIONAR
+EMPRESA**). O painel pode dar mensagem de erro melhor que a API. Se aceitar,
+copiar o token gerado e importar no PAC via "Importar token Focus".
+
+---
+
 ## ✅ O que ficou pronto hoje (já em git)
 
 ### Backend
@@ -138,11 +204,40 @@ Easypanel mostra deploys verdes mas a imagem em runtime é antiga. Causa raiz n�
 - [ ] Testar `▶ Auto-cadastrar agora` em CLAVEAUX → esperar HTTP 409 JSON (não 502 HTML)
 - [ ] Se 502 persistir: ver seção "BUG PRINCIPAL" acima — Stop/Start ou Reconstruir sem cache
 
-### 2. CLAVEAUX: importar token Focus manual (5 min)
+### 2. CLAVEAUX: descobrir motivo do Focus 500 (10-20 min)
 
-- [ ] Logar no painel Focus NFe → copiar o token de produção da CLAVEAUX
-- [ ] Em `/empresas/7` → botão **"Importar token Focus"** → colar → salvar
-- [ ] Confirmar badge virou "Token configurado" verde
+⚠️ **Hipótese descartada**: CLAVEAUX NÃO está cadastrada no Focus (confirmado em
+screenshot `app-v2.focusnfe.com.br/minhas_empresas/empresas` em 02/06 à noite).
+Logo, não é caso de "CNPJ duplicado" — é Focus rejeitando o cadastro por outro
+motivo (cert, senha, dados, situação irregular).
+
+Plano de investigação:
+
+- [ ] Após validar o deploy `9d86c8f`, clicar `▶ Auto-cadastrar agora` em
+      CLAVEAUX e ler a mensagem de erro JSON real (não mais "Failed to fetch")
+- [ ] Mensagem esperada: `Focus NFe rejeitou o cadastro: 500 Internal Server
+      Error - {'status': 500, 'error': 'Internal Server Error'}` ou mais
+      específica se Focus retornar algo melhor
+- [ ] Causas prováveis (testar nessa ordem):
+  1. **Senha do cert errada no PAC** — abre o `.pfx` localmente com `openssl
+     pkcs12 -in claveaux.pfx -info -noout` usando a senha que tá salva no PAC.
+     Se openssl rejeitar → senha foi salva errada. Refazer upload do cert.
+  2. **Cert vencido ou revogado** — checar validade no PAC. Se vencido, pedir
+     cert novo ao cliente.
+  3. **CNPJ irregular na Receita** — consultar `situacao_cadastral` da CLAVEAUX
+     no `/empresas/7`. Se NÃO for "Ativa", Focus rejeita.
+  4. **Dado cadastral mal formatado** — CEP sem dígito, UF inválida, IE no
+     formato errado pra GO. Comparar com JOVELINO (que funcionou).
+  5. **Conta Focus bloqueada ou sem saldo** — checar painel.
+- [ ] Se nada disso: abrir ticket Focus com o `request_id` (header do response
+      Focus em caso de 500) pedindo motivo real.
+
+Plano alternativo (workaround pra avançar enquanto debuga):
+
+- [ ] Cadastrar CLAVEAUX MANUALMENTE pelo painel Focus
+      (`app-v2.focusnfe.com.br/minhas_empresas/empresas` → ADICIONAR EMPRESA)
+- [ ] Copiar token gerado → importar no PAC via `/empresas/7` → "Importar token
+      Focus"
 - [ ] Testar `⬇ Sincronizar Focus NFe` em /documentos (igual JOVELINO ontem)
 
 ### 3. AGIMED: subir cert A1 + auto-cadastrar (5 min)
