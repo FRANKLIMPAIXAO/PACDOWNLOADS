@@ -19,7 +19,9 @@ class SituacaoFiscal(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
     empresa_id: Mapped[int] = mapped_column(ForeignKey("empresas.id"), nullable=False)
-    protocolo: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    # Protocolo Serpro real eh base64 com ~250 chars. Mock antigo era curto.
+    # Mantemos 500 pra margem confortavel.
+    protocolo: Mapped[str | None] = mapped_column(String(500), nullable=True)
     pdf_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     status: Mapped[str] = mapped_column(String(30), default="GERADO")
     raw: Mapped[dict | None] = mapped_column(JSON, nullable=True)
