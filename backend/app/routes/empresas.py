@@ -440,6 +440,163 @@ def ativar_recebimento_dfe(
     }
 
 
+@router.post("/focus/diagnostico")
+def diagnostico_focus(
+    empresa_id: int | None = None,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Roda diagnostico em cascata na Focus pra isolar gargalo.
+
+    3 etapas, cada uma com timeout curto pra nao estourar Traefik (~60s):
+    1. HEAD api.focusnfe.com.br — testa DNS + TLS handshake (timeout 5s)
+    2. GET /v2/empresas com master token — testa auth + endpoint de leitura (timeout 8s)
+    3. PUT /v2/empresas/{cnpj} payload pequeno — testa endpoint de cadastro/update (timeout 10s)
+       Se `empresa_id` informado e empresa tem focus_token, usa essa empresa.
+       Senao, pula a etapa 3.
+
+    Retorna JSON estruturado com tempo + status + erro de cada etapa.
+    NUNCA levanta excecao — se uma etapa falha, marca `ok: false` e segue.
+    """
+    import time
+    import requests as _rq
+    from app.config import get_settings as _gs
+    _s = _gs()
+
+    resultado: dict = {"etapas": [], "ok_geral": True}
+
+    # === Etapa 1: TLS handshake ===
+    t0 = time.monotonic()
+    try:
+        r = _rq.head("https://api.focusnfe.com.br/", timeout=5, allow_redirects=False)
+        dt = time.monotonic() - t0
+        resultado["etapas"].append({
+            "etapa": "1_tls_handshake",
+            "ok": True,
+            "tempo_segundos": round(dt, 3),
+            "status_http": r.status_code,
+            "info": "TLS + DNS OK",
+        })
+    except _rq.Timeout:
+        dt = time.monotonic() - t0
+        resultado["etapas"].append({
+            "etapa": "1_tls_handshake", "ok": False,
+            "tempo_segundos": round(dt, 3),
+            "erro": "TIMEOUT 5s — Focus inacessivel ou TLS muito lento do container",
+        })
+        resultado["ok_geral"] = False
+    except Exception as exc:  # noqa: BLE001
+        dt = time.monotonic() - t0
+        resultado["etapas"].append({
+            "etapa": "1_tls_handshake", "ok": False,
+            "tempo_segundos": round(dt, 3),
+            "erro": f"{type(exc).__name__}: {exc}",
+        })
+        resultado["ok_geral"] = False
+
+    # === Etapa 2: GET autenticado com master ===
+    master = (_s.focus_master_token or "").strip()
+    if not master:
+        resultado["etapas"].append({
+            "etapa": "2_get_listar_empresas", "ok": False,
+            "erro": "FOCUS_MASTER_TOKEN ausente no .env do backend",
+        })
+        resultado["ok_geral"] = False
+    else:
+        t0 = time.monotonic()
+        try:
+            r = _rq.get(
+                "https://api.focusnfe.com.br/v2/empresas",
+                auth=(master, ""),
+                headers={"Accept": "application/json"},
+                timeout=8,
+            )
+            dt = time.monotonic() - t0
+            body_preview = r.text[:300] if r.text else ""
+            resultado["etapas"].append({
+                "etapa": "2_get_listar_empresas",
+                "ok": r.status_code < 400,
+                "tempo_segundos": round(dt, 3),
+                "status_http": r.status_code,
+                "body_preview": body_preview,
+            })
+            if r.status_code >= 400:
+                resultado["ok_geral"] = False
+        except _rq.Timeout:
+            dt = time.monotonic() - t0
+            resultado["etapas"].append({
+                "etapa": "2_get_listar_empresas", "ok": False,
+                "tempo_segundos": round(dt, 3),
+                "erro": "TIMEOUT 8s — GET demora demais",
+            })
+            resultado["ok_geral"] = False
+        except Exception as exc:  # noqa: BLE001
+            dt = time.monotonic() - t0
+            resultado["etapas"].append({
+                "etapa": "2_get_listar_empresas", "ok": False,
+                "tempo_segundos": round(dt, 3),
+                "erro": f"{type(exc).__name__}: {exc}",
+            })
+            resultado["ok_geral"] = False
+
+    # === Etapa 3: PUT pequeno se temos empresa_id com token ===
+    empresa_alvo = None
+    if empresa_id:
+        empresa_alvo = db.get(Empresa, empresa_id)
+    if empresa_alvo and empresa_alvo.get_focus_token():
+        token = empresa_alvo.get_focus_token()
+        cnpj_limpo = (empresa_alvo.cnpj or "").replace(".", "").replace("/", "").replace("-", "")
+        t0 = time.monotonic()
+        try:
+            r = _rq.put(
+                f"https://api.focusnfe.com.br/v2/empresas/{cnpj_limpo}",
+                auth=(token, ""),
+                headers={"Accept": "application/json", "Content-Type": "application/json"},
+                json={"habilita_nfe": True},  # payload minimo idempotente
+                timeout=10,
+            )
+            dt = time.monotonic() - t0
+            body_preview = r.text[:500] if r.text else ""
+            resultado["etapas"].append({
+                "etapa": "3_put_empresa",
+                "ok": r.status_code < 400,
+                "tempo_segundos": round(dt, 3),
+                "status_http": r.status_code,
+                "cnpj_testado": cnpj_limpo,
+                "body_preview": body_preview,
+            })
+            if r.status_code >= 400:
+                resultado["ok_geral"] = False
+        except _rq.Timeout:
+            dt = time.monotonic() - t0
+            resultado["etapas"].append({
+                "etapa": "3_put_empresa", "ok": False,
+                "tempo_segundos": round(dt, 3),
+                "cnpj_testado": cnpj_limpo,
+                "erro": "TIMEOUT 10s — PUT demora demais (provavel causa do 502 do auto-cadastrar)",
+            })
+            resultado["ok_geral"] = False
+        except Exception as exc:  # noqa: BLE001
+            dt = time.monotonic() - t0
+            resultado["etapas"].append({
+                "etapa": "3_put_empresa", "ok": False,
+                "tempo_segundos": round(dt, 3),
+                "cnpj_testado": cnpj_limpo,
+                "erro": f"{type(exc).__name__}: {exc}",
+            })
+            resultado["ok_geral"] = False
+    else:
+        resultado["etapas"].append({
+            "etapa": "3_put_empresa",
+            "ok": None,  # pulado
+            "info": (
+                "Pulado — passe ?empresa_id=N de uma empresa que ja tem "
+                "focus_token (ex: CLAVEAUX = 7)."
+            ),
+        })
+
+    return resultado
+
+
 @router.post("/focus/auto-cadastrar-todas")
 def auto_cadastrar_focus_todas(db: Session = Depends(get_db)) -> dict:
     """Itera empresas ativas com cert A1 sem focus_token e auto-cadastra todas.
