@@ -309,6 +309,80 @@ def obter_ultima_situacao(empresa_id: int, db: Session = Depends(get_db)):
     return situacao
 
 
+@router.get("/sitfis/{situacao_id}/debug")
+def debug_pdf_situacao(
+    empresa_id: int,
+    situacao_id: int,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Inspeciona forensicamente o PDF SITFIS salvo no disco.
+
+    Diagnostica se o PDF salvo eh valido (signature `%PDF`) ou bytes
+    invalidos (encoding base64 errado, conteudo vazio, etc).
+
+    Retorna:
+    - pdf_path, pdf_size_bytes, pdf_exists
+    - header_hex (primeiros 16 bytes em hex)
+    - is_pdf (True se comeca com 0x25 0x50 0x44 0x46 = %PDF)
+    - first_chars (primeiros 80 chars do arquivo como string ascii errors=replace)
+    - raw_solicitacao + raw_relatorio (do banco, pra ver o que Serpro respondeu)
+    """
+    from pathlib import Path
+    from app.models.situacao_fiscal import SituacaoFiscal
+
+    situacao = db.get(SituacaoFiscal, situacao_id)
+    if not situacao or situacao.empresa_id != empresa_id:
+        raise HTTPException(
+            status_code=404,
+            detail=f"SituacaoFiscal {situacao_id} nao encontrada pra empresa {empresa_id}.",
+        )
+
+    result: dict = {
+        "situacao_id": situacao.id,
+        "protocolo": (situacao.protocolo or "")[:80] + (
+            "..." if situacao.protocolo and len(situacao.protocolo) > 80 else ""
+        ),
+        "protocolo_len": len(situacao.protocolo or ""),
+        "status": situacao.status,
+        "gerada_em": situacao.gerada_em.isoformat() if situacao.gerada_em else None,
+        "pdf_path": situacao.pdf_path,
+    }
+
+    if not situacao.pdf_path:
+        result["erro"] = "pdf_path vazio"
+        return result
+
+    pdf_path = Path(situacao.pdf_path)
+    result["pdf_exists"] = pdf_path.exists()
+    if not pdf_path.exists():
+        result["erro"] = f"Arquivo nao existe: {pdf_path}"
+        return result
+
+    pdf_bytes = pdf_path.read_bytes()
+    result["pdf_size_bytes"] = len(pdf_bytes)
+    result["header_hex"] = pdf_bytes[:16].hex()
+    result["is_pdf"] = pdf_bytes.startswith(b"%PDF")
+    try:
+        result["first_chars"] = pdf_bytes[:80].decode("ascii", errors="replace")
+    except Exception:  # noqa: BLE001
+        result["first_chars"] = "<binario nao decodificavel>"
+
+    # Info do raw armazenado no banco (resposta crua da Serpro)
+    raw = situacao.raw or {}
+    if isinstance(raw, dict):
+        sol = raw.get("solicitacao") or {}
+        rel = raw.get("relatorio") or {}
+        result["solicitacao_keys"] = list(sol.keys()) if isinstance(sol, dict) else "nao dict"
+        result["relatorio_keys"] = list(rel.keys()) if isinstance(rel, dict) else "nao dict"
+        # Não logamos o `pdf` em si (~250KB base64) — só sinais
+        if isinstance(rel, dict):
+            result["relatorio_tempoEspera"] = rel.get("tempoEspera")
+            result["relatorio_status"] = rel.get("status")
+            result["relatorio_pdf_presente_no_raw"] = "pdf" in rel
+
+    return result
+
+
 @router.get("/sitfis/{situacao_id}/pdf")
 def baixar_pdf_situacao(empresa_id: int, situacao_id: int, db: Session = Depends(get_db)):
     """Download do PDF da situacao fiscal gerada."""
