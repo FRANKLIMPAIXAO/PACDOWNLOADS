@@ -24,6 +24,7 @@ from app.services.certificado_service import (
     remover_certificado,
     salvar_certificado_para_empresa,
 )
+from app.services.jettax_importer import importar_xlsx_jettax
 from app.services.empresa_integracao import EmpresaIntegracaoService
 
 
@@ -438,6 +439,47 @@ def ativar_recebimento_dfe(
         "data_inicio_recebimento_cte": hoje_iso,
         "focus_response": data,
     }
+
+
+@router.post("/importar-xlsx")
+async def importar_empresas_xlsx(
+    arquivo_xlsx: UploadFile = File(...),
+    dry_run: bool = False,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Importa carteira do Jettax 360 (XLSX) pro PAC.
+
+    Multipart upload com:
+    - `arquivo_xlsx`: XLSX exportado do Jettax (sheet `clientes` + tabelas dominio)
+    - `?dry_run=true`: simula sem persistir (recomendado pra primeira execucao)
+
+    UPSERT por CNPJ:
+    - Empresa existente: atualiza campos (preserva os que vem None no XLSX)
+    - Empresa nova: cria
+
+    NAO importa cert .pfx — so a validade do cert. Cert real precisa ser
+    subido por empresa em /empresas/{id}/certificado.
+
+    Devolve resumo {linhas_lidas, criadas, atualizadas, erros, detalhes[...]}.
+    """
+    if not arquivo_xlsx.filename or not arquivo_xlsx.filename.lower().endswith(".xlsx"):
+        raise HTTPException(
+            status_code=400,
+            detail="Envie um arquivo .xlsx (exportado do Jettax).",
+        )
+    conteudo = await arquivo_xlsx.read()
+    if not conteudo:
+        raise HTTPException(status_code=400, detail="Arquivo XLSX vazio.")
+    try:
+        resultado = importar_xlsx_jettax(db, conteudo, dry_run=dry_run)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=500,
+            detail=f"Erro inesperado: {type(exc).__name__}: {exc}",
+        ) from exc
+    return resultado.to_dict()
 
 
 @router.post("/focus/diagnostico")
