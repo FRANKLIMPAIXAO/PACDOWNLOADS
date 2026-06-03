@@ -87,6 +87,89 @@ class FocusNFeProvider:
 
     # --- Empresas ---
 
+    # Mapeamento Focus regime_tributario (doc oficial /reference/criar_empresa).
+    # Nossa base: "Simples Nacional", "Lucro Presumido", "Lucro Real", "MEI".
+    _REGIME_FOCUS_MAP = {
+        "simples nacional": 1,
+        "simples": 1,
+        "lucro presumido": 3,
+        "presumido": 3,
+        "lucro real": 3,
+        "real": 3,
+        "regime normal": 3,
+        "mei": 4,
+    }
+
+    @staticmethod
+    def _to_int_or_none(value: Any) -> int | None:
+        """Tenta converter pra int extraindo só dígitos. Devolve None se vazio."""
+        if value is None or value == "":
+            return None
+        if isinstance(value, int):
+            return value
+        s = str(value).strip()
+        if not s:
+            return None
+        # Extrai só dígitos (IE pode vir como "12.345.678-9", CEP "74.000-000")
+        digitos = "".join(c for c in s if c.isdigit())
+        if not digitos:
+            return None  # IE "ISENTO" ou string sem dígitos → omite
+        try:
+            return int(digitos)
+        except ValueError:
+            return None
+
+    @classmethod
+    def _normalizar_payload_empresa(cls, payload: dict[str, Any]) -> dict[str, Any]:
+        """Converte campos do payload pros tipos que a Focus exige.
+
+        Doc Focus (POST /v2/empresas):
+        - regime_tributario: INT (1=Simples, 2=Sublimite, 3=Real/Presumido, 4=MEI)
+        - numero, cep, inscricao_estadual, inscricao_municipal: INT
+
+        Mandar STRING nesses campos faz a Focus retornar 500 Internal Server
+        Error genérico (sem detalhe — provavelmente cai num parser interno).
+
+        Esta funcao:
+        - Mapeia regime string → int via _REGIME_FOCUS_MAP
+        - Converte numero/cep/IE/IM pra int (extraindo só dígitos)
+        - OMITE campos que não conseguir converter (Focus aceita ausência)
+        - Preserva strings (nome, logradouro, etc) intactas
+        """
+        out: dict[str, Any] = {}
+        for k, v in payload.items():
+            if v is None or v == "":
+                continue  # nunca enviar null/vazio
+            out[k] = v
+
+        # regime_tributario string → int
+        regime_raw = out.get("regime_tributario")
+        if regime_raw is not None and not isinstance(regime_raw, int):
+            key = str(regime_raw).strip().lower()
+            mapped = cls._REGIME_FOCUS_MAP.get(key)
+            if mapped is not None:
+                out["regime_tributario"] = mapped
+            else:
+                # Tenta extrair int direto (caso já venha "1" ou "3")
+                as_int = cls._to_int_or_none(regime_raw)
+                if as_int is not None and 1 <= as_int <= 4:
+                    out["regime_tributario"] = as_int
+                else:
+                    # Regime desconhecido — remove pra Focus rejeitar com mensagem
+                    # de validação clara em vez de 500 genérico.
+                    out.pop("regime_tributario", None)
+
+        # Campos integer obrigatórios pela doc Focus
+        for campo in ("numero", "cep", "inscricao_estadual", "inscricao_municipal"):
+            if campo in out:
+                novo = cls._to_int_or_none(out[campo])
+                if novo is None:
+                    out.pop(campo, None)
+                else:
+                    out[campo] = novo
+
+        return out
+
     def cadastrar_empresa(
         self,
         token_master: str,
@@ -94,24 +177,35 @@ class FocusNFeProvider:
         certificado_bytes: bytes,
         certificado_filename: str,
         certificado_password: str,
+        dry_run: bool = False,
     ) -> dict[str, Any]:
         """Cadastra uma empresa na Focus NFe (POST /v2/empresas, multipart).
 
         `token_master` deve ser o token-mestre da conta Focus (configurado em
         `FOCUS_MASTER_TOKEN`). Apos o cadastro, a Focus retorna o token especifico
         da empresa no campo `token_producao` ou `token_homologacao`.
+
+        Se `dry_run=True`, manda `?dry_run=1` na URL — a Focus valida o payload
+        e retorna o que CRIARIA, sem persistir. Útil pra testar correção sem
+        gastar uma criação real.
         """
         if settings.use_mock_focus_nfe:
             return self._mock_empresa(payload.get("cnpj") or payload.get("cpf_cnpj") or "")
+
+        # Normaliza tipos (regime string → int, numero/cep/IE/IM → int).
+        # Sem isso, Focus retorna 500 genérico.
+        normalized = self._normalizar_payload_empresa(payload)
+
         files = {"arquivo_certificado": (certificado_filename, certificado_bytes, "application/x-pkcs12")}
-        data = {**payload, "senha_certificado": certificado_password}
+        data = {**normalized, "senha_certificado": certificado_password}
         # Timeout reduzido pra 45s (margem antes do Traefik default ~60s cortar).
         # Cadastro com upload .pfx é a chamada mais lenta da Focus — se passar de
         # 45s, devolvemos requests.Timeout limpo (vira HTTP 504 no nosso wrap)
         # em vez de deixar o proxy retornar 502 com HTML.
+        params = {"dry_run": "1"} if dry_run else None
         return self._request(
             token_master, "POST", EMPRESAS_ENDPOINT,
-            data=data, files=files, timeout=45,
+            params=params, data=data, files=files, timeout=45,
         )
 
     def consultar_empresa(self, token: str, cnpj: str) -> dict[str, Any]:
@@ -163,7 +257,8 @@ class FocusNFeProvider:
         """PUT /v2/empresas/{cnpj}. Aceita atualizar dados e/ou trocar certificado."""
         if settings.use_mock_focus_nfe:
             return self._mock_empresa(cnpj)
-        data = dict(payload or {})
+        # Mesma normalização de tipos do POST — Focus exige INT em regime/numero/cep/IE/IM.
+        data = self._normalizar_payload_empresa(dict(payload or {}))
         files = None
         if certificado_bytes is not None:
             if not certificado_filename or certificado_password is None:

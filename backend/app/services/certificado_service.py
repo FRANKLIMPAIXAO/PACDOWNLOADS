@@ -172,6 +172,171 @@ def salvar_certificado_para_empresa(
     )
 
 
+@dataclass(slots=True)
+class CertificadoDiagnostico:
+    """Resultado do diagnostico de um cert A1 ja salvo no PAC.
+
+    Diferente de `validar_certificado_pfx`, este NUNCA lanca HTTPException —
+    qualquer falha vira `ok=False` + `erro=str`. O objetivo eh dar feedback
+    estruturado pro frontend exibir uma checklist tipo "senha OK / vencido?
+    / CNPJ bate?", sem matar a request.
+    """
+    ok: bool
+    mac_ok: bool  # True se pkcs12 abriu com a senha salva
+    subject: str | None
+    valido_de: date | None
+    validade_ate: date | None
+    vencido: bool | None
+    dias_pra_vencer: int | None
+    cnpj_certificado: str | None
+    cnpj_empresa: str
+    bate_com_empresa: bool | None
+    path_existe: bool
+    senha_decifravel: bool
+    erro: str | None
+
+
+def diagnosticar_certificado_empresa(empresa: Empresa) -> CertificadoDiagnostico:
+    """Roda checks no cert A1 salvo da empresa sem chamar nenhuma API externa.
+
+    Sequencia:
+    1. Existe `cert_a1_path` no banco? Se nao, ok=False imediato.
+    2. Arquivo existe no disco?
+    3. Conseguimos decifrar a senha cifrada (Fernet / SECRET_KEY alinhada)?
+    4. pkcs12 abre com a senha (MAC verify)?
+    5. Cert vencido?
+    6. CNPJ extraido do Subject bate com `empresa.cnpj`?
+
+    Retorna `CertificadoDiagnostico` com todos os campos preenchidos ate onde
+    deu pra ir antes de qualquer falha.
+    """
+    cnpj_empresa = (empresa.cnpj or "").replace(".", "").replace("/", "").replace("-", "")
+
+    if not empresa.cert_a1_path:
+        return CertificadoDiagnostico(
+            ok=False, mac_ok=False, subject=None, valido_de=None,
+            validade_ate=None, vencido=None, dias_pra_vencer=None,
+            cnpj_certificado=None, cnpj_empresa=cnpj_empresa,
+            bate_com_empresa=None, path_existe=False, senha_decifravel=False,
+            erro="Empresa nao tem cert_a1_path cadastrado.",
+        )
+
+    pfx_path = Path(empresa.cert_a1_path)
+    if not pfx_path.exists():
+        return CertificadoDiagnostico(
+            ok=False, mac_ok=False, subject=None, valido_de=None,
+            validade_ate=None, vencido=None, dias_pra_vencer=None,
+            cnpj_certificado=None, cnpj_empresa=cnpj_empresa,
+            bate_com_empresa=None, path_existe=False, senha_decifravel=False,
+            erro=f"Arquivo .pfx nao encontrado no caminho salvo ({pfx_path.name}).",
+        )
+
+    senha = empresa.get_cert_a1_senha()
+    if senha is None:
+        return CertificadoDiagnostico(
+            ok=False, mac_ok=False, subject=None, valido_de=None,
+            validade_ate=None, vencido=None, dias_pra_vencer=None,
+            cnpj_certificado=None, cnpj_empresa=cnpj_empresa,
+            bate_com_empresa=None, path_existe=True, senha_decifravel=False,
+            erro=(
+                "Senha cifrada nao decifravel — provavelmente SECRET_KEY do "
+                ".env mudou desde que o cert foi cadastrado. Refaca o upload."
+            ),
+        )
+
+    try:
+        from cryptography.hazmat.primitives.serialization import pkcs12
+    except ImportError:
+        return CertificadoDiagnostico(
+            ok=False, mac_ok=False, subject=None, valido_de=None,
+            validade_ate=None, vencido=None, dias_pra_vencer=None,
+            cnpj_certificado=None, cnpj_empresa=cnpj_empresa,
+            bate_com_empresa=None, path_existe=True, senha_decifravel=True,
+            erro="lib cryptography nao instalada no backend.",
+        )
+
+    pfx_bytes = pfx_path.read_bytes()
+    try:
+        _key, certificate, _extras = pkcs12.load_key_and_certificates(
+            pfx_bytes, senha.encode("utf-8"),
+        )
+    except ValueError as exc:
+        # MAC verify failed = senha errada (causa #1 do Focus 500)
+        return CertificadoDiagnostico(
+            ok=False, mac_ok=False, subject=None, valido_de=None,
+            validade_ate=None, vencido=None, dias_pra_vencer=None,
+            cnpj_certificado=None, cnpj_empresa=cnpj_empresa,
+            bate_com_empresa=None, path_existe=True, senha_decifravel=True,
+            erro=(
+                f"PFX nao abriu com a senha salva (MAC verify failed): {exc}. "
+                "Provavelmente senha digitada errada no momento do upload. "
+                "Refaca o upload do cert com a senha correta."
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001
+        return CertificadoDiagnostico(
+            ok=False, mac_ok=False, subject=None, valido_de=None,
+            validade_ate=None, vencido=None, dias_pra_vencer=None,
+            cnpj_certificado=None, cnpj_empresa=cnpj_empresa,
+            bate_com_empresa=None, path_existe=True, senha_decifravel=True,
+            erro=f"PFX invalido / corrompido: {type(exc).__name__}: {exc}",
+        )
+
+    if not certificate:
+        return CertificadoDiagnostico(
+            ok=False, mac_ok=True, subject=None, valido_de=None,
+            validade_ate=None, vencido=None, dias_pra_vencer=None,
+            cnpj_certificado=None, cnpj_empresa=cnpj_empresa,
+            bate_com_empresa=None, path_existe=True, senha_decifravel=True,
+            erro="PFX abriu mas nao contem certificado X.509.",
+        )
+
+    subject = certificate.subject.rfc4514_string()
+    try:
+        nv_after = certificate.not_valid_after_utc
+        nv_before = certificate.not_valid_before_utc
+    except AttributeError:
+        nv_after = certificate.not_valid_after.replace(tzinfo=timezone.utc)
+        nv_before = certificate.not_valid_before.replace(tzinfo=timezone.utc)
+
+    validade = nv_after.date()
+    inicio = nv_before.date()
+    hoje = datetime.now(timezone.utc).date()
+    vencido = validade < hoje
+    dias_pra_vencer = (validade - hoje).days
+
+    cnpj_cert = _extrair_cnpj_subject(subject)
+    bate = bool(cnpj_cert and cnpj_cert == cnpj_empresa)
+
+    # ok=True somente se passou em TODOS os checks
+    tudo_ok = (not vencido) and bate
+
+    erro: str | None = None
+    if vencido:
+        erro = f"Certificado vencido em {validade.isoformat()} ({-dias_pra_vencer} dias atras)."
+    elif not bate:
+        erro = (
+            f"CNPJ do cert ({cnpj_cert}) NAO bate com a empresa ({cnpj_empresa}). "
+            "Cert pode ser de outra empresa."
+        )
+
+    return CertificadoDiagnostico(
+        ok=tudo_ok,
+        mac_ok=True,
+        subject=subject[:300],
+        valido_de=inicio,
+        validade_ate=validade,
+        vencido=vencido,
+        dias_pra_vencer=dias_pra_vencer,
+        cnpj_certificado=cnpj_cert,
+        cnpj_empresa=cnpj_empresa,
+        bate_com_empresa=bate,
+        path_existe=True,
+        senha_decifravel=True,
+        erro=erro,
+    )
+
+
 def remover_certificado(db, empresa: Empresa) -> None:
     """Apaga o .pfx do disco e limpa campos do banco."""
     if empresa.cert_a1_path:

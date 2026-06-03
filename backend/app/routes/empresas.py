@@ -20,6 +20,7 @@ from app.schemas.integracao_schema import (
 )
 from app.services.auth_service import get_current_user
 from app.services.certificado_service import (
+    diagnosticar_certificado_empresa,
     remover_certificado,
     salvar_certificado_para_empresa,
 )
@@ -182,7 +183,11 @@ def importar_focus_token(
 
 
 @router.post("/{empresa_id}/focus/auto-cadastrar")
-def auto_cadastrar_focus(empresa_id: int, db: Session = Depends(get_db)) -> dict:
+def auto_cadastrar_focus(
+    empresa_id: int,
+    dry_run: bool = False,
+    db: Session = Depends(get_db),
+) -> dict:
     """Cadastra a empresa no Focus NFe REUTILIZANDO o cert A1 já salvo no PAC.
 
     Pré-requisitos:
@@ -190,25 +195,32 @@ def auto_cadastrar_focus(empresa_id: int, db: Session = Depends(get_db)) -> dict
     - Empresa tem cert A1 cadastrado (cert_a1_path + senha cifrada)
     - Empresa NÃO tem focus_token ainda (idempotente: se já tem, retorna ele)
 
+    Query params:
+    - `?dry_run=true` — manda `?dry_run=1` pra Focus (valida o payload sem
+      criar de verdade). NÃO consome cota, NÃO salva token local. Útil pra
+      testar correção de bug sem gastar criação real.
+
     Fluxo:
     1. Lê o .pfx do disco (storage local ou volume)
     2. Decifra a senha do cert
     3. Monta payload pra Focus com dados da empresa (CNPJ, nome, endereço…)
     4. Chama EmpresaIntegracaoService.sync_empresa (POST /v2/empresas)
-    5. Salva o token retornado em empresa.focus_token (cifrado)
+    5. Salva o token retornado em empresa.focus_token (cifrado) — exceto dry_run
 
-    Devolve dict com {ja_tinha_token, token_salvo, focus_response}.
+    Devolve dict com {ja_tinha_token, token_salvo, focus_response, dry_run}.
     """
     from pathlib import Path as _Path
     empresa = db.get(Empresa, empresa_id)
     if not empresa:
         raise HTTPException(status_code=404, detail="Empresa nao encontrada")
 
-    # Idempotente: se já tem token, retorna sem refazer (poupa chamada Focus)
-    if empresa.focus_token:
+    # Idempotente: se já tem token, retorna sem refazer (poupa chamada Focus).
+    # Em dry_run, força a chamada mesmo com token (pra revalidar payload).
+    if empresa.focus_token and not dry_run:
         return {
             "ja_tinha_token": True,
             "token_salvo": True,
+            "dry_run": False,
             "mensagem": "Empresa ja tem focus_token cadastrado.",
         }
 
@@ -285,6 +297,7 @@ def auto_cadastrar_focus(empresa_id: int, db: Session = Depends(get_db)) -> dict
             certificado_bytes=pfx_path.read_bytes(),
             certificado_filename=pfx_path.name,
             certificado_password=senha_cert,
+            dry_run=dry_run,
         )
     except requests.HTTPError as exc:
         # Vem com body Focus já incluído via custom _request — propaga detail
@@ -325,7 +338,8 @@ def auto_cadastrar_focus(empresa_id: int, db: Session = Depends(get_db)) -> dict
     db.refresh(empresa)
     return {
         "ja_tinha_token": False,
-        "token_salvo": bool(empresa.focus_token),
+        "token_salvo": bool(empresa.focus_token) and not dry_run,
+        "dry_run": dry_run,
         "focus_response": data,
     }
 
@@ -448,6 +462,52 @@ def deletar_certificado(empresa_id: int, db: Session = Depends(get_db)) -> dict:
         raise HTTPException(status_code=404, detail="Empresa sem certificado salvo")
     remover_certificado(db, empresa)
     return {"removido": True}
+
+
+@router.get("/{empresa_id}/cert/diagnostico")
+def diagnosticar_cert(empresa_id: int, db: Session = Depends(get_db)) -> dict:
+    """Diagnostica o cert A1 salvo sem chamar nenhuma API externa.
+
+    Use pra debugar Focus 500 / Integra 500 / qualquer falha que envolva
+    cert + senha. Roda 6 checks em sequencia e devolve um dict estruturado
+    com TODOS os campos preenchidos ate onde deu pra ir.
+
+    Nao lanca erro pra estado "ruim" — devolve `ok=false` + `erro=str`. Os
+    unicos 404/500 sao quando a empresa nem existe.
+
+    Resposta tipica de cert OK:
+    ```
+    {
+      "ok": true, "mac_ok": true, "subject": "CN=...:CNPJ,...",
+      "validade_ate": "2026-12-31", "vencido": false, "dias_pra_vencer": 180,
+      "cnpj_certificado": "12345...", "bate_com_empresa": true, "erro": null
+    }
+    ```
+
+    Resposta tipica de senha errada (causa #1 de Focus 500):
+    ```
+    {"ok": false, "mac_ok": false, "erro": "PFX nao abriu... MAC verify failed"}
+    ```
+    """
+    empresa = db.get(Empresa, empresa_id)
+    if not empresa:
+        raise HTTPException(status_code=404, detail="Empresa nao encontrada")
+    d = diagnosticar_certificado_empresa(empresa)
+    return {
+        "ok": d.ok,
+        "mac_ok": d.mac_ok,
+        "path_existe": d.path_existe,
+        "senha_decifravel": d.senha_decifravel,
+        "subject": d.subject,
+        "valido_de": d.valido_de.isoformat() if d.valido_de else None,
+        "validade_ate": d.validade_ate.isoformat() if d.validade_ate else None,
+        "vencido": d.vencido,
+        "dias_pra_vencer": d.dias_pra_vencer,
+        "cnpj_certificado": d.cnpj_certificado,
+        "cnpj_empresa": d.cnpj_empresa,
+        "bate_com_empresa": d.bate_com_empresa,
+        "erro": d.erro,
+    }
 
 
 @router.get("/{empresa_id}/certificado/baixar")

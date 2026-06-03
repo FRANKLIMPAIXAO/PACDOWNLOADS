@@ -36,6 +36,8 @@ class EmpresaIntegracaoService:
         certificado_bytes: bytes,
         certificado_filename: str,
         certificado_password: str,
+        *,
+        dry_run: bool = False,
     ) -> dict:
         """Cadastra ou atualiza a empresa na Focus NFe e persiste o token retornado.
 
@@ -77,11 +79,15 @@ class EmpresaIntegracaoService:
                 certificado_bytes=certificado_bytes,
                 certificado_filename=certificado_filename,
                 certificado_password=certificado_password,
+                dry_run=dry_run,
             )
-            token = data.get("token_producao") or data.get("token_homologacao")
-            if token:
-                empresa.set_focus_token(str(token))
-                self.db.commit()
+            # Em dry_run a Focus retorna {"status":"validacao_ok"} sem token —
+            # nada pra persistir.
+            if not dry_run:
+                token = data.get("token_producao") or data.get("token_homologacao")
+                if token:
+                    empresa.set_focus_token(str(token))
+                    self.db.commit()
         return self._scrub_tokens(data) or {}
 
     def importar_token(self, empresa_id: int, token: str) -> Empresa:
