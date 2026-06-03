@@ -1,6 +1,7 @@
 from dataclasses import asdict
 from datetime import datetime
 
+import requests
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -8,6 +9,41 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.services.auth_service import get_current_user
 from app.services.robo_xml import RoboXMLService
+
+
+def _wrap_focus_call(fn, *args, **kwargs):
+    """Executa uma chamada que internamente bate na Focus, convertendo
+    qualquer falha em HTTPException com mensagem JSON estruturada.
+
+    Sem isso, exception nao-tratada vira 500 cru SEM CORS headers, o Traefik
+    intercepta e devolve 502 HTML, e o frontend ve "Failed to fetch" sem
+    nenhum detalhe — bug recorrente em prod (commit 132b9e7 corrigiu pro
+    auto-cadastrar Focus, agora replicado aqui pros endpoints do robo).
+    """
+    try:
+        return fn(*args, **kwargs)
+    except requests.HTTPError as exc:
+        # _request do FocusNFeProvider ja inclui body Focus na msg da exception
+        raise HTTPException(
+            status_code=502,
+            detail=f"Focus NFe rejeitou a sincronizacao: {str(exc)[:500]}",
+        ) from exc
+    except requests.Timeout as exc:
+        raise HTTPException(
+            status_code=504,
+            detail=(
+                "Focus NFe demorou demais para responder. Tenta de novo com "
+                "periodo menor (ex: ultimos 7 dias). Pode ter sincronizado "
+                "parcialmente — recarrega /documentos."
+            ),
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=500,
+            detail=f"Erro inesperado no robo: {type(exc).__name__}: {exc}",
+        ) from exc
 
 
 router = APIRouter(prefix="/robo", tags=["robo"], dependencies=[Depends(get_current_user)])
@@ -33,15 +69,19 @@ def executar_por_empresa(payload: RoboRequest, db: Session = Depends(get_db)) ->
     outros sistemas nao sao baixaveis pela Focus.
     """
     service = RoboXMLService(db)
-    return service.baixar_distribuicao_empresa_completa(
-        _require_empresa_id(payload), payload.data_inicio, payload.data_fim
+    return _wrap_focus_call(
+        service.baixar_distribuicao_empresa_completa,
+        _require_empresa_id(payload), payload.data_inicio, payload.data_fim,
     )
 
 
 @router.post("/multiempresas")
 def executar_multiempresas(payload: RoboRequest, db: Session = Depends(get_db)) -> dict:
     service = RoboXMLService(db)
-    return service.baixar_distribuicao_multiempresas(payload.data_inicio, payload.data_fim)
+    return _wrap_focus_call(
+        service.baixar_distribuicao_multiempresas,
+        payload.data_inicio, payload.data_fim,
+    )
 
 
 @router.post("/distribuicao")
@@ -51,9 +91,11 @@ def executar_distribuicao(payload: RoboRequest, db: Session = Depends(get_db)) -
     Pre-requisito: empresa com `focus_token` salvo. Janela SEFAZ: 90 dias.
     """
     service = RoboXMLService(db)
-    return asdict(service.baixar_distribuicao_empresa(
-        _require_empresa_id(payload), payload.data_inicio, payload.data_fim
-    ))
+    resultado = _wrap_focus_call(
+        service.baixar_distribuicao_empresa,
+        _require_empresa_id(payload), payload.data_inicio, payload.data_fim,
+    )
+    return asdict(resultado)
 
 
 @router.post("/manifestar")
