@@ -268,7 +268,14 @@ def auto_cadastrar_focus(
             ),
         )
 
-    # Monta payload Focus (modelo EmpresaFocusPayload)
+    # Monta payload Focus (modelo EmpresaFocusPayload).
+    # IMPORTANTE: habilita_nfe + habilita_nfce + discrimina_impostos +
+    # enviar_email_destinatario sao obrigatorios pra Focus aceitar o cadastro.
+    # Sem eles, /v2/empresas retorna 500 generico. Defaults conservadores:
+    # - habilita_nfe=True (todo cliente PAC precisa NFe entrada/saida)
+    # - habilita_nfce=False (NFCe sai sob demanda — empresa pede)
+    # - discrimina_impostos=True (Lei 12.741/2012 obriga)
+    # - enviar_email_destinatario=True (padrao Focus pro destinatario receber XML)
     payload = EmpresaFocusPayload(
         cnpj=empresa.cnpj,
         nome=empresa.razao_social,
@@ -278,6 +285,10 @@ def auto_cadastrar_focus(
         fone=empresa.telefone,
         email=empresa.email_contato,
         regime_tributario=empresa.regime_tributario,
+        habilita_nfe=True,
+        habilita_nfce=False,
+        discrimina_impostos=True,
+        enviar_email_destinatario=True,
         endereco={
             "logradouro": empresa.logradouro,
             "numero": empresa.numero or "S/N",

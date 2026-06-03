@@ -38,6 +38,15 @@ class EmpresaFocusPayload(BaseModel):
     fone: str | None = None
     email: str | None = None
     regime_tributario: str | None = None
+    # Flags Focus — sem estes 4 a Focus retorna 500 generico no POST /v2/empresas.
+    # Default None pra nao quebrar PUT (atualizacao parcial) — sao setados
+    # explicitamente em `auto_cadastrar_focus` na hora do cadastro.
+    habilita_nfe: bool | None = None
+    habilita_nfce: bool | None = None
+    habilita_cte: bool | None = None
+    habilita_nfse: bool | None = None
+    discrimina_impostos: bool | None = None
+    enviar_email_destinatario: bool | None = None
     endereco: EnderecoFocusSchema
 
     @field_validator("cnpj")
