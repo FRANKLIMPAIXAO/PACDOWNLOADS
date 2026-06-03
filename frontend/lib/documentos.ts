@@ -82,6 +82,67 @@ export function listarDocumentos(
   return apiFetch<Documento[]>(`/api/v1/documentos${suffix}`);
 }
 
+// --- Sincronização via Focus NFe (distribuição DF-e) ---
+//
+// Baixa NFes RECEBIDAS contra o CNPJ via Focus NFe.
+// Pré-requisito: empresa com focus_token salvo.
+// Janela SEFAZ: 90 dias retroativos a partir da data_fim.
+
+export type SincronizarFocusEmpresaResultado = {
+  empresa_id: number;
+  cnpj: string;
+  ultimo_nsu_distribuicao: string | null;
+  baixados: number;
+  duplicados: number;
+  empresa_nao_cadastrada: number;
+  erros: number;
+  total_arquivos: number;
+  log_id: number | null;
+};
+
+export type SincronizarFocusMultiResultado = {
+  processadas: number;
+  baixados: number;
+  duplicados: number;
+  erros: number;
+  detalhes: Array<{
+    empresa_id: number;
+    cnpj: string;
+    sucesso: boolean;
+    mensagem?: string;
+    baixados?: number;
+    duplicados?: number;
+  }>;
+};
+
+export function sincronizarFocusEmpresa(
+  empresaId: number,
+  dataInicio: string,  // YYYY-MM-DD
+  dataFim: string,
+) {
+  return apiFetch<SincronizarFocusEmpresaResultado>("/api/v1/robo/distribuicao", {
+    method: "POST",
+    body: JSON.stringify({
+      empresa_id: empresaId,
+      data_inicio: `${dataInicio}T00:00:00`,
+      data_fim: `${dataFim}T23:59:59`,
+    }),
+  });
+}
+
+export function sincronizarFocusMultiempresas(
+  dataInicio: string,
+  dataFim: string,
+) {
+  return apiFetch<SincronizarFocusMultiResultado>("/api/v1/robo/multiempresas", {
+    method: "POST",
+    body: JSON.stringify({
+      data_inicio: `${dataInicio}T00:00:00`,
+      data_fim: `${dataFim}T23:59:59`,
+    }),
+  });
+}
+
 export type VerificarCanceladasResultado = {
   verificadas: number;
   novas_canceladas: number;

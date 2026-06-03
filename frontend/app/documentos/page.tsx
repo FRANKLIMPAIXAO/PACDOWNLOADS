@@ -7,6 +7,8 @@ import { ProtectedRoute } from "../../components/protected-route";
 import { ApiError } from "../../lib/api";
 import {
   Documento,
+  SincronizarFocusEmpresaResultado,
+  SincronizarFocusMultiResultado,
   TipoDocumento,
   UploadResultado,
   baixarPdfDocumento,
@@ -17,6 +19,8 @@ import {
   listarDocumentos,
   manifestarDocumento,
   manifestarTodasEmpresa,
+  sincronizarFocusEmpresa,
+  sincronizarFocusMultiempresas,
   uploadEmMassa,
   verificarCanceladas,
 } from "../../lib/documentos";
@@ -53,6 +57,7 @@ function DocumentosContent() {
   const [refreshTick, setRefreshTick] = useState(0);
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
   const [uploadResultado, setUploadResultado] = useState<UploadResultado | null>(null);
+  const [syncFocusModalOpen, setSyncFocusModalOpen] = useState(false);
 
   function handleUploadConcluido(r: UploadResultado) {
     setUploadResultado(r);
@@ -383,6 +388,15 @@ function DocumentosContent() {
         <button
           type="button"
           className="btn-primary"
+          onClick={() => setSyncFocusModalOpen(true)}
+          title="Baixar NFes recebidas (entradas) via Focus NFe — DF-e Distribuição"
+          style={{ alignSelf: "end" }}
+        >
+          ⬇ Sincronizar Focus NFe
+        </button>
+        <button
+          type="button"
+          className="btn-primary"
           onClick={() => { setUploadResultado(null); setUploadModalOpen(true); }}
           title="Importar XMLs em massa (ZIP da SEFAZ-GO ou arquivos individuais)"
           style={{ alignSelf: "end" }}
@@ -447,6 +461,17 @@ function DocumentosContent() {
           resultado={uploadResultado}
           onClose={() => setUploadModalOpen(false)}
           onConcluido={handleUploadConcluido}
+        />
+      ) : null}
+
+      {syncFocusModalOpen ? (
+        <SyncFocusModal
+          empresas={empresas}
+          empresaIdFiltro={empresaId || undefined}
+          dataInicio={dataInicio}
+          dataFim={dataFim}
+          onClose={() => setSyncFocusModalOpen(false)}
+          onConcluido={() => setRefreshTick((t) => t + 1)}
         />
       ) : null}
 
@@ -572,6 +597,254 @@ function DocumentosContent() {
         />
       )}
     </>
+  );
+}
+
+// ============ Modal de sincronização Focus NFe ============
+
+/**
+ * Modal pra disparar Focus NFe Distribuição de DF-e.
+ *
+ * Baixa NFes RECEBIDAS contra os CNPJs das empresas (entradas). Requer que a
+ * empresa tenha `focus_token` salvo. Janela máxima SEFAZ: 90 dias retroativos.
+ *
+ * Modos:
+ * - Empresa específica → POST /robo/distribuicao
+ * - Todas (com Focus token) → POST /robo/multiempresas
+ */
+function SyncFocusModal({
+  empresas,
+  empresaIdFiltro,
+  dataInicio,
+  dataFim,
+  onClose,
+  onConcluido,
+}: {
+  empresas: Empresa[];
+  empresaIdFiltro?: number;
+  dataInicio: string;
+  dataFim: string;
+  onClose: () => void;
+  onConcluido: () => void;
+}) {
+  const empresasComFocus = useMemo(
+    () => empresas.filter((e) => e.ativo && (e as Empresa).tem_focus_token),
+    [empresas],
+  );
+  const [empresaId, setEmpresaId] = useState<number | "todas" | "">(
+    empresaIdFiltro && empresasComFocus.some((e) => e.id === empresaIdFiltro)
+      ? empresaIdFiltro
+      : "",
+  );
+  // Default período: últimos 30d se não veio do filtro
+  const [inicio, setInicio] = useState<string>(() => {
+    if (dataInicio) return dataInicio;
+    const d = new Date();
+    d.setDate(d.getDate() - 30);
+    return d.toISOString().slice(0, 10);
+  });
+  const [fim, setFim] = useState<string>(dataFim || new Date().toISOString().slice(0, 10));
+  const [busy, setBusy] = useState(false);
+  const [erro, setErro] = useState<string | null>(null);
+  const [resultadoEmpresa, setResultadoEmpresa] =
+    useState<SincronizarFocusEmpresaResultado | null>(null);
+  const [resultadoMulti, setResultadoMulti] =
+    useState<SincronizarFocusMultiResultado | null>(null);
+
+  // Validação simples: SEFAZ guarda só 90 dias
+  const intervalLongo = useMemo(() => {
+    if (!inicio || !fim) return false;
+    const ini = new Date(inicio).getTime();
+    const f = new Date(fim).getTime();
+    return (f - ini) / (1000 * 60 * 60 * 24) > 90;
+  }, [inicio, fim]);
+
+  async function handleSync() {
+    if (empresaId === "") {
+      setErro("Selecione uma empresa ou 'Todas com Focus token'.");
+      return;
+    }
+    if (!inicio || !fim) {
+      setErro("Período é obrigatório (início e fim).");
+      return;
+    }
+    if (inicio > fim) {
+      setErro("Data início é posterior ao fim.");
+      return;
+    }
+    setBusy(true);
+    setErro(null);
+    setResultadoEmpresa(null);
+    setResultadoMulti(null);
+    try {
+      if (empresaId === "todas") {
+        const r = await sincronizarFocusMultiempresas(inicio, fim);
+        setResultadoMulti(r);
+      } else {
+        const r = await sincronizarFocusEmpresa(empresaId as number, inicio, fim);
+        setResultadoEmpresa(r);
+      }
+      onConcluido();
+    } catch (e) {
+      setErro(e instanceof ApiError ? e.message : "Falha ao sincronizar via Focus");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const algumResultado = resultadoEmpresa !== null || resultadoMulti !== null;
+
+  return (
+    <div className="modal-backdrop" onClick={busy ? undefined : onClose}>
+      <div
+        className="modal"
+        onClick={(e) => e.stopPropagation()}
+        style={{ maxWidth: 640 }}
+      >
+        <header className="modal-header">
+          <h2>⬇ Sincronizar via Focus NFe</h2>
+          <button
+            type="button"
+            className="btn-ghost"
+            onClick={onClose}
+            disabled={busy}
+          >
+            ✕
+          </button>
+        </header>
+        <div className="modal-body" style={{ display: "grid", gap: 14 }}>
+          <p className="muted">
+            Baixa <strong>NFes RECEBIDAS</strong> contra o CNPJ da empresa via{" "}
+            <strong>Focus NFe</strong> (DF-e Distribuição). Requer que a empresa
+            tenha <code>focus_token</code> cadastrado.
+          </p>
+
+          {empresasComFocus.length === 0 ? (
+            <div className="toast toast-error">
+              ⚠ Nenhuma empresa ativa com Focus token cadastrado. Vai em
+              Empresas → editar → aba Integração e cole o token de cada cliente.
+            </div>
+          ) : null}
+
+          <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            <span className="muted" style={{ fontSize: 12 }}>
+              Empresa ({empresasComFocus.length} com token)
+            </span>
+            <select
+              value={empresaId === "" ? "" : String(empresaId)}
+              onChange={(e) => {
+                const v = e.target.value;
+                if (v === "todas") setEmpresaId("todas");
+                else if (v === "") setEmpresaId("");
+                else setEmpresaId(Number(v));
+              }}
+              disabled={busy || empresasComFocus.length === 0}
+            >
+              <option value="">— Selecione —</option>
+              {empresasComFocus.length > 1 ? (
+                <option value="todas">
+                  📡 Todas ({empresasComFocus.length} empresas)
+                </option>
+              ) : null}
+              {empresasComFocus.map((e) => (
+                <option key={e.id} value={e.id}>
+                  {e.razao_social} ({e.cnpj})
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <span className="muted" style={{ fontSize: 12 }}>
+                Período de
+              </span>
+              <input
+                type="date"
+                value={inicio}
+                onChange={(e) => setInicio(e.target.value)}
+                max={fim || undefined}
+                disabled={busy}
+              />
+            </label>
+            <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <span className="muted" style={{ fontSize: 12 }}>
+                até
+              </span>
+              <input
+                type="date"
+                value={fim}
+                onChange={(e) => setFim(e.target.value)}
+                min={inicio || undefined}
+                max={new Date().toISOString().slice(0, 10)}
+                disabled={busy}
+              />
+            </label>
+          </div>
+
+          {intervalLongo ? (
+            <div className="toast toast-warn">
+              ⚠ Janela maior que 90 dias. SEFAZ só mantém DF-e dos últimos 90 dias,
+              eventos mais antigos podem ser ignorados.
+            </div>
+          ) : null}
+
+          {erro ? <div className="toast toast-error">{erro}</div> : null}
+
+          {resultadoEmpresa ? (
+            <div className="toast toast-ok">
+              ✅ <strong>Empresa #{resultadoEmpresa.empresa_id}</strong> ·{" "}
+              {resultadoEmpresa.baixados} XMLs baixados,{" "}
+              {resultadoEmpresa.duplicados} duplicados,{" "}
+              {resultadoEmpresa.erros} erros.{" "}
+              <small>NSU final: {resultadoEmpresa.ultimo_nsu_distribuicao || "—"}</small>
+            </div>
+          ) : null}
+
+          {resultadoMulti ? (
+            <div className="toast toast-ok">
+              ✅ Processadas <strong>{resultadoMulti.processadas}</strong> empresas ·{" "}
+              {resultadoMulti.baixados} XMLs baixados, {resultadoMulti.duplicados} dup,{" "}
+              {resultadoMulti.erros} erros.
+              {resultadoMulti.detalhes?.length > 0 ? (
+                <details style={{ marginTop: 8 }}>
+                  <summary>Detalhe por empresa</summary>
+                  <ul style={{ margin: 6, fontSize: 12 }}>
+                    {resultadoMulti.detalhes.map((d, i) => (
+                      <li key={i}>
+                        {d.cnpj} —{" "}
+                        {d.sucesso
+                          ? `${d.baixados} XMLs (${d.duplicados} dup)`
+                          : `❌ ${d.mensagem || "erro"}`}
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              ) : null}
+            </div>
+          ) : null}
+
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+            <button
+              type="button"
+              className="btn-ghost"
+              onClick={onClose}
+              disabled={busy}
+            >
+              {algumResultado ? "Fechar" : "Cancelar"}
+            </button>
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={handleSync}
+              disabled={busy || empresasComFocus.length === 0 || empresaId === ""}
+            >
+              {busy ? "Sincronizando..." : "▶ Sincronizar"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
