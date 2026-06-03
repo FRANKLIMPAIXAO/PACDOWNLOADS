@@ -28,6 +28,132 @@ router = APIRouter(
 )
 
 
+@router.post("/diagnostico")
+def diagnostico_integra(empresa_id: int) -> dict:
+    """Diagnostica o Integra Contador em 3 etapas isoladas com timeout curto.
+
+    Use pra debugar 502 do auto-sitfis ou outros endpoints que travam.
+    Cada etapa NUNCA levanta excecao — captura tudo em try/except e retorna
+    JSON com tempo + status + erro.
+
+    Etapas:
+    1. Carregar+converter .pfx do escritorio (settings.serpro_cert_path +
+       SERPRO_CERT_PASSWORD). Mede tempo de IO + crypto.
+    2. Auth Serpro (POST /authenticate com cert mutual TLS, timeout 10s).
+       Mede tempo de TLS handshake + auth.
+    3. Chamada leve: SOLICITARPROTOCOLO91 da CLAVEAUX (timeout 10s).
+       Mede tempo de gateway + processamento Serpro.
+
+    Total < 30s, dentro do Traefik.
+    """
+    import time
+    from app.config import get_settings as _gs
+    _s = _gs()
+    resultado: dict = {"etapas": [], "ok_geral": True}
+
+    if _s.use_mock_integra:
+        resultado["aviso"] = "USE_MOCK_INTEGRA=true — diagnostico nao tem sentido em mock"
+        return resultado
+
+    # Etapa 1: cert + senha do escritorio
+    t0 = time.monotonic()
+    try:
+        from cryptography.hazmat.primitives.serialization import pkcs12
+        from pathlib import Path as _P
+        pfx_path = _P(_s.serpro_cert_path)
+        if not pfx_path.exists():
+            raise FileNotFoundError(f"Arquivo {pfx_path} nao existe")
+        pfx_bytes = pfx_path.read_bytes()
+        senha = (_s.serpro_cert_password or "").encode()
+        if not senha:
+            raise ValueError("SERPRO_CERT_PASSWORD vazio no .env")
+        _key, cert, _ = pkcs12.load_key_and_certificates(pfx_bytes, senha)
+        if not cert:
+            raise ValueError("PFX sem certificado")
+        dt = time.monotonic() - t0
+        resultado["etapas"].append({
+            "etapa": "1_cert_escritorio",
+            "ok": True,
+            "tempo_segundos": round(dt, 3),
+            "subject": cert.subject.rfc4514_string()[:200],
+            "validade_ate": cert.not_valid_after_utc.isoformat() if hasattr(cert, "not_valid_after_utc") else str(cert.not_valid_after),
+        })
+    except Exception as exc:  # noqa: BLE001
+        dt = time.monotonic() - t0
+        resultado["etapas"].append({
+            "etapa": "1_cert_escritorio", "ok": False,
+            "tempo_segundos": round(dt, 3),
+            "erro": f"{type(exc).__name__}: {exc}",
+        })
+        resultado["ok_geral"] = False
+        return resultado  # sem cert nao adianta seguir
+
+    # Etapa 2: auth Serpro (mede TLS handshake + auth)
+    t0 = time.monotonic()
+    try:
+        from app.providers.integra_contador import IntegraContadorProvider, IntegraTokenCache
+        provider = IntegraContadorProvider()
+        # Forca refresh do token (zera cache)
+        provider._token_cache = IntegraTokenCache()
+        access_token, jwt_token = provider.autenticar()
+        dt = time.monotonic() - t0
+        resultado["etapas"].append({
+            "etapa": "2_auth_serpro",
+            "ok": True,
+            "tempo_segundos": round(dt, 3),
+            "info": "Auth OK, tokens recebidos",
+            "access_token_preview": (access_token or "")[:20] + "...",
+        })
+    except Exception as exc:  # noqa: BLE001
+        dt = time.monotonic() - t0
+        resultado["etapas"].append({
+            "etapa": "2_auth_serpro", "ok": False,
+            "tempo_segundos": round(dt, 3),
+            "erro": f"{type(exc).__name__}: {str(exc)[:300]}",
+        })
+        resultado["ok_geral"] = False
+        return resultado  # sem auth nao adianta seguir
+
+    # Etapa 3: chamada leve — SOLICITARPROTOCOLO91 da empresa
+    from app.models.empresa import Empresa
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        empresa = db.get(Empresa, empresa_id)
+        if not empresa:
+            resultado["etapas"].append({
+                "etapa": "3_chamada_serpro", "ok": False,
+                "erro": f"Empresa {empresa_id} nao encontrada",
+            })
+            resultado["ok_geral"] = False
+            return resultado
+
+        t0 = time.monotonic()
+        try:
+            response = provider.sitfis_solicitar_protocolo(empresa.cnpj)
+            dt = time.monotonic() - t0
+            resultado["etapas"].append({
+                "etapa": "3_chamada_serpro",
+                "ok": True,
+                "tempo_segundos": round(dt, 3),
+                "empresa_cnpj": empresa.cnpj,
+                "response_preview": str(response)[:400],
+            })
+        except Exception as exc:  # noqa: BLE001
+            dt = time.monotonic() - t0
+            resultado["etapas"].append({
+                "etapa": "3_chamada_serpro", "ok": False,
+                "tempo_segundos": round(dt, 3),
+                "empresa_cnpj": empresa.cnpj,
+                "erro": f"{type(exc).__name__}: {str(exc)[:400]}",
+            })
+            resultado["ok_geral"] = False
+    finally:
+        db.close()
+
+    return resultado
+
+
 # --- Caixa Postal eCAC ---
 
 
