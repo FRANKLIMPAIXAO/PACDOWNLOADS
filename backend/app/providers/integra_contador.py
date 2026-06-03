@@ -60,6 +60,61 @@ PATH_EMITIR = "/Emitir"
 PATH_MONITORAR = "/Monitorar"
 
 
+# --- Helper de PDF mock ---
+
+
+def _mock_pdf_bytes(titulo: str, linhas: list[str] | None = None) -> bytes:
+    """Gera um PDF VÁLIDO mínimo pra fixtures de mock.
+
+    Antes os mocks retornavam `b"%PDF-1.4 mock SITFIS para CNPJ"` — uma string
+    que começa como PDF mas NÃO é PDF válido. Browsers tentavam abrir e
+    falhavam com "0 de 0 páginas" / "Algo deu errado".
+
+    Esta função usa fpdf2 (já vem com brazilfiscalreport) pra gerar 1 página
+    A4 com título + linhas. Pequeno (~1.5 KB) e abre em qualquer leitor.
+    """
+    try:
+        from fpdf import FPDF
+        from fpdf.enums import XPos, YPos
+        pdf = FPDF(orientation="P", unit="mm", format="A4")
+        pdf.add_page()
+        pdf.set_font("Helvetica", "B", 16)
+        # ASCII-only pra evitar encoding errors do Helvetica core font
+        titulo_safe = titulo.encode("latin-1", "replace").decode("latin-1")
+        pdf.cell(0, 12, text=titulo_safe[:200],
+                 new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.set_font("Helvetica", "", 10)
+        pdf.cell(0, 6, text="(documento gerado em modo MOCK - somente teste)",
+                 new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.ln(8)
+        if linhas:
+            for linha in linhas[:30]:
+                txt = str(linha).encode("latin-1", "replace").decode("latin-1")
+                pdf.cell(0, 5, text=txt[:200],
+                         new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.set_font("Helvetica", "I", 8)
+        pdf.cell(0, 5,
+                 text=f"Gerado em {datetime.now().isoformat(timespec='seconds')}",
+                 new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        return bytes(pdf.output())  # fpdf2 retorna bytearray; converte pra bytes
+    except Exception:
+        # Fallback: PDF mínimo válido inline (1 página em branco A4).
+        # Pra caso fpdf não esteja disponível por algum motivo.
+        return (
+            b"%PDF-1.4\n"
+            b"1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n"
+            b"2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n"
+            b"3 0 obj<</Type/Page/MediaBox[0 0 595 842]/Parent 2 0 R>>endobj\n"
+            b"xref\n0 4\n"
+            b"0000000000 65535 f\n"
+            b"0000000010 00000 n\n"
+            b"0000000060 00000 n\n"
+            b"0000000109 00000 n\n"
+            b"trailer<</Size 4/Root 1 0 R>>\n"
+            b"startxref\n170\n%%EOF\n"
+        )
+
+
 # --- Exceptions ---
 
 
@@ -298,7 +353,10 @@ class IntegraContadorProvider:
                     "dataVencimento": f"{ano_mes[:4]}-{ano_mes[4:]}-20",
                     "valorTotal": 0.0,
                     "pdf": base64.b64encode(
-                        b"%PDF-1.4 mock DAS Simples Nacional " + ano_mes.encode()
+                        _mock_pdf_bytes(
+                            f"DAS Simples Nacional (mock)",
+                            [f"Período de apuração: {ano_mes}"],
+                        )
                     ).decode("ascii"),
                 }),
             }
@@ -353,7 +411,10 @@ class IntegraContadorProvider:
                     "numeroDeclaracao": numero_declaracao,
                     "valorTotalDevido": 1250.55,
                     "pdf": base64.b64encode(
-                        b"%PDF-1.4 mock CONSDECREC15 " + numero_declaracao.encode()
+                        _mock_pdf_bytes(
+                            "Recibo Declaração PGDAS-D (mock)",
+                            [f"Número declaração: {numero_declaracao}"],
+                        )
                     ).decode("ascii"),
                 }),
             }
@@ -396,7 +457,11 @@ class IntegraContadorProvider:
                     "multa": round(valor_base * 0.10, 2),
                     "juros": round(valor_base * 0.02, 2),
                     "pdf": base64.b64encode(
-                        b"%PDF-1.4 mock DAS Cobranca " + ano_mes.encode()
+                        _mock_pdf_bytes(
+                            "DAS Cobrança Atualizado (mock)",
+                            [f"Período: {ano_mes}",
+                             "Valor com Selic + multa de mora simulados"],
+                        )
                     ).decode("ascii"),
                 }),
             }
@@ -492,7 +557,10 @@ class IntegraContadorProvider:
                     "numeroDas": numero_das,
                     "valorTotalDevido": 1250.55,
                     "pdf": base64.b64encode(
-                        b"%PDF-1.4 mock CONSEXTRATO16 " + numero_das.encode()
+                        _mock_pdf_bytes(
+                            "Extrato DAS (mock)",
+                            [f"Número DAS: {numero_das}"],
+                        )
                     ).decode("ascii"),
                 }),
             }
@@ -641,7 +709,10 @@ class IntegraContadorProvider:
                 "status": 200,
                 "dados": json.dumps({
                     "docArrecadacaoPdfB64": base64.b64encode(
-                        b"%PDF-1.4 mock DAS PARCSN parcela " + str(parcela_ano_mes).encode()
+                        _mock_pdf_bytes(
+                            "DAS Parcelamento PARCSN (mock)",
+                            [f"Parcela: {parcela_ano_mes}"],
+                        )
                     ).decode("ascii"),
                 }),
             }
@@ -708,8 +779,11 @@ class IntegraContadorProvider:
                 "status": 200,
                 "dados": json.dumps({
                     "PDFByteArrayBase64": base64.b64encode(
-                        b"%PDF-1.4 mock DCTFWeb GERARGUIA31 " +
-                        f"{categoria}-{ano_pa}-{mes_pa}".encode()
+                        _mock_pdf_bytes(
+                            "Guia DCTFWeb Ativa (mock)",
+                            [f"Categoria: {categoria}",
+                             f"Período: {mes_pa}/{ano_pa}"],
+                        )
                     ).decode("ascii"),
                 }),
             }
@@ -760,8 +834,11 @@ class IntegraContadorProvider:
                 "status": 200,
                 "dados": json.dumps({
                     "PDFByteArrayBase64": base64.b64encode(
-                        b"%PDF-1.4 mock DCTFWeb ANDAMENTO " +
-                        f"{categoria}-{ano_pa}-{mes_pa}".encode()
+                        _mock_pdf_bytes(
+                            "Guia DCTFWeb em Andamento (mock)",
+                            [f"Categoria: {categoria}",
+                             f"Período: {mes_pa}/{ano_pa}"],
+                        )
                     ).decode("ascii"),
                 }),
             }
@@ -825,7 +902,12 @@ class IntegraContadorProvider:
                 "dados": json.dumps({
                     "tempoEspera": 0,
                     "pdf": base64.b64encode(
-                        b"%PDF-1.4 mock SITFIS para " + contribuinte_cnpj.encode()
+                        _mock_pdf_bytes(
+                            "Relatório SITFIS (mock)",
+                            [f"CNPJ: {contribuinte_cnpj}",
+                             "Situação Fiscal Federal — relatório simulado",
+                             "Sem pendências (modo desenvolvimento)"],
+                        )
                     ).decode("ascii"),
                 }),
             }
@@ -891,7 +973,10 @@ class IntegraContadorProvider:
                 "status": 200,
                 "dados": json.dumps({
                     "pdf": base64.b64encode(
-                        b"%PDF-1.4 mock COMPROVANTE " + numero_documento.encode()
+                        _mock_pdf_bytes(
+                            "Comprovante de Arrecadação (mock)",
+                            [f"Número documento: {numero_documento}"],
+                        )
                     ).decode("ascii"),
                 }),
             }
