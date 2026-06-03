@@ -105,7 +105,14 @@ class FocusNFeProvider:
             return self._mock_empresa(payload.get("cnpj") or payload.get("cpf_cnpj") or "")
         files = {"arquivo_certificado": (certificado_filename, certificado_bytes, "application/x-pkcs12")}
         data = {**payload, "senha_certificado": certificado_password}
-        return self._request(token_master, "POST", EMPRESAS_ENDPOINT, data=data, files=files)
+        # Timeout reduzido pra 45s (margem antes do Traefik default ~60s cortar).
+        # Cadastro com upload .pfx é a chamada mais lenta da Focus — se passar de
+        # 45s, devolvemos requests.Timeout limpo (vira HTTP 504 no nosso wrap)
+        # em vez de deixar o proxy retornar 502 com HTML.
+        return self._request(
+            token_master, "POST", EMPRESAS_ENDPOINT,
+            data=data, files=files, timeout=45,
+        )
 
     def consultar_empresa(self, token: str, cnpj: str) -> dict[str, Any]:
         """Detalhes da empresa.
@@ -374,6 +381,7 @@ class FocusNFeProvider:
         data: dict[str, Any] | None = None,
         files: dict[str, Any] | None = None,
         expect_json: bool = True,
+        timeout: int = 60,
     ) -> Any:
         if not token:
             raise FocusTokenAusenteError("Token Focus NFe ausente.")
@@ -387,7 +395,7 @@ class FocusNFeProvider:
             json=json,
             data=data,
             files=files,
-            timeout=60,
+            timeout=timeout,
         )
         # IMPORTANTE: substitui raise_for_status() padrão pra incluir o BODY
         # do erro na exceção. Focus retorna mensagens úteis em 4xx/5xx (qual

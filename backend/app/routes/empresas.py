@@ -101,13 +101,49 @@ async def cadastrar_ou_atualizar_focus(
         raise HTTPException(status_code=400, detail=f"payload_json invalido: {exc}") from exc
     payload = EmpresaFocusPayload.model_validate(payload_dict)
     content = await arquivo_certificado.read()
-    return EmpresaIntegracaoService(db).sync_empresa(
-        empresa_id,
-        payload,
-        certificado_bytes=content,
-        certificado_filename=arquivo_certificado.filename,
-        certificado_password=senha_certificado,
-    )
+    # MESMO try/except do auto_cadastrar_focus pra evitar que erro Focus 500 vire
+    # 502 Bad Gateway no Traefik (a HTTPException dentro do timeout do proxy é
+    # responsedida antes do corte).
+    try:
+        return EmpresaIntegracaoService(db).sync_empresa(
+            empresa_id,
+            payload,
+            certificado_bytes=content,
+            certificado_filename=arquivo_certificado.filename,
+            certificado_password=senha_certificado,
+        )
+    except requests.HTTPError as exc:
+        msg = str(exc)
+        # CNPJ ja cadastrado (Focus às vezes devolve 422, às vezes 500 genérico)
+        if "ja cadastrad" in msg.lower() or "cnpj ja" in msg.lower():
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Esta empresa já está cadastrada na sua conta Focus NFe. "
+                    "Use a opção 'Importar token Focus' (pega o token do painel "
+                    "Focus e cola aqui) em vez de tentar cadastrar de novo."
+                ),
+            ) from exc
+        raise HTTPException(
+            status_code=502,
+            detail=f"Focus NFe rejeitou o cadastro: {msg[:500]}",
+        ) from exc
+    except requests.Timeout as exc:
+        raise HTTPException(
+            status_code=504,
+            detail=(
+                "Focus NFe demorou demais para responder (> 45s). Tenta de novo "
+                "em alguns minutos — pode ter sido cadastrada mesmo assim, "
+                "verifica recarregando a página."
+            ),
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=500,
+            detail=f"Erro inesperado no cadastro Focus: {type(exc).__name__}: {exc}",
+        ) from exc
 
 
 @router.put("/{empresa_id}/focus/certificado")
@@ -266,6 +302,16 @@ def auto_cadastrar_focus(empresa_id: int, db: Session = Depends(get_db)) -> dict
         raise HTTPException(
             status_code=502,
             detail=f"Focus NFe rejeitou o cadastro: {msg[:500]}",
+        ) from exc
+    except requests.Timeout as exc:
+        raise HTTPException(
+            status_code=504,
+            detail=(
+                "Focus NFe demorou demais para responder (> 45s). Recarregue a "
+                "página em 30s para verificar — pode ter sido cadastrada mesmo "
+                "assim. Se 'Sem token' persistir, tente de novo ou importe "
+                "manualmente o token do painel Focus."
+            ),
         ) from exc
     except HTTPException:
         raise
