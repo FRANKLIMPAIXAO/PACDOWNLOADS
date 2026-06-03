@@ -197,7 +197,7 @@ class IntegraContadorProvider:
                     },
                     data="grant_type=client_credentials",
                     cert=cert,
-                    timeout=30,
+                    timeout=15,  # reduzido de 30s pra caber no orcamento total Traefik
                 )
             except requests.RequestException as exc:
                 raise IntegraAuthError(f"Falha de rede no auth Serpro: {exc}") from exc
@@ -1052,7 +1052,7 @@ class IntegraContadorProvider:
                 },
                 json=body,
                 cert=self._cert_for_requests(),
-                timeout=120,
+                timeout=15,  # reduzido de 120s — Traefik corta em ~60s. 2 chamadas back-to-back precisam caber.
             )
         except requests.RequestException as exc:
             raise IntegraContadorError(f"Falha de rede em {id_servico}: {exc}") from exc
@@ -1070,7 +1070,7 @@ class IntegraContadorProvider:
                 },
                 json=body,
                 cert=self._cert_for_requests(),
-                timeout=120,
+                timeout=15,  # reduzido de 120s — Traefik corta em ~60s. 2 chamadas back-to-back precisam caber.
             )
 
         if response.status_code >= 400:
