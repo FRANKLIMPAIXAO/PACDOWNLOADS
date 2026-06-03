@@ -20,8 +20,15 @@ FROM mcr.microsoft.com/playwright/python:v1.48.0-jammy AS base
 
 # Cache buster: incrementa pra forçar rebuild completo no Easypanel quando
 # detectarmos imagem stale rodando código antigo. Valor é arbitrário.
-ARG CACHE_BUSTER=20260602_focus_fix
+ARG CACHE_BUSTER=20260603_robo_limit
 RUN echo "Build com cache buster: $CACHE_BUSTER"
+
+# Commit/data do build — visíveis em GET /version pra confirmar qual código
+# está em runtime. Easypanel passa via build args. Defaults caem pra "unknown".
+ARG BUILD_COMMIT=unknown
+ARG BUILD_DATE=unknown
+ENV BUILD_COMMIT=${BUILD_COMMIT}
+ENV BUILD_DATE=${BUILD_DATE}
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \

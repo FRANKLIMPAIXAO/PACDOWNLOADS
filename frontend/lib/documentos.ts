@@ -88,16 +88,17 @@ export function listarDocumentos(
 // Pré-requisito: empresa com focus_token salvo.
 // Janela SEFAZ: 90 dias retroativos a partir da data_fim.
 
+/** Shape real do RoboResultado devolvido por POST /robo/distribuicao.
+ *
+ * `tem_mais=true` quando a lista da Focus excedeu MAX_NFES_POR_REQUEST do
+ * backend (~25) — frontend deve repetir a chamada pra esgotar o NSU.
+ */
 export type SincronizarFocusEmpresaResultado = {
-  empresa_id: number;
-  cnpj: string;
-  ultimo_nsu_distribuicao: string | null;
+  processados: number;
   baixados: number;
   duplicados: number;
-  empresa_nao_cadastrada: number;
   erros: number;
-  total_arquivos: number;
-  log_id: number | null;
+  tem_mais: boolean;
 };
 
 export type SincronizarFocusMultiResultado = {

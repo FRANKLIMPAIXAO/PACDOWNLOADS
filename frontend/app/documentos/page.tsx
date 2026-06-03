@@ -792,12 +792,19 @@ function SyncFocusModal({
           {erro ? <div className="toast toast-error">{erro}</div> : null}
 
           {resultadoEmpresa ? (
-            <div className="toast toast-ok">
-              ✅ <strong>Empresa #{resultadoEmpresa.empresa_id}</strong> ·{" "}
-              {resultadoEmpresa.baixados} XMLs baixados,{" "}
-              {resultadoEmpresa.duplicados} duplicados,{" "}
-              {resultadoEmpresa.erros} erros.{" "}
-              <small>NSU final: {resultadoEmpresa.ultimo_nsu_distribuicao || "—"}</small>
+            <div className={resultadoEmpresa.erros > 0 ? "toast toast-warn" : "toast toast-ok"}>
+              {resultadoEmpresa.erros > 0 ? "⚠" : "✅"}{" "}
+              <strong>{resultadoEmpresa.baixados}</strong> XMLs baixados ·{" "}
+              <strong>{resultadoEmpresa.duplicados}</strong> duplicados ·{" "}
+              <strong>{resultadoEmpresa.erros}</strong> erros ·{" "}
+              <small>({resultadoEmpresa.processados} processados nesta rodada)</small>
+              {resultadoEmpresa.tem_mais ? (
+                <div style={{ marginTop: 8, padding: 8, background: "rgba(245,158,11,0.1)", borderRadius: 4 }}>
+                  ⚠ <strong>Ainda há NFes pra baixar.</strong> O backend limita a{" "}
+                  ~25 NFes por chamada (evita timeout). Clica <strong>▶ Sincronizar</strong>{" "}
+                  de novo pra continuar do NSU atual.
+                </div>
+              ) : null}
             </div>
           ) : null}
 

@@ -29,6 +29,17 @@ class RoboResultado:
     baixados: int = 0
     duplicados: int = 0
     erros: int = 0
+    # True quando havia mais documentos na resposta Focus do que o limite
+    # MAX_NFES_POR_REQUEST permitiu processar nesta chamada. Frontend usa
+    # pra sinalizar "ha mais NFes — clica de novo".
+    tem_mais: bool = False
+
+
+# Limite de NFes recebidas processadas por chamada do robo.
+# Cada NFe = 1 chamada Focus (GET XML) + parser + save disco + commit DB.
+# Volume grande estoura o worker uvicorn em prod (OOM ou timeout Traefik).
+# Frontend repete enquanto tem_mais=True.
+MAX_NFES_POR_REQUEST = 25
 
 
 class RoboXMLService:
@@ -84,11 +95,21 @@ class RoboXMLService:
             )
             return RoboResultado(erros=1)
 
-        resultado = self._processar_documentos_recebidos(
-            empresa, documentos, data_inicio, data_fim
-        )
+        # Limita NFes processadas por request — protege o worker de OOM e
+        # do Traefik timeout (60s). Em prod, indústria como CLAVEAUX pode ter
+        # 50+ NFes recebidas em 7 dias. Frontend itera enquanto tem_mais=True.
+        total_disponivel = len(documentos)
+        tem_mais = total_disponivel > MAX_NFES_POR_REQUEST
+        documentos_processar = documentos[:MAX_NFES_POR_REQUEST]
 
-        novo_max_nsu = self._maior_nsu(documentos)
+        resultado = self._processar_documentos_recebidos(
+            empresa, documentos_processar, data_inicio, data_fim
+        )
+        resultado.tem_mais = tem_mais
+
+        # Avanca NSU pelo maior NSU dos PROCESSADOS (nao dos disponíveis):
+        # garante que a proxima chamada continua do ponto certo.
+        novo_max_nsu = self._maior_nsu(documentos_processar)
         if novo_max_nsu and resultado.erros == 0:
             empresa.ultimo_nsu_distribuicao = novo_max_nsu
             self.db.commit()

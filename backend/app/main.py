@@ -64,6 +64,47 @@ def healthcheck() -> dict:
     return {"status": "ok", "app": settings.app_name, "mock_provider": settings.use_mock_focus_nfe}
 
 
+@app.get("/version")
+def version() -> dict:
+    """Diagnostico do que esta rodando em prod.
+
+    Util pra confirmar que o deploy do Easypanel pegou o codigo novo
+    (problema recorrente — imagem Docker reaproveitada do cache).
+
+    Le `BUILD_COMMIT` e `BUILD_DATE` do ambiente (setadas no Dockerfile
+    via ARG no build) e tambem tenta ler do .git se disponivel.
+    """
+    import os
+    from pathlib import Path
+
+    commit = os.environ.get("BUILD_COMMIT", "unknown")
+    build_date = os.environ.get("BUILD_DATE", "unknown")
+
+    # Fallback: tenta ler do .git se foi copiado pro container
+    if commit == "unknown":
+        git_head = Path("/app/.git/HEAD")
+        if git_head.exists():
+            try:
+                ref = git_head.read_text().strip()
+                if ref.startswith("ref: "):
+                    ref_path = Path("/app/.git") / ref[5:]
+                    if ref_path.exists():
+                        commit = ref_path.read_text().strip()[:12]
+                else:
+                    commit = ref[:12]
+            except OSError:
+                pass
+
+    return {
+        "app": settings.app_name,
+        "commit": commit,
+        "build_date": build_date,
+        "mock_provider": settings.use_mock_focus_nfe,
+        "use_mock_integra": getattr(settings, "use_mock_integra", None),
+        "use_mock_infosimples": getattr(settings, "use_mock_infosimples", None),
+    }
+
+
 app.include_router(auth.router, prefix=settings.api_v1_prefix)
 app.include_router(empresas.router, prefix=settings.api_v1_prefix)
 app.include_router(documentos.router, prefix=settings.api_v1_prefix)
