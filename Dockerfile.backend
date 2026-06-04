@@ -20,7 +20,7 @@ FROM mcr.microsoft.com/playwright/python:v1.48.0-jammy AS base
 
 # Cache buster: incrementa pra forçar rebuild completo no Easypanel quando
 # detectarmos imagem stale rodando código antigo. Valor é arbitrário.
-ARG CACHE_BUSTER=20260603_robo_limit
+ARG CACHE_BUSTER=20260604_alembic_entrypoint
 RUN echo "Build com cache buster: $CACHE_BUSTER"
 
 # Commit/data do build — visíveis em GET /version pra confirmar qual código
@@ -71,6 +71,13 @@ RUN chown -R pwuser:pwuser /app /agent /ms-playwright || true
 USER pwuser
 
 EXPOSE 8000
+
+# Entrypoint roda `alembic upgrade head` antes de qualquer comando. Invocado
+# via `sh` pra nao depender do bit de execucao (git no Windows nao preserva).
+# O CMD abaixo eh passado como argumento ($@) pro entrypoint, que faz exec
+# depois das migrations. Worker/beat overrides do CMD tambem passam pelo
+# entrypoint (migrations sao idempotentes — rodar 2x nao quebra).
+ENTRYPOINT ["sh", "/app/entrypoint.sh"]
 
 # Default: backend FastAPI. Override no docker-compose pra worker/beat.
 CMD ["python", "-m", "uvicorn", "app.main:app", \

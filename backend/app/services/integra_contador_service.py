@@ -358,15 +358,31 @@ class IntegraContadorService:
                 status_code=502, detail=f"PDF SITFIS invalido: {exc}"
             ) from exc
 
+        # Defensivo: protocolo Serpro real eh base64 ~250 chars. Se a migration
+        # 0019 (VARCHAR 80->500) nao rodou em prod, o commit estoura com
+        # StringDataRightTruncation = 500 nao tratado. Truncamos pra 500 por
+        # garantia + capturamos o erro de DB pra devolver 502 limpo (com CORS)
+        # em vez de 500 cru.
         situacao = SituacaoFiscal(
             empresa_id=empresa.id,
-            protocolo=str(protocolo),
+            protocolo=str(protocolo)[:500],
             pdf_path=str(pdf_path),
             status="GERADO",
             raw={"solicitacao": sol_dados, "relatorio": {k: v for k, v in relatorio_dados.items() if k != "pdf"}},
         )
         self.db.add(situacao)
-        self.db.commit()
+        try:
+            self.db.commit()
+        except Exception as exc:  # noqa: BLE001
+            self.db.rollback()
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    f"SITFIS gerado mas falhou ao salvar no banco: "
+                    f"{type(exc).__name__}: {str(exc)[:300]}. "
+                    "Pode ser migration pendente (alembic upgrade head)."
+                ),
+            ) from exc
         self.db.refresh(situacao)
         return situacao
 
