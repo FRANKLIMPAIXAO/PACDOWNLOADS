@@ -1,0 +1,11 @@
+# Força LF (Unix line endings) em arquivos que rodam no container Linux.
+# Sem isso, git no Windows converte pra CRLF e o `sh` quebra com erros
+# tipo "bad interpreter" ou comportamento inesperado.
+*.sh text eol=lf
+entrypoint.sh text eol=lf
+
+# Python e configs também LF por consistência (rodam em Linux)
+*.py text eol=lf
+Dockerfile* text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
