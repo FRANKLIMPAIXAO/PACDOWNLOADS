@@ -27,6 +27,39 @@ from app.providers.integra_contador import (
 )
 
 
+def _achar_receita(obj: Any, palavras: tuple[str, ...], _prof: int = 0) -> float:
+    """Busca recursiva por um campo numérico cujo nome contenha uma das
+    `palavras` (lowercase). Retorna o maior valor encontrado (a receita bruta
+    costuma ser o maior numero). 0 se não achar. Limita profundidade."""
+    if _prof > 6:
+        return 0.0
+    melhor = 0.0
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            kl = str(k).lower()
+            if isinstance(v, (int, float)) and any(p in kl for p in palavras):
+                melhor = max(melhor, float(v))
+            elif isinstance(v, (dict, list)):
+                melhor = max(melhor, _achar_receita(v, palavras, _prof + 1))
+    elif isinstance(obj, list):
+        for it in obj:
+            melhor = max(melhor, _achar_receita(it, palavras, _prof + 1))
+    return melhor
+
+
+def _truncar(obj: Any, _prof: int = 0):
+    """Versão resumida de um dict/list pra debug (corta strings longas/base64)."""
+    if _prof > 4:
+        return "..."
+    if isinstance(obj, dict):
+        return {k: _truncar(v, _prof + 1) for k, v in list(obj.items())[:30]}
+    if isinstance(obj, list):
+        return [_truncar(v, _prof + 1) for v in obj[:5]]
+    if isinstance(obj, str) and len(obj) > 80:
+        return obj[:80] + "...(truncado)"
+    return obj
+
+
 def meses_anteriores(ano_mes: str, n: int = 12) -> list[str]:
     """Lista os N meses ANTERIORES a ano_mes (AAAAMM), do mais antigo ao mais novo."""
     ano = int(ano_mes[:4]); mes = int(ano_mes[4:])
@@ -151,6 +184,7 @@ class ReceitaMensalService:
 
         # 2. Pra cada mês anterior, consulta a declaração e tenta extrair receita
         resultado_meses: list[dict[str, Any]] = []
+        debug_raw = None  # estrutura crua do 1º CONSDECREC (pra mapear campos)
         for am in meses:
             num = num_por_competencia.get(am)
             valor_interno = 0.0
@@ -162,23 +196,19 @@ class ReceitaMensalService:
                         empresa.cnpj, numero_declaracao=num,
                     )
                     dd = parse_dados(det)
-                    # Tenta vários nomes de campo (estrutura Serpro varia)
-                    valor_interno = float(
-                        dd.get("receitaBrutaInterna")
-                        or dd.get("receitaPaCompetenciaInterno")
-                        or dd.get("receitaBruta")
-                        or dd.get("valorReceitaBruta")
-                        or 0
-                    )
-                    valor_externo = float(
-                        dd.get("receitaBrutaExterna")
-                        or dd.get("receitaPaCompetenciaExterno")
-                        or 0
-                    )
+                    if debug_raw is None:
+                        # Guarda chaves da 1ª resposta pra mapear os campos certos
+                        debug_raw = {
+                            "competencia": am,
+                            "chaves_topo": list(dd.keys()) if isinstance(dd, dict) else str(type(dd)),
+                            "amostra": _truncar(dd),
+                        }
+                    # Busca recursiva por campos de receita interna/externa
+                    valor_interno = _achar_receita(dd, ("interno", "interna", "receitabruta", "valorreceita"))
+                    valor_externo = _achar_receita(dd, ("externo", "externa", "exporta"))
                     achou = (valor_interno + valor_externo) > 0
                 except IntegraContadorError as exc:
                     erros.append(f"{am}: {exc}")
-            # UPSERT (mesmo que 0 — marca que tentou)
             if achou:
                 self._upsert(empresa_id, am, valor_interno, valor_externo, "receita")
             resultado_meses.append({
@@ -196,7 +226,12 @@ class ReceitaMensalService:
             "meses": resultado_meses,
             "encontrados": encontrados,
             "total_meses": len(meses),
+            "declaracoes_encontradas": len(num_por_competencia),
+            "competencias_com_declaracao": sorted(num_por_competencia.keys()),
             "erros": erros,
+            # Estrutura crua do 1º CONSDECREC — pra mapear os campos de receita
+            # corretos quando a extração automática falhar (debug).
+            "debug_estrutura_serpro": debug_raw,
             "aviso": (
                 "Campos de receita do CONSDECREC15 são best-effort (estrutura "
                 "Serpro varia). Revise a grade e complete manualmente o que "
