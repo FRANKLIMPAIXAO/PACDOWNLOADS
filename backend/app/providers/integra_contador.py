@@ -298,43 +298,135 @@ class IntegraContadorProvider:
 
     # --- Servicos: PGDAS-D (Simples Nacional) ---
 
+    @staticmethod
+    def montar_payload_pgdasd(
+        contribuinte_cnpj: str,
+        *,
+        ano_mes: str,                 # "YYYYMM"
+        receita_interna: float,       # receita mercado interno (normal+ST+monofasico+servicos)
+        receita_externa: float = 0.0,  # exportacao
+        folhas_salario: list[dict[str, Any]] | None = None,       # [{pa, valor}]
+        receitas_brutas_anteriores: list[dict[str, Any]] | None = None,  # [{pa, valorInterno, valorExterno}]
+        indicador_transmissao: bool = False,
+        valor_fixo_icms: float | None = None,
+        valor_fixo_iss: float | None = None,
+    ) -> dict[str, Any]:
+        """Constrói o objeto `dados` do TRANSDECLARACAO11 conforme spec Serpro.
+
+        Versão CONSERVADORA: 1 estabelecimento (matriz) + 1 atividade com a
+        receita interna total, qualificacoesTributarias=[] (tributação normal).
+
+        ⚠️ LIMITAÇÃO CONHECIDA: monofásico/ST precisam de qualificacoesTributarias
+        específicas (estrutura ainda [INFERIDO] — ver docs/SPEC-TRANSDECLARACAO11).
+        Sem elas, a RFB taxa PIS/COFINS sobre receita monofásica (imposto a maior).
+        POR ISSO o fluxo OBRIGATÓRIO é dry-run primeiro (indicador_transmissao=False)
+        e comparar o valor da RFB com o calculator do PAC antes de transmitir real.
+
+        `indicador_transmissao=False` → dry-run (calcula sem entregar).
+        """
+        cnpj = (contribuinte_cnpj or "").replace(".", "").replace("/", "").replace("-", "")
+        pa = int(ano_mes)
+        receitas_atividade = [{
+            "valor": round(receita_interna, 2),
+            "codigoOutroMunicipio": None,
+            "outraUf": None,
+            "qualificacoesTributarias": [],  # TODO monofásico/ST após dados_de_dominio
+            "isencoes": [],
+            "reducoes": [],
+            "exigibilidadesSuspensas": None,
+        }]
+        declaracao: dict[str, Any] = {
+            "tipoDeclaracao": 1,  # Original
+            "receitaPaCompetenciaInterno": round(receita_interna, 2),
+            "receitaPaCompetenciaExterno": round(receita_externa, 2),
+            "receitaPaCaixaInterno": None,
+            "receitaPaCaixaExterno": None,
+            "valorFixoIcms": valor_fixo_icms,
+            "valorFixoIss": valor_fixo_iss,
+            "receitasBrutasAnteriores": receitas_brutas_anteriores or [],
+            "folhasSalario": folhas_salario or [],
+            "naoOptante": None,
+            "estabelecimentos": [{
+                "cnpjCompleto": cnpj,
+                "atividades": [{
+                    "idAtividade": 1,
+                    "valorAtividade": round(receita_interna, 2),
+                    "receitasAtividade": receitas_atividade,
+                }],
+            }],
+        }
+        return {
+            "cnpjCompleto": cnpj,
+            "pa": pa,
+            "indicadorTransmissao": bool(indicador_transmissao),
+            "indicadorComparacao": False,  # sem trava de comparacao (sem valoresParaComparacao)
+            "declaracao": declaracao,
+        }
+
     def pgdas_transmitir_declaracao(
         self,
         contribuinte_cnpj: str,
         *,
-        ano_mes: str,           # "YYYYMM"
+        ano_mes: str,                 # "YYYYMM"
         receita_bruta: float,
-        receitas: list[dict[str, Any]] | None = None,
+        receita_interna: float | None = None,
+        receita_externa: float = 0.0,
+        folhas_salario: list[dict[str, Any]] | None = None,
+        receitas_brutas_anteriores: list[dict[str, Any]] | None = None,
+        indicador_transmissao: bool = False,  # DEFAULT = dry-run (seguro!)
+        receitas: list[dict[str, Any]] | None = None,  # compat legado (ignorado)
     ) -> dict[str, Any]:
-        """TRANSDECLARACAO11 - transmite declaracao mensal PGDAS-D.
+        """TRANSDECLARACAO11 - transmite (ou valida via dry-run) declaração PGDAS-D.
 
-        `receitas`: lista de {atividade, codigoServico/cnae, valor} segregando
-        receita por tipo. No mock retorna recibo + valor devido ficticio.
+        `indicador_transmissao=False` (default) → DRY-RUN: a RFB calcula e devolve
+        os valores apurados SEM gerar declaração definitiva. Seguro pra conferir.
+        `indicador_transmissao=True` → transmite de verdade, gera declaração+recibo.
         """
+        if receita_interna is None:
+            receita_interna = receita_bruta - receita_externa
+
         if settings.use_mock_integra:
-            valor_devido = round(receita_bruta * 0.06, 2)  # mock 6% (DAS Anexo I médio)
+            valor_devido = round(receita_bruta * 0.06, 2)  # mock 6%
+            modo = "transmitida" if indicador_transmissao else "validada (dry-run)"
             return {
                 "status": 200,
                 "dados": json.dumps({
-                    "numeroDeclaracao": f"PGDAS-{ano_mes}-{contribuinte_cnpj[-6:]}",
-                    "dataTransmissao": datetime.now(timezone.utc).isoformat(),
-                    "recibo": f"REC-{ano_mes}-{int(time.time())}",
+                    "numeroDeclaracao": (
+                        f"PGDAS-{ano_mes}-{contribuinte_cnpj[-6:]}"
+                        if indicador_transmissao else None
+                    ),
+                    "indicadorTransmissao": indicador_transmissao,
+                    "modo": modo,
+                    "dataTransmissao": (
+                        datetime.now(timezone.utc).isoformat() if indicador_transmissao else None
+                    ),
+                    "recibo": f"REC-{ano_mes}-{int(time.time())}" if indicador_transmissao else None,
                     "valorDevido": valor_devido,
+                    "valoresDevidos": [
+                        {"codigoTributo": 1001, "valor": round(valor_devido * 0.06, 2)},
+                        {"codigoTributo": 1006, "valor": round(valor_devido * 0.44, 2)},
+                    ],
                     "receitaBruta": receita_bruta,
                     "competencia": ano_mes,
                 }),
             }
+
+        dados = self.montar_payload_pgdasd(
+            contribuinte_cnpj,
+            ano_mes=ano_mes,
+            receita_interna=receita_interna,
+            receita_externa=receita_externa,
+            folhas_salario=folhas_salario,
+            receitas_brutas_anteriores=receitas_brutas_anteriores,
+            indicador_transmissao=indicador_transmissao,
+        )
         return self._executar(
             PATH_DECLARAR,
             contribuinte_cnpj=contribuinte_cnpj,
             id_sistema="PGDASD",
             id_servico="TRANSDECLARACAO11",
             versao_sistema="1.0",
-            dados={
-                "periodoApuracao": ano_mes,
-                "receitaBruta": receita_bruta,
-                "receitas": receitas or [],
-            },
+            dados=dados,
         )
 
     def pgdas_gerar_das(

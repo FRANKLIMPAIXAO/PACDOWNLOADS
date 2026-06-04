@@ -97,36 +97,86 @@ class ApuracaoService:
 
     # --- Transmissao PGDAS-D ---
 
-    def transmitir(self, apuracao_id: int) -> Apuracao:
+    def _receita_interna_externa(self, apur: Apuracao) -> tuple[float, float]:
+        """Separa receita interna (normal+ST+monofásico+serviços) de externa
+        (exportação) a partir do receitas_segregadas salvo pelo calculator."""
+        externa = 0.0
+        interna = 0.0
+        for r in (apur.receitas_segregadas or []):
+            valor = float(r.get("valor") or 0)
+            if (r.get("natureza") or "").upper() == "EXPORTACAO":
+                externa += valor
+            else:
+                interna += valor
+        # Fallback: se não tem segregação, tudo interno
+        if interna == 0 and externa == 0 and apur.receita_bruta:
+            interna = float(apur.receita_bruta)
+        return interna, externa
+
+    def transmitir(self, apuracao_id: int, *, dry_run: bool = True) -> dict:
+        """Transmite (ou valida via dry-run) a declaração PGDAS-D.
+
+        `dry_run=True` (default) → indicadorTransmissao=False: a RFB calcula e
+        devolve os valores apurados SEM gerar declaração. Seguro pra conferir
+        antes de transmitir de verdade.
+        `dry_run=False` → transmite real, marca status=TRANSMITIDA, salva recibo.
+
+        Retorna dict com {dry_run, valores_rfb, valor_devido_rfb, valor_pac,
+        divergencia, apuracao}. Em dry-run NÃO altera o status da apuração.
+        """
         apur = self.get_or_404(apuracao_id)
         if not apur.receita_bruta:
             raise HTTPException(
-                status_code=400, detail="Receita bruta obrigatoria para transmitir.",
+                status_code=400, detail="Receita bruta obrigatoria. Calcule a apuracao primeiro.",
             )
         empresa = self.get_empresa_or_404(apur.empresa_id)
+        interna, externa = self._receita_interna_externa(apur)
         try:
             payload = self.provider.pgdas_transmitir_declaracao(
                 empresa.cnpj,
                 ano_mes=apur.ano_mes,
                 receita_bruta=float(apur.receita_bruta),
-                receitas=apur.receitas_segregadas or [],
+                receita_interna=interna,
+                receita_externa=externa,
+                indicador_transmissao=not dry_run,
             )
         except IntegraContadorError as exc:
-            apur.status = StatusApuracao.ERRO
-            self.db.commit()
+            if not dry_run:
+                apur.status = StatusApuracao.ERRO
+                self.db.commit()
             raise HTTPException(status_code=502, detail=f"Integra Contador: {exc}")
+
         dados = parse_dados(payload)
-        apur.numero_declaracao = dados.get("numeroDeclaracao")
-        apur.recibo = dados.get("recibo")
-        valor = dados.get("valorDevido")
-        if valor is not None:
-            apur.valor_devido = Decimal(str(valor))
-        apur.transmitida_em = datetime.now(timezone.utc)
-        apur.status = StatusApuracao.TRANSMITIDA
-        apur.raw_declaracao = dados
-        self.db.commit()
-        self.db.refresh(apur)
-        return apur
+        # Valor devido apurado pela RFB
+        valor_rfb = dados.get("valorDevido")
+        valores_rfb = dados.get("valoresDevidos") or []
+        valor_pac = float(apur.valor_devido) if apur.valor_devido else None
+        divergencia = None
+        if valor_rfb is not None and valor_pac is not None:
+            divergencia = round(float(valor_rfb) - valor_pac, 2)
+
+        if not dry_run:
+            # Transmissão REAL: persiste
+            apur.numero_declaracao = dados.get("numeroDeclaracao")
+            apur.recibo = dados.get("recibo")
+            if valor_rfb is not None:
+                apur.valor_devido = Decimal(str(valor_rfb))
+            apur.transmitida_em = datetime.now(timezone.utc)
+            apur.status = StatusApuracao.TRANSMITIDA
+            apur.raw_declaracao = dados
+            self.db.commit()
+            self.db.refresh(apur)
+
+        return {
+            "dry_run": dry_run,
+            "valor_devido_rfb": valor_rfb,
+            "valores_rfb": valores_rfb,
+            "valor_devido_pac": valor_pac,
+            "divergencia": divergencia,
+            "raw": dados,
+            "apuracao_id": apur.id,
+            "status": apur.status.value,
+        }
 
     # --- Geracao DAS ---
 

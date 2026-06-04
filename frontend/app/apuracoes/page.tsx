@@ -9,6 +9,7 @@ import { ProtectedRoute } from "../../components/protected-route";
 import { ApiError } from "../../lib/api";
 import {
   Apuracao,
+  ResultadoTransmissao,
   ResumoMes,
   ResumoMotor,
   abrirDasPdf,
@@ -51,6 +52,8 @@ function ApuracoesContent() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [showNova, setShowNova] = useState(false);
+  // Resultado do dry-run (validação) — mostra comparação RFB × PAC antes de transmitir
+  const [dryRun, setDryRun] = useState<ResultadoTransmissao | null>(null);
 
   const reload = useCallback(async () => {
     setError(null);
@@ -69,11 +72,36 @@ function ApuracoesContent() {
 
   useEffect(() => { reload(); }, [reload]);
 
-  async function handleTransmitir(id: number) {
+  // PASSO 1: dry-run — RFB calcula sem entregar, mostra comparação RFB × PAC
+  async function handleValidar(id: number) {
+    setBusy(`t-${id}`); setError(null); setDryRun(null);
+    try {
+      const r = await transmitir(id, true); // dry-run
+      setDryRun(r);
+    } catch (err) {
+      if (err instanceof ApiError) setError(err.message);
+      else setError("Falha ao validar declaração.");
+    } finally { setBusy(null); }
+  }
+
+  // PASSO 2: transmissão REAL — só após confirmar a comparação
+  async function handleTransmitirReal(id: number) {
+    const ok = confirm(
+      "⚠️ TRANSMITIR DE VERDADE pra Receita Federal?\n\n" +
+      "Isso entrega a declaração PGDAS-D oficialmente (gera recibo). " +
+      "Confirme que o valor apurado pela RFB no dry-run está correto antes de prosseguir.\n\n" +
+      "Continuar?",
+    );
+    if (!ok) return;
     setBusy(`t-${id}`); setError(null);
-    try { await transmitir(id); await reload(); }
-    catch (err) { if (err instanceof ApiError) setError(err.message); }
-    finally { setBusy(null); }
+    try {
+      await transmitir(id, false); // real
+      setDryRun(null);
+      await reload();
+    } catch (err) {
+      if (err instanceof ApiError) setError(err.message);
+      else setError("Falha ao transmitir.");
+    } finally { setBusy(null); }
   }
 
   async function handleGerarDas(id: number) {
@@ -117,7 +145,7 @@ function ApuracoesContent() {
         key={`act-${a.id}`}
         apuracao={a}
         busy={busy}
-        onTransmitir={handleTransmitir}
+        onValidar={handleValidar}
         onGerarDas={handleGerarDas}
         onPagar={handlePagar}
         onAbrirPdf={handleAbrirPdf}
@@ -154,6 +182,86 @@ function ApuracoesContent() {
       </header>
 
       {error ? <p className="toast toast-error">{error}</p> : null}
+
+      {/* Banner de comparação do dry-run (RFB × PAC) — passo antes de transmitir real */}
+      {dryRun ? (
+        <section
+          className="panel"
+          style={{
+            border: dryRun.divergencia && Math.abs(dryRun.divergencia) > 0.01
+              ? "1px solid rgba(245,158,11,0.4)"
+              : "1px solid rgba(34,197,94,0.4)",
+            marginBottom: 16,
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+            <div>
+              <h3 style={{ margin: 0 }}>
+                🔍 Dry-run da declaração (RFB calculou, NÃO transmitiu)
+              </h3>
+              <p className="muted" style={{ margin: "6px 0", fontSize: 13 }}>
+                A Receita validou o payload e devolveu o valor apurado.
+                Compare com o cálculo do PAC antes de transmitir de verdade.
+              </p>
+              <div style={{ display: "flex", gap: 24, marginTop: 8, flexWrap: "wrap" }}>
+                <div>
+                  <div className="muted" style={{ fontSize: 11 }}>Valor RFB (dry-run)</div>
+                  <div style={{ fontSize: 20, fontWeight: 600, color: "rgb(59,130,246)" }}>
+                    {fmtBRL(dryRun.valor_devido_rfb)}
+                  </div>
+                </div>
+                <div>
+                  <div className="muted" style={{ fontSize: 11 }}>Valor calculado pelo PAC</div>
+                  <div style={{ fontSize: 20, fontWeight: 600, color: "rgb(148,163,184)" }}>
+                    {fmtBRL(dryRun.valor_devido_pac)}
+                  </div>
+                </div>
+                <div>
+                  <div className="muted" style={{ fontSize: 11 }}>Divergência</div>
+                  <div style={{
+                    fontSize: 20, fontWeight: 600,
+                    color: dryRun.divergencia && Math.abs(dryRun.divergencia) > 0.01
+                      ? "rgb(245,158,11)" : "rgb(34,197,94)",
+                  }}>
+                    {dryRun.divergencia === null ? "—" : fmtBRL(dryRun.divergencia)}
+                  </div>
+                </div>
+              </div>
+              {dryRun.divergencia !== null && Math.abs(dryRun.divergencia) > 0.01 ? (
+                <p className="toast toast-warn" style={{ marginTop: 10, fontSize: 13 }}>
+                  ⚠️ Os valores divergem. Provável causa: receita monofásica/ST
+                  ainda não está sendo segregada no payload (a RFB taxou PIS/COFINS
+                  sobre o monofásico). NÃO transmita até ajustar — revise manualmente.
+                </p>
+              ) : (
+                <p className="toast toast-ok" style={{ marginTop: 10, fontSize: 13 }}>
+                  ✅ Valores batem. Pode transmitir com segurança.
+                </p>
+              )}
+            </div>
+            <button type="button" className="btn-ghost" onClick={() => setDryRun(null)}>✕</button>
+          </div>
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 12 }}>
+            <button type="button" className="btn-ghost" onClick={() => setDryRun(null)}>
+              Cancelar
+            </button>
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={() => handleTransmitirReal(dryRun.apuracao_id)}
+              disabled={busy === `t-${dryRun.apuracao_id}`}
+              style={{
+                background: dryRun.divergencia && Math.abs(dryRun.divergencia) > 0.01
+                  ? "rgb(245,158,11)" : undefined,
+              }}
+            >
+              {busy === `t-${dryRun.apuracao_id}`
+                ? "Transmitindo..."
+                : "▶ Transmitir de verdade pra Receita"}
+            </button>
+          </div>
+        </section>
+      ) : null}
 
       {showNova ? (
         <NovaApuracaoForm
@@ -248,10 +356,10 @@ function ApuracoesContent() {
 
 function ApuracaoActions({
   apuracao, busy,
-  onTransmitir, onGerarDas, onPagar, onAbrirPdf,
+  onValidar, onGerarDas, onPagar, onAbrirPdf,
 }: {
   apuracao: Apuracao; busy: string | null;
-  onTransmitir: (id: number) => void;
+  onValidar: (id: number) => void;
   onGerarDas: (id: number) => void;
   onPagar: (id: number) => void;
   onAbrirPdf: (id: number, am: string) => void;
@@ -260,11 +368,12 @@ function ApuracaoActions({
   if (apuracao.status === "DRAFT") {
     return (
       <button
-        type="button" className="btn-primary"
+        type="button" className="btn-secondary"
         style={{ padding: "5px 11px", fontSize: "0.82rem" }}
-        onClick={() => onTransmitir(id)} disabled={busy === `t-${id}`}
+        onClick={() => onValidar(id)} disabled={busy === `t-${id}`}
+        title="Dry-run: a RFB calcula sem entregar. Mostra comparação antes de transmitir."
       >
-        {busy === `t-${id}` ? "..." : "Transmitir"}
+        {busy === `t-${id}` ? "..." : "🔍 Validar (dry-run)"}
       </button>
     );
   }

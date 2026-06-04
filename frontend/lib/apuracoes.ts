@@ -67,8 +67,27 @@ export function criarApuracao(payload: ApuracaoCreateInput) {
   });
 }
 
-export function transmitir(id: number) {
-  return apiFetch<Apuracao>(`/api/v1/apuracoes/${id}/transmitir`, { method: "POST" });
+export type ResultadoTransmissao = {
+  dry_run: boolean;
+  valor_devido_rfb: number | null;
+  valores_rfb: Array<{ codigoTributo: number; valor: number }>;
+  valor_devido_pac: number | null;
+  divergencia: number | null;
+  status: string;
+  raw: Record<string, unknown>;
+  apuracao_id: number;
+};
+
+/** Valida (dry-run) ou transmite a declaração PGDAS-D.
+ *
+ * `dryRun=true` (default) → indicadorTransmissao=False: RFB calcula sem entregar.
+ * `dryRun=false` → transmite de verdade (gera declaração + recibo).
+ */
+export function transmitir(id: number, dryRun = true) {
+  return apiFetch<ResultadoTransmissao>(
+    `/api/v1/apuracoes/${id}/transmitir?dry_run=${dryRun ? "true" : "false"}`,
+    { method: "POST" },
+  );
 }
 
 export function gerarDas(id: number) {

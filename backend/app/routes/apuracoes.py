@@ -46,10 +46,25 @@ def obter(apuracao_id: int, db: Session = Depends(get_db)):
     return ApuracaoService(db).get_or_404(apuracao_id)
 
 
-@router.post("/{apuracao_id}/transmitir", response_model=ApuracaoRead)
-def transmitir(apuracao_id: int, db: Session = Depends(get_db)):
-    """TRANSDECLARACAO11 — entrega declaracao mensal PGDAS-D."""
-    return ApuracaoService(db).transmitir(apuracao_id)
+@router.post("/{apuracao_id}/transmitir")
+def transmitir(
+    apuracao_id: int,
+    dry_run: bool = True,
+    db: Session = Depends(get_db),
+) -> dict:
+    """TRANSDECLARACAO11 — valida (dry-run) ou transmite declaração PGDAS-D.
+
+    `?dry_run=true` (DEFAULT) → indicadorTransmissao=False: a RFB calcula e
+    devolve os valores SEM gerar declaração definitiva. SEGURO pra conferir.
+    `?dry_run=false` → transmite de verdade (gera declaração + recibo).
+
+    Devolve {dry_run, valor_devido_rfb, valores_rfb, valor_devido_pac,
+    divergencia, status}. Em dry-run o status da apuração NÃO muda.
+
+    Fluxo recomendado: dry-run primeiro, comparar divergencia (RFB × PAC),
+    só transmitir real (dry_run=false) se os valores baterem.
+    """
+    return ApuracaoService(db).transmitir(apuracao_id, dry_run=dry_run)
 
 
 @router.post("/{apuracao_id}/das/gerar", response_model=ApuracaoRead)
