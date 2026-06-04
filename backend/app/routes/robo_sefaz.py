@@ -27,6 +27,76 @@ router = APIRouter(
 )
 
 
+@router.get("/diagnostico-redis")
+def diagnostico_redis() -> dict:
+    """Testa conectividade Redis + estado do Celery de dentro do backend.
+
+    Diagnostica o erro "Celery worker ou Redis nao estao rodando" sem precisar
+    de SSH/logs. Retorna:
+    - redis_url_mascarada (host:port, sem credenciais)
+    - eager_mode (se CELERY_TASK_ALWAYS_EAGER — nesse modo nao precisa Redis)
+    - redis_ping_ok + tempo + erro
+    - celery_broker_ok (tenta abrir conexao com o broker)
+    """
+    import time
+    from app.config import get_settings as _gs
+    _s = _gs()
+
+    resultado: dict = {
+        "eager_mode": _s.celery_task_always_eager,
+    }
+
+    # Mascara a URL (remove senha se houver)
+    url = _s.redis_url or ""
+    try:
+        # redis://[:senha@]host:port/db
+        if "@" in url:
+            esquema, resto = url.split("://", 1)
+            _cred, host_part = resto.split("@", 1)
+            resultado["redis_url_mascarada"] = f"{esquema}://***@{host_part}"
+        else:
+            resultado["redis_url_mascarada"] = url
+    except Exception:  # noqa: BLE001
+        resultado["redis_url_mascarada"] = "<nao parseavel>"
+
+    # Se eager, nem precisa de Redis — robô roda em thread no backend
+    if _s.celery_task_always_eager:
+        resultado["aviso"] = (
+            "CELERY_TASK_ALWAYS_EAGER=true — robô roda em thread no backend, "
+            "NAO precisa de Redis/worker. Nesse modo o disparo nunca da erro de Redis."
+        )
+        return resultado
+
+    # Ping no Redis direto
+    t0 = time.monotonic()
+    try:
+        import redis as _redis
+        client = _redis.from_url(url, socket_connect_timeout=5, socket_timeout=5)
+        pong = client.ping()
+        resultado["redis_ping_ok"] = bool(pong)
+        resultado["redis_ping_tempo_s"] = round(time.monotonic() - t0, 3)
+    except Exception as exc:  # noqa: BLE001
+        resultado["redis_ping_ok"] = False
+        resultado["redis_ping_tempo_s"] = round(time.monotonic() - t0, 3)
+        resultado["redis_erro"] = f"{type(exc).__name__}: {str(exc)[:300]}"
+
+    # Tenta abrir conexao com o broker Celery (kombu)
+    t0 = time.monotonic()
+    try:
+        from app.workers.celery_app import celery_app
+        conn = celery_app.connection()
+        conn.ensure_connection(max_retries=1, timeout=5)
+        conn.release()
+        resultado["celery_broker_ok"] = True
+        resultado["celery_broker_tempo_s"] = round(time.monotonic() - t0, 3)
+    except Exception as exc:  # noqa: BLE001
+        resultado["celery_broker_ok"] = False
+        resultado["celery_broker_tempo_s"] = round(time.monotonic() - t0, 3)
+        resultado["celery_broker_erro"] = f"{type(exc).__name__}: {str(exc)[:300]}"
+
+    return resultado
+
+
 @router.get("/agendamento")
 def info_agendamento() -> dict:
     """Info estática do cron mensal (lê do celery_app.conf.beat_schedule).
