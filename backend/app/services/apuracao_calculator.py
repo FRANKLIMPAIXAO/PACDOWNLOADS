@@ -365,21 +365,57 @@ class ApuracaoCalculator:
         return list(self.db.scalars(stmt).all())
 
     def _rbt12(self, empresa_id: int, ano_mes: str) -> tuple[Decimal, bool]:
+        """RBT12 = soma do faturamento dos 12 meses anteriores.
+
+        Prioridade da fonte (a 1ª que tiver dado pra um mês ganha):
+        1. ReceitaMensal (faturamento informado manual OU puxado da Receita) —
+           confiável pra empresas migradas sem histórico de NFes.
+        2. Apuracao salva do mês (derivada das NFes do sistema).
+
+        Sem nenhuma das duas pra TODOS os 12 meses → primeira_apuracao=True
+        (o caller trata como início de atividade, proporcionalizando).
+        """
+        from app.models.receita_mensal import ReceitaMensal
+
         ano = int(ano_mes[:4]); mes = int(ano_mes[4:])
-        meses_anteriores: list[str] = []
+        meses_ant: list[str] = []
         m = mes; a = ano
         for _ in range(12):
             m -= 1
             if m == 0: m = 12; a -= 1
-            meses_anteriores.append(f"{a}{m:02d}")
-        apuracoes = self.db.scalars(
-            select(Apuracao).where(
-                Apuracao.empresa_id == empresa_id,
-                Apuracao.ano_mes.in_(meses_anteriores),
-            )
-        ).all()
-        total = sum((a.receita_bruta or Decimal(0) for a in apuracoes), Decimal("0"))
-        return total, len(apuracoes) == 0
+            meses_ant.append(f"{a}{m:02d}")
+
+        # Fonte 1: ReceitaMensal (manual/receita)
+        receitas = {
+            r.ano_mes: (r.valor_interno or Decimal(0)) + (r.valor_externo or Decimal(0))
+            for r in self.db.scalars(
+                select(ReceitaMensal).where(
+                    ReceitaMensal.empresa_id == empresa_id,
+                    ReceitaMensal.ano_mes.in_(meses_ant),
+                )
+            ).all()
+        }
+        # Fonte 2: Apuracoes salvas
+        apuracoes = {
+            a.ano_mes: (a.receita_bruta or Decimal(0))
+            for a in self.db.scalars(
+                select(Apuracao).where(
+                    Apuracao.empresa_id == empresa_id,
+                    Apuracao.ano_mes.in_(meses_ant),
+                )
+            ).all()
+        }
+
+        total = Decimal("0")
+        meses_com_dado = 0
+        for am in meses_ant:
+            valor = receitas.get(am)
+            if valor is None:
+                valor = apuracoes.get(am)
+            if valor is not None and valor > 0:
+                total += valor
+                meses_com_dado += 1
+        return total, meses_com_dado == 0
 
     def _analisar_documento(self, doc: DocumentoFiscal) -> DocumentoAnalise:
         if doc.tipo_documento == TipoDocumento.NFSE:

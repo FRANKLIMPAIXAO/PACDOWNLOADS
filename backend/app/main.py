@@ -15,9 +15,10 @@ from app.models.documento_fiscal import DocumentoFiscal  # noqa: F401
 from app.models.empresa import Empresa  # noqa: F401
 from app.models.mensagem_ecac import MensagemEcac  # noqa: F401
 from app.models.procuracao import Procuracao  # noqa: F401
+from app.models.receita_mensal import ReceitaMensal  # noqa: F401
 from app.models.situacao_fiscal import SituacaoFiscal  # noqa: F401
 from app.models.usuario import Usuario
-from app.routes import agenda, apuracoes, auth, certidoes, dashboard, documentos, empresas, guias_das, guias_dctfweb, guias_fgts, integra, parcelamentos_pgfn, parcelamentos_simples, relatorios, robo, robo_sefaz, usuarios
+from app.routes import agenda, apuracoes, auth, certidoes, dashboard, documentos, empresas, guias_das, guias_dctfweb, guias_fgts, integra, parcelamentos_pgfn, parcelamentos_simples, receitas_mensais, relatorios, robo, robo_sefaz, usuarios
 from app.services.auth_service import hash_password
 
 
@@ -121,4 +122,5 @@ app.include_router(integra.router, prefix=settings.api_v1_prefix)
 app.include_router(certidoes.router, prefix=settings.api_v1_prefix)
 app.include_router(agenda.router, prefix=settings.api_v1_prefix)
 app.include_router(apuracoes.router, prefix=settings.api_v1_prefix)
+app.include_router(receitas_mensais.router, prefix=settings.api_v1_prefix)
 app.include_router(dashboard.router, prefix=settings.api_v1_prefix)

@@ -113,6 +113,33 @@ class ApuracaoService:
             interna = float(apur.receita_bruta)
         return interna, externa
 
+    def _receitas_brutas_anteriores(self, empresa_id: int, ano_mes: str) -> list[dict]:
+        """Monta receitasBrutasAnteriores[] do payload PGDAS-D a partir da
+        tabela ReceitaMensal (faturamento dos 12 meses anteriores)."""
+        from app.models.receita_mensal import ReceitaMensal
+        from app.services.receita_mensal_service import meses_anteriores
+
+        meses = meses_anteriores(ano_mes, 12)
+        registros = {
+            r.ano_mes: r for r in self.db.scalars(
+                select(ReceitaMensal).where(
+                    ReceitaMensal.empresa_id == empresa_id,
+                    ReceitaMensal.ano_mes.in_(meses),
+                )
+            ).all()
+        }
+        out = []
+        for am in meses:
+            r = registros.get(am)
+            if not r:
+                continue
+            out.append({
+                "pa": int(am),
+                "valorInterno": float(r.valor_interno or 0),
+                "valorExterno": float(r.valor_externo or 0),
+            })
+        return out
+
     def transmitir(self, apuracao_id: int, *, dry_run: bool = True) -> dict:
         """Transmite (ou valida via dry-run) a declaração PGDAS-D.
 
@@ -131,6 +158,7 @@ class ApuracaoService:
             )
         empresa = self.get_empresa_or_404(apur.empresa_id)
         interna, externa = self._receita_interna_externa(apur)
+        receitas_anteriores = self._receitas_brutas_anteriores(apur.empresa_id, apur.ano_mes)
         try:
             payload = self.provider.pgdas_transmitir_declaracao(
                 empresa.cnpj,
@@ -138,6 +166,7 @@ class ApuracaoService:
                 receita_bruta=float(apur.receita_bruta),
                 receita_interna=interna,
                 receita_externa=externa,
+                receitas_brutas_anteriores=receitas_anteriores,
                 indicador_transmissao=not dry_run,
             )
         except IntegraContadorError as exc:
