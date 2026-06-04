@@ -17,7 +17,7 @@ from app.models.mensagem_ecac import MensagemEcac  # noqa: F401
 from app.models.procuracao import Procuracao  # noqa: F401
 from app.models.situacao_fiscal import SituacaoFiscal  # noqa: F401
 from app.models.usuario import Usuario
-from app.routes import agenda, apuracoes, auth, certidoes, dashboard, documentos, empresas, guias_das, guias_dctfweb, guias_fgts, integra, parcelamentos_pgfn, parcelamentos_simples, relatorios, robo, robo_sefaz
+from app.routes import agenda, apuracoes, auth, certidoes, dashboard, documentos, empresas, guias_das, guias_dctfweb, guias_fgts, integra, parcelamentos_pgfn, parcelamentos_simples, relatorios, robo, robo_sefaz, usuarios
 from app.services.auth_service import hash_password
 
 
@@ -106,6 +106,7 @@ def version() -> dict:
 
 
 app.include_router(auth.router, prefix=settings.api_v1_prefix)
+app.include_router(usuarios.router, prefix=settings.api_v1_prefix)
 app.include_router(empresas.router, prefix=settings.api_v1_prefix)
 app.include_router(documentos.router, prefix=settings.api_v1_prefix)
 app.include_router(robo.router, prefix=settings.api_v1_prefix)

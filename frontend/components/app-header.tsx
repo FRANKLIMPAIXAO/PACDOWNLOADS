@@ -44,6 +44,7 @@ export function AppHeader() {
           <Link href="/parcelamentos-pgfn">PGFN</Link>
           <Link href="/dctfweb">DCTFWeb</Link>
           <Link href="/fgts">FGTS</Link>
+          {user?.is_admin ? <Link href="/usuarios">👥 Usuários</Link> : null}
         </nav>
         {user ? (
           <div className="user-chip">

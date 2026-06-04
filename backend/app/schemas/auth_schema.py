@@ -15,3 +15,29 @@ class UsuarioCreate(BaseModel):
     nome: str
     email: EmailStr
     password: str
+
+
+class UsuarioAdminCreate(BaseModel):
+    """Criação de usuário por um admin (pode definir is_admin)."""
+    nome: str
+    email: EmailStr
+    password: str
+    is_admin: bool = False
+
+
+class UsuarioRead(BaseModel):
+    id: int
+    nome: str
+    email: EmailStr
+    ativo: bool
+    is_admin: bool
+
+    model_config = {"from_attributes": True}
+
+
+class UsuarioUpdate(BaseModel):
+    """Atualização parcial por admin. Todos opcionais."""
+    nome: str | None = None
+    ativo: bool | None = None
+    is_admin: bool | None = None
+    password: str | None = None  # reset de senha

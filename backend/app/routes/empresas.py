@@ -18,7 +18,7 @@ from app.schemas.integracao_schema import (
     EmpresaFocusTokenPayload,
     StatusIntegracaoEmpresaRead,
 )
-from app.services.auth_service import get_current_user
+from app.services.auth_service import get_current_admin, get_current_user
 from app.services.certificado_service import (
     diagnosticar_certificado_empresa,
     remover_certificado,
@@ -69,7 +69,11 @@ def atualizar_empresa(empresa_id: int, payload: EmpresaUpdate, db: Session = Dep
 
 
 @router.delete("/{empresa_id}", response_model=EmpresaRead)
-def inativar_empresa(empresa_id: int, db: Session = Depends(get_db)) -> Empresa:
+def inativar_empresa(
+    empresa_id: int,
+    db: Session = Depends(get_db),
+    _admin=Depends(get_current_admin),  # só admin pode inativar empresa
+) -> Empresa:
     empresa = db.get(Empresa, empresa_id)
     if not empresa:
         raise HTTPException(status_code=404, detail="Empresa nao encontrada")
