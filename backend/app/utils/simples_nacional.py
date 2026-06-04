@@ -208,12 +208,14 @@ class CalculoSegregado:
     receita_normal: Decimal
     receita_monofasica: Decimal
     receita_st: Decimal
+    receita_monofasica_st: Decimal  # monofasico E ST ao mesmo tempo
     receita_exportacao: Decimal
 
     valor_devido: Decimal
     valor_normal: Decimal
     valor_monofasico: Decimal     # com PIS/COFINS zerados
     valor_st: Decimal             # com ICMS zerado
+    valor_monofasico_st: Decimal  # com PIS/COFINS E ICMS zerados
     valor_exportacao: Decimal     # so IRPJ + CSLL + CPP
 
     decomposicao: dict[str, Decimal]  # consolidado de IRPJ/CSLL/PIS/COFINS/CPP/ICMS/ISS
@@ -225,6 +227,7 @@ def calcular_simples_segregado(
     receita_normal: Decimal,
     receita_monofasica: Decimal = Decimal(0),
     receita_st: Decimal = Decimal(0),
+    receita_monofasica_st: Decimal = Decimal(0),
     receita_exportacao: Decimal = Decimal(0),
 ) -> CalculoSegregado:
     """Calcula DAS aplicando regra de segregacao por tipo de receita.
@@ -232,12 +235,21 @@ def calcular_simples_segregado(
     Cada parcela usa a mesma aliquota efetiva, mas zera os tributos ja recolhidos:
     - PIS+COFINS zerados na receita monofasica
     - ICMS zerado na receita ST (Anexo I/II) ou ISS (Anexo III/IV/V)
+    - PIS+COFINS E ICMS zerados na receita monofasica_st (produto que eh as duas
+      coisas: combustivel, autopeca, bebida, medicamento revendidos)
     - Em EXPORTACAO, zera PIS, COFINS, ICMS/ISS, IPI
+
+    IMPORTANTE: cada parcela eh MUTUAMENTE EXCLUSIVA — um item nao pode estar em
+    monofasica E st ao mesmo tempo (pra isso existe monofasica_st). Somar o mesmo
+    valor em monofasica e st infla a receita_total (bug do duplo-cômputo).
 
     A aliquota efetiva eh aplicada sobre a receita_total para descobrir o "valor cheio"
     e depois zera-se a parcela proporcional aos tributos a remover.
     """
-    receita_total = receita_normal + receita_monofasica + receita_st + receita_exportacao
+    receita_total = (
+        receita_normal + receita_monofasica + receita_st
+        + receita_monofasica_st + receita_exportacao
+    )
     if receita_total <= 0:
         return CalculoSegregado(
             anexo=anexo, faixa=0, rbt12=Decimal("0"),
@@ -245,10 +257,10 @@ def calcular_simples_segregado(
             teto_excedido=False,
             receita_total=Decimal("0"), receita_normal=Decimal("0"),
             receita_monofasica=Decimal("0"), receita_st=Decimal("0"),
-            receita_exportacao=Decimal("0"),
+            receita_monofasica_st=Decimal("0"), receita_exportacao=Decimal("0"),
             valor_devido=Decimal("0"), valor_normal=Decimal("0"),
             valor_monofasico=Decimal("0"), valor_st=Decimal("0"),
-            valor_exportacao=Decimal("0"),
+            valor_monofasico_st=Decimal("0"), valor_exportacao=Decimal("0"),
             decomposicao={},
         )
 
@@ -281,17 +293,25 @@ def calcular_simples_segregado(
     iss_st = dec_st.pop("ISS", Decimal("0"))  # alguns anexos tem ISS no lugar
     v_st = v_st_bruto - icms_st - iss_st
 
+    # MONOFASICO_ST: zera PIS + COFINS (monofasico) E ICMS/ISS (ST) ao mesmo tempo
+    v_monost_bruto, dec_monost = _parcela_valor(receita_monofasica_st)
+    for tributo_zero in ("PIS", "COFINS", "ICMS", "ISS"):
+        dec_monost.pop(tributo_zero, None)
+    v_monofasico_st = sum(dec_monost.values(), Decimal("0"))
+
     # EXPORTACAO: zera PIS, COFINS, IPI, ICMS, ISS — resta IRPJ, CSLL, CPP
     v_exp_bruto, dec_exp = _parcela_valor(receita_exportacao)
     for tributo_zero in ("PIS", "COFINS", "IPI", "ICMS", "ISS"):
         dec_exp.pop(tributo_zero, None)
     v_exportacao = sum(dec_exp.values(), Decimal("0"))
 
-    valor_devido = (v_normal + v_monofasico + v_st + v_exportacao).quantize(Decimal("0.01"))
+    valor_devido = (
+        v_normal + v_monofasico + v_st + v_monofasico_st + v_exportacao
+    ).quantize(Decimal("0.01"))
 
     # Decomposicao consolidada
     consolidada: dict[str, Decimal] = {}
-    for d in (dec_normal, dec_mono, dec_st, dec_exp):
+    for d in (dec_normal, dec_mono, dec_st, dec_monost, dec_exp):
         for k, v in d.items():
             consolidada[k] = consolidada.get(k, Decimal("0")) + v
     consolidada = {k: v.quantize(Decimal("0.01")) for k, v in consolidada.items() if v > 0}
@@ -307,11 +327,13 @@ def calcular_simples_segregado(
         receita_normal=receita_normal.quantize(Decimal("0.01")),
         receita_monofasica=receita_monofasica.quantize(Decimal("0.01")),
         receita_st=receita_st.quantize(Decimal("0.01")),
+        receita_monofasica_st=receita_monofasica_st.quantize(Decimal("0.01")),
         receita_exportacao=receita_exportacao.quantize(Decimal("0.01")),
         valor_devido=valor_devido,
         valor_normal=v_normal,
         valor_monofasico=v_monofasico.quantize(Decimal("0.01")),
         valor_st=v_st.quantize(Decimal("0.01")),
+        valor_monofasico_st=v_monofasico_st.quantize(Decimal("0.01")),
         valor_exportacao=v_exportacao.quantize(Decimal("0.01")),
         decomposicao=consolidada,
     )

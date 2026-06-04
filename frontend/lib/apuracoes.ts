@@ -154,11 +154,13 @@ export type CalculoSegregado = {
   receita_normal: string;
   receita_monofasica: string;
   receita_st: string;
+  receita_monofasica_st: string;
   receita_exportacao: string;
   valor_devido: string;
   valor_normal: string;
   valor_monofasico: string;
   valor_st: string;
+  valor_monofasico_st: string;
   valor_exportacao: string;
   decomposicao: Record<string, string>;
 };
@@ -175,6 +177,7 @@ export type ResumoMotor = {
   total_normal: string;
   total_monofasico: string;
   total_st: string;
+  total_monofasico_st: string;
   total_exportacao: string;
   total_servicos: string;
   total_devolucoes_venda: string;

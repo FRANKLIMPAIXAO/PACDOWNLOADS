@@ -184,11 +184,12 @@ function ResumoVisual({
       <div>
         <p className="section-divider">Segregação por tipo de tributação</p>
         <div className="cnd-grid">
-          <SegmentoTile label="Normal"      valor={resumo.total_normal}     classe="cnd-tile--ok"   />
-          <SegmentoTile label="Monofásico"  valor={resumo.total_monofasico} classe="cnd-tile--warn" sub="PIS+COFINS zerados" />
-          <SegmentoTile label="ICMS-ST"     valor={resumo.total_st}         classe="cnd-tile--warn" sub="ICMS já recolhido" />
-          <SegmentoTile label="Exportação"  valor={resumo.total_exportacao} classe="cnd-tile--ok"   sub="zera PIS/COFINS/ICMS" />
-          <SegmentoTile label="Serviços"    valor={resumo.total_servicos}   classe="" />
+          <SegmentoTile label="Normal"      valor={resumo.total_normal}        classe="cnd-tile--ok"   />
+          <SegmentoTile label="Monofásico"  valor={resumo.total_monofasico}    classe="cnd-tile--warn" sub="PIS+COFINS zerados" />
+          <SegmentoTile label="ICMS-ST"     valor={resumo.total_st}            classe="cnd-tile--warn" sub="ICMS já recolhido" />
+          <SegmentoTile label="Mono+ST"     valor={resumo.total_monofasico_st} classe="cnd-tile--warn" sub="zera PIS/COFINS e ICMS" />
+          <SegmentoTile label="Exportação"  valor={resumo.total_exportacao}    classe="cnd-tile--ok"   sub="zera PIS/COFINS/ICMS" />
+          <SegmentoTile label="Serviços"    valor={resumo.total_servicos}      classe="" />
         </div>
       </div>
 
@@ -216,7 +217,9 @@ function ResumoVisual({
             <ItemKv k="Receita NORMAL"     v={`${fmt(c.receita_normal)} → DAS ${fmt(c.valor_normal)}`} />
             <ItemKv k="Receita MONOFÁSICA" v={`${fmt(c.receita_monofasica)} → DAS ${fmt(c.valor_monofasico)} (sem PIS/COFINS)`} />
             <ItemKv k="Receita ST"         v={`${fmt(c.receita_st)} → DAS ${fmt(c.valor_st)} (sem ICMS)`} />
+            <ItemKv k="Receita MONO+ST"    v={`${fmt(c.receita_monofasica_st)} → DAS ${fmt(c.valor_monofasico_st)} (sem PIS/COFINS e ICMS)`} />
             <ItemKv k="Receita EXPORT"     v={`${fmt(c.receita_exportacao)} → DAS ${fmt(c.valor_exportacao)}`} />
+            <ItemKv k="Receita TOTAL"      v={fmt(c.receita_total)} />
             <ItemKv k="DAS TOTAL"          v={<strong>{fmt(c.valor_devido)}</strong>} />
           </dl>
 

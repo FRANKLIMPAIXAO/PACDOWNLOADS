@@ -107,10 +107,11 @@ class ResumoApuracao:
     entradas: int
     docs_ignorados: int
 
-    # Receitas brutas por segmento (saidas tributadas)
+    # Receitas brutas por segmento (saidas tributadas) — MUTUAMENTE EXCLUSIVOS
     total_normal: Decimal
-    total_monofasico: Decimal
-    total_st: Decimal
+    total_monofasico: Decimal      # so monofasico (ICMS normal)
+    total_st: Decimal              # so ST (PIS/COFINS normal)
+    total_monofasico_st: Decimal   # monofasico E ST ao mesmo tempo
     total_exportacao: Decimal
     total_servicos: Decimal
 
@@ -181,14 +182,25 @@ class ApuracaoCalculator:
             except Exception as exc:
                 avisos.append(f"Doc #{doc.id} ({doc.chave_acesso[:10]}...) ignorado: {exc}")
 
-        # Agregar por SEGMENTO (somando ITEM A ITEM)
+        # Agregar por SEGMENTO (somando ITEM A ITEM).
+        # CADA item cai em EXATAMENTE UM bucket — nunca soma o mesmo valor em
+        # dois segmentos (era o bug: MONOFASICO_ST entrava em monofasico E st,
+        # inflando a receita bruta em ~2x o valor monofasico-st).
         total_normal = Decimal("0")
         total_monofasico = Decimal("0")
         total_st = Decimal("0")
+        total_monofasico_st = Decimal("0")
         total_exportacao = Decimal("0")
         total_servicos = Decimal("0")
         total_devolucoes = Decimal("0")
         monofasico_por_categoria: dict[str, Decimal] = {}
+
+        def _acumula_categoria(item: ItemAnalisado) -> None:
+            if item.monofasico_categoria:
+                monofasico_por_categoria[item.monofasico_categoria] = (
+                    monofasico_por_categoria.get(item.monofasico_categoria, Decimal("0"))
+                    + item.valor_produto
+                )
 
         for a in analises:
             if a.natureza_predominante == "SERVICO":
@@ -204,16 +216,15 @@ class ApuracaoCalculator:
                     total_exportacao += item.valor_produto
                     continue
                 tipo = item.tipo_tributacao
-                if tipo in ("MONOFASICO", "MONOFASICO_ST"):
+                if tipo == "MONOFASICO_ST":
+                    total_monofasico_st += item.valor_produto
+                    _acumula_categoria(item)
+                elif tipo == "MONOFASICO":
                     total_monofasico += item.valor_produto
-                    if item.monofasico_categoria:
-                        monofasico_por_categoria[item.monofasico_categoria] = (
-                            monofasico_por_categoria.get(item.monofasico_categoria, Decimal("0"))
-                            + item.valor_produto
-                        )
-                if tipo in ("ST", "MONOFASICO_ST"):
+                    _acumula_categoria(item)
+                elif tipo == "ST":
                     total_st += item.valor_produto
-                if tipo == "NORMAL" or tipo == "ISENTA":
+                else:  # NORMAL, ISENTA, ou qualquer outro tributado cheio
                     total_normal += item.valor_produto
 
         # Devolucoes subtraem proporcionalmente do segmento NORMAL (assumido)
@@ -226,7 +237,8 @@ class ApuracaoCalculator:
             total_monofasico = max(Decimal("0"), total_monofasico - sobra)
 
         receita_bruta = (
-            total_normal_liquido + total_monofasico + total_st + total_exportacao + total_servicos
+            total_normal_liquido + total_monofasico + total_st
+            + total_monofasico_st + total_exportacao + total_servicos
         )
 
         # RBT12
@@ -258,6 +270,7 @@ class ApuracaoCalculator:
                     receita_normal=receita_normal_calc,
                     receita_monofasica=total_monofasico,
                     receita_st=total_st,
+                    receita_monofasica_st=total_monofasico_st,
                     receita_exportacao=total_exportacao,
                 )
                 if calculo.teto_excedido:
@@ -292,6 +305,7 @@ class ApuracaoCalculator:
             total_normal=total_normal_liquido.quantize(Decimal("0.01")),
             total_monofasico=total_monofasico.quantize(Decimal("0.01")),
             total_st=total_st.quantize(Decimal("0.01")),
+            total_monofasico_st=total_monofasico_st.quantize(Decimal("0.01")),
             total_exportacao=total_exportacao.quantize(Decimal("0.01")),
             total_servicos=total_servicos.quantize(Decimal("0.01")),
             total_devolucoes_venda=total_devolucoes.quantize(Decimal("0.01")),
@@ -330,6 +344,7 @@ class ApuracaoCalculator:
             {"natureza": "NORMAL", "valor": str(resumo.total_normal)},
             {"natureza": "MONOFASICO", "valor": str(resumo.total_monofasico)},
             {"natureza": "ST", "valor": str(resumo.total_st)},
+            {"natureza": "MONOFASICO_ST", "valor": str(resumo.total_monofasico_st)},
             {"natureza": "EXPORTACAO", "valor": str(resumo.total_exportacao)},
             {"natureza": "SERVICO", "valor": str(resumo.total_servicos)},
         ]
