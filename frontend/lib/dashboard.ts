@@ -22,6 +22,9 @@ export type ResumoDashboard = {
     valor_total: number;
     canceladas: number;
     geral_acumulado: number;
+    emitidas?: number;
+    recebidas?: number;
+    faturamento?: number;
   };
   manifestacao: {
     pendentes: number;

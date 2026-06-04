@@ -26,6 +26,7 @@ def listar_documentos(
     empresa_id: int | None = None,
     tipo_documento: TipoDocumento | None = None,
     cancelada: bool | None = None,
+    origem: str | None = None,
     data_inicio: str | None = None,
     data_fim: str | None = None,
     db: Session = Depends(get_db),
@@ -36,6 +37,8 @@ def listar_documentos(
     - `empresa_id`: somente da empresa
     - `tipo_documento`: NFE/CTE/NFSE
     - `cancelada`: None (todas) / True (canceladas) / False (ativas)
+    - `origem`: None (todas) / 'emitida' (SAIDA — robô SEFAZ) / 'recebida'
+      (ENTRADA — Focus DF-e distribuição)
     - `data_inicio` / `data_fim`: ISO YYYY-MM-DD (inclusive) — filtra `data_emissao`
     """
     from datetime import datetime, timezone
@@ -51,6 +54,8 @@ def listar_documentos(
         stmt = stmt.where(DocumentoFiscal.tipo_documento == tipo_documento)
     if cancelada is not None:
         stmt = stmt.where(DocumentoFiscal.cancelada == cancelada)
+    if origem in ("emitida", "recebida"):
+        stmt = stmt.where(DocumentoFiscal.origem == origem)
     if data_inicio:
         try:
             dt = datetime.strptime(data_inicio, "%Y-%m-%d").replace(tzinfo=timezone.utc)
@@ -66,6 +71,72 @@ def listar_documentos(
         except ValueError:
             raise HTTPException(status_code=400, detail=f"data_fim invalida: {data_fim} (esperado YYYY-MM-DD)")
     return db.scalars(stmt).unique().all()
+
+
+@router.get("/resumo")
+def resumo_documentos(
+    empresa_id: int | None = None,
+    data_inicio: str | None = None,
+    data_fim: str | None = None,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Totalizadores estilo Jettax: separa EMITIDAS (saida) de RECEBIDAS (entrada).
+
+    Pra cada origem: quantidade total, valor total (so ativas), canceladas.
+    Faturamento = soma valor das EMITIDAS ativas (o que a empresa vendeu).
+
+    Mesmos filtros de empresa/periodo que GET /documentos.
+    """
+    from datetime import datetime, timezone
+    from sqlalchemy import case, func
+
+    def _periodo(stmt):
+        if empresa_id:
+            stmt = stmt.where(DocumentoFiscal.empresa_id == empresa_id)
+        if data_inicio:
+            try:
+                dt = datetime.strptime(data_inicio, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                stmt = stmt.where(DocumentoFiscal.data_emissao >= dt)
+            except ValueError:
+                raise HTTPException(status_code=400, detail=f"data_inicio invalida: {data_inicio}")
+        if data_fim:
+            try:
+                dt = datetime.strptime(data_fim, "%Y-%m-%d").replace(
+                    tzinfo=timezone.utc, hour=23, minute=59, second=59,
+                )
+                stmt = stmt.where(DocumentoFiscal.data_emissao <= dt)
+            except ValueError:
+                raise HTTPException(status_code=400, detail=f"data_fim invalida: {data_fim}")
+        return stmt
+
+    def _agg(origem: str) -> dict:
+        stmt = _periodo(
+            select(
+                func.count(DocumentoFiscal.id).label("total"),
+                func.coalesce(
+                    func.sum(
+                        case((DocumentoFiscal.cancelada == False, DocumentoFiscal.valor_total), else_=0)  # noqa: E712
+                    ), 0,
+                ).label("valor_ativas"),
+                func.sum(case((DocumentoFiscal.cancelada == True, 1), else_=0)).label("canceladas"),  # noqa: E712
+            ).where(DocumentoFiscal.origem == origem)
+        )
+        row = db.execute(stmt).one()
+        return {
+            "total": int(row.total or 0),
+            "valor_ativas": float(row.valor_ativas or 0),
+            "canceladas": int(row.canceladas or 0),
+            "ativas": int((row.total or 0) - (row.canceladas or 0)),
+        }
+
+    emitidas = _agg("emitida")
+    recebidas = _agg("recebida")
+    return {
+        "emitidas": emitidas,   # SAIDA — robô SEFAZ
+        "recebidas": recebidas,  # ENTRADA — Focus DF-e
+        "faturamento": emitidas["valor_ativas"],  # vendas (emitidas ativas)
+        "total_geral": emitidas["total"] + recebidas["total"],
+    }
 
 
 @router.get("/empresa/{empresa_id}", response_model=list[DocumentoFiscalRead])

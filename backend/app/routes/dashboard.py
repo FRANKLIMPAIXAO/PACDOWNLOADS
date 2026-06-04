@@ -82,10 +82,21 @@ def resumo_dashboard(
     emp_sem_cert = sum(1 for e in empresas if e.ativo and not e.cert_a1_path)
 
     # --- Documentos do mes ---
+    # Separa EMITIDAS (saida — faturamento real) de RECEBIDAS (entrada).
+    # Faturamento = valor das emitidas ativas (o que a empresa vendeu).
     docs_q = select(
         func.count(DocumentoFiscal.id).label("total"),
         func.coalesce(func.sum(DocumentoFiscal.valor_total), 0).label("valor_total"),
-        func.sum(case((DocumentoFiscal.cancelada == True, 1), else_=0)).label("canceladas"),
+        func.sum(case((DocumentoFiscal.cancelada == True, 1), else_=0)).label("canceladas"),  # noqa: E712
+        # Emitidas (saida)
+        func.sum(case((DocumentoFiscal.origem == "emitida", 1), else_=0)).label("emitidas"),
+        func.sum(case((DocumentoFiscal.origem == "recebida", 1), else_=0)).label("recebidas"),
+        # Faturamento = emitidas ativas
+        func.coalesce(func.sum(case(
+            ((DocumentoFiscal.origem == "emitida") & (DocumentoFiscal.cancelada == False),  # noqa: E712
+             DocumentoFiscal.valor_total),
+            else_=0,
+        )), 0).label("faturamento"),
     ).where(
         DocumentoFiscal.data_emissao >= inicio_mes,
         DocumentoFiscal.data_emissao < fim_mes,
@@ -333,6 +344,10 @@ def resumo_dashboard(
             "valor_total": _decimal_to_float(docs_row.valor_total),
             "canceladas": int(docs_row.canceladas or 0),
             "geral_acumulado": total_geral,
+            # Novos campos: separação emitidas/recebidas + faturamento real
+            "emitidas": int(docs_row.emitidas or 0),
+            "recebidas": int(docs_row.recebidas or 0),
+            "faturamento": _decimal_to_float(docs_row.faturamento),
         },
         "manifestacao": {
             "pendentes": pendentes,

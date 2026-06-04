@@ -30,12 +30,15 @@ function DashboardContent() {
   const [ultimosDocumentos, setUltimosDocumentos] = useState<Documento[] | null>(null);
   const [linhasEmpresa, setLinhasEmpresa] = useState<LinhaPorEmpresa[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Mês de referência (YYYY-MM). Default = mês atual. Permite ver meses
+  // anteriores (ex: dados de maio quando estamos no começo de junho).
+  const [mesRef, setMesRef] = useState<string>(() => new Date().toISOString().slice(0, 7));
 
   useEffect(() => {
     // Carrega em paralelo, mas tolera falha parcial — se "por-empresa" der 404
     // (backend velho sem o endpoint novo), o dashboard ainda renderiza.
     Promise.allSettled([
-      resumoDashboard(),
+      resumoDashboard(mesRef),
       listarDocumentos({ cancelada: false }),
       listaPorEmpresa(),
     ]).then(([rResumo, rDocs, rEmp]) => {
@@ -57,7 +60,7 @@ function DashboardContent() {
         setLinhasEmpresa([]);
       }
     });
-  }, []);
+  }, [mesRef]);
 
   if (error) {
     return (
@@ -108,9 +111,20 @@ function DashboardContent() {
               {resumo.documentos_mes.geral_acumulado} documento{resumo.documentos_mes.geral_acumulado === 1 ? "" : "s"} sincronizado{resumo.documentos_mes.geral_acumulado === 1 ? "" : "s"} via DF-e.
             </p>
           </div>
-          <div className="page-actions">
-            <Link href="/empresas/novo" className="cta">+ Nova empresa</Link>
-            <Link href="/documentos" className="btn-secondary">Ver documentos</Link>
+          <div className="page-actions" style={{ flexDirection: "column", alignItems: "flex-end", gap: 8 }}>
+            <label style={{ display: "flex", flexDirection: "column", gap: 2, alignItems: "flex-end" }}>
+              <span className="muted" style={{ fontSize: 11 }}>Mês de referência</span>
+              <input
+                type="month"
+                value={mesRef}
+                onChange={(e) => { setResumo(null); setMesRef(e.target.value); }}
+                style={{ padding: "4px 8px", borderRadius: 6 }}
+              />
+            </label>
+            <div style={{ display: "flex", gap: 8 }}>
+              <Link href="/empresas/novo" className="cta">+ Nova empresa</Link>
+              <Link href="/documentos" className="btn-secondary">Ver documentos</Link>
+            </div>
           </div>
         </article>
       </section>
@@ -125,14 +139,18 @@ function DashboardContent() {
         <article className="metric metric--cyan">
           <span>NFes do mês</span>
           <strong>{resumo.documentos_mes.total}</strong>
-          <p>{resumo.documentos_mes.canceladas > 0
-            ? `${resumo.documentos_mes.canceladas} canceladas excluídas`
-            : "sem cancelamentos"}</p>
+          <p>
+            {resumo.documentos_mes.emitidas !== undefined
+              ? `⬆ ${resumo.documentos_mes.emitidas} emitidas · ⬇ ${resumo.documentos_mes.recebidas ?? 0} recebidas`
+              : (resumo.documentos_mes.canceladas > 0
+                  ? `${resumo.documentos_mes.canceladas} canceladas excluídas`
+                  : "sem cancelamentos")}
+          </p>
         </article>
         <article className="metric metric--violet">
           <span>Faturamento mês</span>
-          <strong>{formatBrl(resumo.documentos_mes.valor_total)}</strong>
-          <p>NFes recebidas (ativas)</p>
+          <strong>{formatBrl(resumo.documentos_mes.faturamento ?? resumo.documentos_mes.valor_total)}</strong>
+          <p>NFes emitidas (saída)</p>
         </article>
         <article
           className={

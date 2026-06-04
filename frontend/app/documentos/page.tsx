@@ -7,6 +7,7 @@ import { ProtectedRoute } from "../../components/protected-route";
 import { ApiError } from "../../lib/api";
 import {
   Documento,
+  DocumentosResumo,
   SincronizarFocusEmpresaResultado,
   SincronizarFocusMultiResultado,
   TipoDocumento,
@@ -19,6 +20,7 @@ import {
   listarDocumentos,
   manifestarDocumento,
   manifestarTodasEmpresa,
+  resumoDocumentos,
   sincronizarFocusEmpresa,
   sincronizarFocusMultiempresas,
   uploadEmMassa,
@@ -46,6 +48,10 @@ function DocumentosContent() {
   const [empresaId, setEmpresaId] = useState<number | "">("");
   const [tipo, setTipo] = useState<TipoDocumento | "">("");
   const [filtroCancelada, setFiltroCancelada] = useState<FiltroCancelada>("ativas");
+  // Aba entrada/saída: "" = todas, "emitida" = saída (robô SEFAZ),
+  // "recebida" = entrada (Focus DF-e).
+  const [filtroOrigem, setFiltroOrigem] = useState<"" | "emitida" | "recebida">("");
+  const [resumo, setResumo] = useState<DocumentosResumo | null>(null);
   // Filtro de datas — default: último mês
   const [dataInicio, setDataInicio] = useState<string>(() => {
     const d = new Date();
@@ -199,6 +205,7 @@ function DocumentosContent() {
       empresaId: empresaId || undefined,
       tipo: (tipo || undefined) as TipoDocumento | undefined,
       cancelada: cancFiltro,
+      origem: filtroOrigem || undefined,
       dataInicio: dataInicio || undefined,
       dataFim: dataFim || undefined,
     })
@@ -207,7 +214,15 @@ function DocumentosContent() {
         if (err instanceof ApiError) setError(err.message);
         else setError("Falha ao carregar documentos.");
       });
-  }, [empresaId, tipo, filtroCancelada, dataInicio, dataFim, refreshTick]);
+    // Totalizadores (emitidas/recebidas) — independem do filtro origem/cancelada
+    resumoDocumentos({
+      empresaId: empresaId || undefined,
+      dataInicio: dataInicio || undefined,
+      dataFim: dataFim || undefined,
+    })
+      .then(setResumo)
+      .catch(() => setResumo(null));
+  }, [empresaId, tipo, filtroCancelada, filtroOrigem, dataInicio, dataFim, refreshTick]);
 
   async function handleVerificarCanceladas() {
     setBusyId("verificar-cancel");
@@ -573,6 +588,70 @@ function DocumentosContent() {
       {toast ? <p className="toast">{toast}</p> : null}
       {error ? <p className="toast toast-error">{error}</p> : null}
 
+      {/* Totalizadores estilo Jettax: separação Emitidas (saída) × Recebidas (entrada) */}
+      {resumo ? (
+        <section
+          className="panel"
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+            gap: 12,
+            marginBottom: 8,
+          }}
+        >
+          <TotalCard
+            label="Faturamento (emitidas)"
+            value={formatBrl(resumo.faturamento)}
+            sub={`${resumo.emitidas.ativas} notas de saída`}
+            color="rgb(34,197,94)"
+          />
+          <TotalCard
+            label="Emitidas (saída)"
+            value={String(resumo.emitidas.total)}
+            sub={`${resumo.emitidas.canceladas} canceladas`}
+            color="rgb(59,130,246)"
+          />
+          <TotalCard
+            label="Recebidas (entrada)"
+            value={String(resumo.recebidas.total)}
+            sub={`${resumo.recebidas.canceladas} canceladas`}
+            color="rgb(168,85,247)"
+          />
+          <TotalCard
+            label="Total geral"
+            value={String(resumo.total_geral)}
+            sub="emitidas + recebidas"
+            color="rgb(148,163,184)"
+          />
+        </section>
+      ) : null}
+
+      {/* Abas Emitidas / Recebidas (filtro origem) */}
+      <section
+        className="panel"
+        style={{ display: "flex", gap: 6, padding: "8px 12px", marginBottom: 8 }}
+      >
+        {([
+          { id: "", label: "📑 Todas", n: resumo?.total_geral },
+          { id: "emitida", label: "⬆ Emitidas (saída)", n: resumo?.emitidas.total },
+          { id: "recebida", label: "⬇ Recebidas (entrada)", n: resumo?.recebidas.total },
+        ] as const).map((aba) => {
+          const ativa = filtroOrigem === aba.id;
+          return (
+            <button
+              key={aba.id || "todas"}
+              type="button"
+              className={ativa ? "btn-primary" : "btn-secondary"}
+              onClick={() => setFiltroOrigem(aba.id as "" | "emitida" | "recebida")}
+              style={{ fontSize: "0.85rem" }}
+            >
+              {aba.label}
+              {aba.n !== undefined ? ` (${aba.n})` : ""}
+            </button>
+          );
+        })}
+      </section>
+
       {documentos === null ? (
         <section className="panel"><p className="muted">Carregando documentos...</p></section>
       ) : documentos.length === 0 ? (
@@ -597,6 +676,36 @@ function DocumentosContent() {
         />
       )}
     </>
+  );
+}
+
+// ============ Card de totalizador ============
+
+function TotalCard({
+  label,
+  value,
+  sub,
+  color,
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+  color: string;
+}) {
+  return (
+    <div
+      style={{
+        background: "rgba(255,255,255,0.03)",
+        border: "1px solid rgba(255,255,255,0.06)",
+        borderRadius: 8,
+        padding: "12px 14px",
+        borderLeft: `3px solid ${color}`,
+      }}
+    >
+      <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>{label}</div>
+      <div style={{ fontSize: 22, fontWeight: 600, color }}>{value}</div>
+      {sub ? <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>{sub}</div> : null}
+    </div>
   );
 }
 

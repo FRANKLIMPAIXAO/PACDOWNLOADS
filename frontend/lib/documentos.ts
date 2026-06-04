@@ -61,11 +61,14 @@ export type ManifestacaoResultadoLote = {
   erros: number;
 };
 
+export type OrigemDocumento = "emitida" | "recebida";
+
 export function listarDocumentos(
   filtros: {
     empresaId?: number;
     tipo?: TipoDocumento;
     cancelada?: boolean;
+    origem?: OrigemDocumento;
     dataInicio?: string; // YYYY-MM-DD
     dataFim?: string;    // YYYY-MM-DD
   } = {},
@@ -76,10 +79,33 @@ export function listarDocumentos(
   if (filtros.cancelada !== undefined) {
     params.set("cancelada", filtros.cancelada ? "true" : "false");
   }
+  if (filtros.origem) params.set("origem", filtros.origem);
   if (filtros.dataInicio) params.set("data_inicio", filtros.dataInicio);
   if (filtros.dataFim) params.set("data_fim", filtros.dataFim);
   const suffix = params.toString() ? `?${params.toString()}` : "";
   return apiFetch<Documento[]>(`/api/v1/documentos${suffix}`);
+}
+
+// --- Totalizadores estilo Jettax (emitidas/saída vs recebidas/entrada) ---
+
+export type DocumentosResumo = {
+  emitidas: { total: number; valor_ativas: number; canceladas: number; ativas: number };
+  recebidas: { total: number; valor_ativas: number; canceladas: number; ativas: number };
+  faturamento: number;
+  total_geral: number;
+};
+
+export function resumoDocumentos(filtros: {
+  empresaId?: number;
+  dataInicio?: string;
+  dataFim?: string;
+} = {}) {
+  const params = new URLSearchParams();
+  if (filtros.empresaId) params.set("empresa_id", String(filtros.empresaId));
+  if (filtros.dataInicio) params.set("data_inicio", filtros.dataInicio);
+  if (filtros.dataFim) params.set("data_fim", filtros.dataFim);
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  return apiFetch<DocumentosResumo>(`/api/v1/documentos/resumo${suffix}`);
 }
 
 // --- Sincronização via Focus NFe (distribuição DF-e) ---
