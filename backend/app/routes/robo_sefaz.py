@@ -27,6 +27,52 @@ router = APIRouter(
 )
 
 
+@router.get("/debug-screenshot")
+def debug_screenshot(arquivo: str = Query(..., description="Nome do arquivo .png em /agent/sefaz-go/logs/debug/")):
+    """Serve um screenshot de debug salvo pelo agente SEFAZ-GO.
+
+    O agente salva PNGs em /agent/sefaz-go/logs/debug/ quando algo da errado
+    (ex: sem_docs_<cnpj>_<ts>.png quando o botao 'Baixar todos' nao aparece).
+    Esse endpoint serve a imagem pro usuario VER o que o SEFAZ-GO mostrou,
+    sem precisar SSH no container.
+
+    Protecao contra path traversal: so aceita nome de arquivo (sem barras) e
+    serve estritamente de dentro do diretorio debug.
+    """
+    from pathlib import Path
+    from fastapi.responses import FileResponse
+
+    # Path traversal: rejeita qualquer coisa com / ou ..
+    nome = Path(arquivo).name  # descarta qualquer diretorio embutido
+    if nome != arquivo or ".." in arquivo:
+        raise HTTPException(status_code=400, detail="Nome de arquivo invalido.")
+    if not nome.lower().endswith(".png"):
+        raise HTTPException(status_code=400, detail="So .png e servido aqui.")
+
+    # Tenta os caminhos possiveis do diretorio debug do agente
+    candidatos = [
+        Path("/agent/sefaz-go/logs/debug") / nome,
+        Path("/app/../agent/sefaz-go/logs/debug") / nome,
+    ]
+    for p in candidatos:
+        if p.exists():
+            return FileResponse(path=str(p), media_type="image/png", filename=nome)
+
+    # Lista o que tem no dir pra ajudar a debugar
+    debug_dir = Path("/agent/sefaz-go/logs/debug")
+    existentes = []
+    if debug_dir.exists():
+        existentes = sorted([f.name for f in debug_dir.glob("*.png")])[-20:]
+    raise HTTPException(
+        status_code=404,
+        detail={
+            "erro": f"Screenshot '{nome}' nao encontrado.",
+            "screenshots_disponiveis": existentes,
+            "dir_existe": debug_dir.exists(),
+        },
+    )
+
+
 @router.get("/diagnostico-redis")
 def diagnostico_redis() -> dict:
     """Testa conectividade Redis + estado do Celery de dentro do backend.
