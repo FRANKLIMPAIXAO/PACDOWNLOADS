@@ -6,6 +6,7 @@ import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useState } from 
 import { DataTable } from "../../components/data-table";
 import { MotorCalculoCard } from "../../components/motor-calculo-card";
 import { ProtectedRoute } from "../../components/protected-route";
+import { Rbt12Card } from "../../components/rbt12-card";
 import { ApiError } from "../../lib/api";
 import {
   Apuracao,
@@ -517,6 +518,10 @@ function NovaApuracaoForm({
           </div>
         ) : null}
       </section>
+
+      {empresaId ? (
+        <Rbt12Card empresaId={empresaId as number} anoMes={anoMes} />
+      ) : null}
 
       {modo === "auto" && empresaId ? (
         <MotorCalculoCard
