@@ -49,8 +49,12 @@ def debug_screenshot(arquivo: str = Query(..., description="Nome do arquivo .png
     if not nome.lower().endswith(".png"):
         raise HTTPException(status_code=400, detail="So .png e servido aqui.")
 
-    # Tenta os caminhos possiveis do diretorio debug do agente
+    # Tenta os caminhos possiveis do diretorio debug do agente. O 1o usa o
+    # MESMO dir que o service resolve (e o agente escreve) — robusto em prod.
+    from app.services.robo_sefaz_service import AGENT_LOGS
+    debug_dir = AGENT_LOGS / "debug"
     candidatos = [
+        debug_dir / nome,
         Path("/agent/sefaz-go/logs/debug") / nome,
         Path("/app/../agent/sefaz-go/logs/debug") / nome,
     ]
@@ -59,7 +63,6 @@ def debug_screenshot(arquivo: str = Query(..., description="Nome do arquivo .png
             return FileResponse(path=str(p), media_type="image/png", filename=nome)
 
     # Lista o que tem no dir pra ajudar a debugar
-    debug_dir = Path("/agent/sefaz-go/logs/debug")
     existentes = []
     if debug_dir.exists():
         existentes = sorted([f.name for f in debug_dir.glob("*.png")])[-20:]

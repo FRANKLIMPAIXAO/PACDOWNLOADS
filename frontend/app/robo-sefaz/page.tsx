@@ -11,8 +11,10 @@ import {
   DetalheEmpresa,
   ExecucaoRoboSefaz,
   ExecucaoRoboSefazDetail,
+  abrirDebugScreenshot,
   cancelarExecucao,
   dispararRobo,
+  printDoMotivo,
   reprocessarErros,
   formatarDuracao,
   formatarPeriodo,
@@ -576,6 +578,26 @@ function DetalhesExecucaoModal({
                     <td>{formatarDuracao(d.duracao_segundos)}</td>
                     <td>
                       <small>{d.motivo ?? "—"}</small>
+                      {printDoMotivo(d.motivo) ? (
+                        <>
+                          {" "}
+                          <button
+                            type="button"
+                            className="btn-ghost"
+                            style={{ padding: "2px 8px", fontSize: "0.78rem" }}
+                            onClick={async () => {
+                              try {
+                                await abrirDebugScreenshot(printDoMotivo(d.motivo)!);
+                              } catch (e) {
+                                alert(e instanceof Error ? e.message : "Falha ao abrir o print.");
+                              }
+                            }}
+                            title="Ver o que o portal SEFAZ-GO mostrou quando falhou"
+                          >
+                            📷 Ver print
+                          </button>
+                        </>
+                      ) : null}
                     </td>
                   </tr>
                 ))}

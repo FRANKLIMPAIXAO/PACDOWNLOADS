@@ -105,6 +105,34 @@ export function reprocessarErros(id: number) {
   );
 }
 
+/** Extrai o nome do .png de debug de dentro do `motivo` de uma falha. */
+export function printDoMotivo(motivo: string | null | undefined): string | null {
+  if (!motivo) return null;
+  const m = motivo.match(/([A-Za-z0-9_.-]+\.png)/);
+  return m ? m[1] : null;
+}
+
+/** Abre (com token) o screenshot que o agente salvou quando uma empresa falhou. */
+export async function abrirDebugScreenshot(arquivo: string): Promise<void> {
+  const base = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+  const token = typeof window !== "undefined"
+    ? window.localStorage.getItem("pac_xml_token") : null;
+  const r = await fetch(
+    `${base}/api/v1/robo-sefaz/debug-screenshot?arquivo=${encodeURIComponent(arquivo)}`,
+    { headers: token ? { Authorization: `Bearer ${token}` } : {} },
+  );
+  if (!r.ok) throw new Error(`Falha ${r.status} ao abrir o print (pode ter sido limpo do disco)`);
+  const blob = await r.blob();
+  const url = URL.createObjectURL(blob);
+  const w = window.open(url, "_blank");
+  if (!w) {
+    const a = document.createElement("a");
+    a.href = url; a.download = arquivo;
+    document.body.appendChild(a); a.click(); a.remove();
+  }
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
 // Helpers de UI ------------------------------------------------------
 
 export function statusPillClass(status: StatusExecucao): string {
