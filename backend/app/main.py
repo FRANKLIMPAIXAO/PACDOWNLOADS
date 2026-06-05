@@ -28,7 +28,7 @@ settings = get_settings()
 # BUILD_COMMIT no build (commit fica "unknown"), este é o sinal confiável pra
 # saber, via GET /version, se o deploy pegou o código novo (cache stale é
 # recorrente). Formato livre: AAAA-MM-DD + resumo curto.
-APP_BUILD_TAG = "2026-06-05-robo-retry-zumbi"
+APP_BUILD_TAG = "2026-06-05-dedup-chave"
 
 
 @asynccontextmanager

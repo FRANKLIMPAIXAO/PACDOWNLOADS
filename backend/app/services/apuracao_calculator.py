@@ -172,8 +172,31 @@ class ApuracaoCalculator:
         mes = int(ano_mes[4:])
         documentos = self._documentos_da_competencia(empresa.id, ano, mes)
 
+        # Dedup por chave de acesso: a MESMA NFe pode ter virado 2 linhas
+        # (importada por mais de uma via, ou com tipo_documento diferente),
+        # o que DOBRA o valor dela na receita. Conta cada chave de 44 dígitos
+        # UMA vez. Notas sem chave (ex.: NFSe) não são afetadas.
+        _vistos: set[str] = set()
+        _unicos: list[DocumentoFiscal] = []
+        _dups = 0
+        for _doc in documentos:
+            _chave = (_doc.chave_acesso or "").strip()
+            if _chave and _chave in _vistos:
+                _dups += 1
+                continue
+            if _chave:
+                _vistos.add(_chave)
+            _unicos.append(_doc)
+        documentos = _unicos
+
         analises: list[DocumentoAnalise] = []
         avisos: list[str] = []
+        if _dups:
+            avisos.append(
+                f"{_dups} documento(s) DUPLICADO(S) (mesma chave de acesso) "
+                "ignorado(s) — a mesma NFe estava contada mais de uma vez. "
+                "Receita contabilizada uma única vez."
+            )
 
         for doc in documentos:
             try:
