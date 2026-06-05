@@ -31,3 +31,8 @@ playwright-stealth==2.0.3
 # --- brazilfiscalreport: geração de DANFE PDF local a partir de XML ---
 # Usado em /documentos/{id}/pdf quando documento é saída e Focus não tem PDF
 brazilfiscalreport==0.7.7
+
+# --- pdfplumber: extrair texto do PDF da PGDAS-D (Serpro só devolve PDF) ---
+# Usado em receita_mensal_service.puxar_da_receita pra ler a receita bruta
+# de cada declaração e preencher o RBT12 (12 meses anteriores).
+pdfplumber==0.11.9

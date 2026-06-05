@@ -10,6 +10,9 @@ faturamento dos meses anteriores precisa ser informado:
 """
 from __future__ import annotations
 
+import base64
+import io
+import re
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
@@ -58,6 +61,73 @@ def _truncar(obj: Any, _prof: int = 0):
     if isinstance(obj, str) and len(obj) > 80:
         return obj[:80] + "...(truncado)"
     return obj
+
+
+# --- Leitura do PDF da PGDAS-D (Serpro só devolve PDF, sem campo estruturado) ---
+
+_BRL_RE = re.compile(r"(\d{1,3}(?:\.\d{3})*,\d{2})")
+
+
+def _brl_para_float(s: str) -> float:
+    """'5.701,00' -> 5701.0"""
+    try:
+        return float(s.replace(".", "").replace(",", "."))
+    except (ValueError, AttributeError):
+        return 0.0
+
+
+def _pdf_para_texto(pdf_b64: str | None) -> str:
+    """Decodifica o PDF base64 e extrai todo o texto. '' se falhar."""
+    if not pdf_b64:
+        return ""
+    try:
+        import pdfplumber  # import tardio: só carrega quando realmente usa
+
+        raw = base64.b64decode(pdf_b64)
+        partes: list[str] = []
+        with pdfplumber.open(io.BytesIO(raw)) as pdf:
+            for page in pdf.pages:
+                partes.append(page.extract_text() or "")
+        return "\n".join(partes)
+    except Exception:
+        return ""
+
+
+def _valor_proximo(texto: str, palavras: tuple[str, ...], janela: int = 160) -> float:
+    """Acha a 1ª ocorrência de qualquer `palavra` (lowercase) e devolve o 1º
+    valor em formato BRL que aparece logo depois (dentro de `janela` chars).
+    0.0 se não achar."""
+    low = texto.lower()
+    melhor_pos = -1
+    for p in palavras:
+        pos = low.find(p)
+        if pos != -1 and (melhor_pos == -1 or pos < melhor_pos):
+            melhor_pos = pos
+            achou_p = p
+    if melhor_pos == -1:
+        return 0.0
+    trecho = texto[melhor_pos: melhor_pos + len(achou_p) + janela]
+    m = _BRL_RE.search(trecho)
+    return _brl_para_float(m.group(1)) if m else 0.0
+
+
+def _extrair_receitas_pdf(texto: str) -> tuple[float, float]:
+    """Extrai (receita_interna, receita_externa) do texto da PGDAS-D.
+
+    Best-effort: tenta rótulos comuns do recibo/declaração. A 1ª rodada serve
+    de calibração — o texto cru vai no debug pra ajustar os rótulos exatos.
+    """
+    if not texto:
+        return 0.0, 0.0
+    interno = _valor_proximo(texto, (
+        "mercado interno", "receita bruta do pa", "receita bruta interna",
+        "receita bruta de mercado interno", "rpa",
+    ))
+    externo = _valor_proximo(texto, (
+        "mercado externo", "receita bruta externa", "exportação", "exportacao",
+        "receita bruta de mercado externo",
+    ))
+    return interno, externo
 
 
 def meses_anteriores(ano_mes: str, n: int = 12) -> list[str]:
@@ -196,19 +266,29 @@ class ReceitaMensalService:
                         empresa.cnpj, numero_declaracao=num,
                     )
                     dd = parse_dados(det)
+                    # O Serpro devolve a declaração como PDF (recibo + declaração).
+                    # Extrai o texto dos dois e parseia a receita bruta.
+                    texto_pdf = ""
+                    if isinstance(dd, dict):
+                        for chave_pdf in ("declaracao", "recibo"):
+                            bloco = dd.get(chave_pdf)
+                            if isinstance(bloco, dict) and bloco.get("pdf"):
+                                texto_pdf += "\n" + _pdf_para_texto(bloco["pdf"])
                     if debug_raw is None:
-                        # Guarda chaves da 1ª resposta pra mapear os campos certos
+                        # 1ª resposta: guarda o texto cru do PDF pra calibrar os
+                        # rótulos exatos do layout Serpro.
                         debug_raw = {
                             "competencia": am,
                             "chaves_topo": list(dd.keys()) if isinstance(dd, dict) else str(type(dd)),
-                            "amostra": _truncar(dd),
+                            "tem_texto_pdf": bool(texto_pdf.strip()),
+                            "texto_pdf_amostra": texto_pdf[:3500],
                         }
-                    # Busca recursiva por campos de receita interna/externa
-                    valor_interno = _achar_receita(dd, ("interno", "interna", "receitabruta", "valorreceita"))
-                    valor_externo = _achar_receita(dd, ("externo", "externa", "exporta"))
+                    valor_interno, valor_externo = _extrair_receitas_pdf(texto_pdf)
                     achou = (valor_interno + valor_externo) > 0
                 except IntegraContadorError as exc:
                     erros.append(f"{am}: {exc}")
+                except Exception as exc:  # noqa: BLE001 — leitura de PDF best-effort
+                    erros.append(f"{am}: falha ao ler PDF da declaração: {exc}")
             if achou:
                 self._upsert(empresa_id, am, valor_interno, valor_externo, "receita")
             resultado_meses.append({
