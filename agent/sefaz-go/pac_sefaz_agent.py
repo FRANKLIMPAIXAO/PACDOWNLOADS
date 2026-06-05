@@ -868,7 +868,29 @@ async def processar_empresa(
                 continue
 
         if not achou:
-            # Salva screenshot + HTML pra debug
+            # Fallback #88: o motivo nº1 de "Baixar todos" não aparecer é
+            # simplesmente NÃO TER NOTAS no período. O check de "Sem Resultados"
+            # anterior exige 2+ ocorrências (banner+tabela); às vezes o portal
+            # mostra só 1 e escapa. Antes de chamar de ERRO, re-checa o texto —
+            # se houver "sem resultados", classifica como SEM NOTAS (não erro).
+            try:
+                tem_sem_result = await page.evaluate(
+                    "() => /sem\\s+resultados/i.test(document.body.innerText || '')"
+                )
+            except Exception:
+                tem_sem_result = False
+            if tem_sem_result:
+                log.info(
+                    "'Baixar todos' ausente + texto 'Sem Resultados' presente "
+                    "→ período sem notas (não é erro)",
+                )
+                log_evento("sem_resultados_fallback", cnpj=empresa.cnpj)
+                res.sucesso = True
+                res.sem_resultados = True
+                res.motivo = "Período sem documentos no portal SEFAZ-GO"
+                return res
+
+            # Senão: erro real (selector pode ter mudado). Salva debug pra auditar.
             DEBUG_DIR = LOG_DIR / "debug"
             DEBUG_DIR.mkdir(parents=True, exist_ok=True)
             ts = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -881,8 +903,8 @@ async def processar_empresa(
             except Exception:
                 pass
             res.motivo = (
-                "Botão 'Baixar todos os arquivos' não apareceu. "
-                f"Pode ser: (a) sem NFes no período, (b) selector mudou. Veja {screenshot}"
+                "Botão 'Baixar todos os arquivos' não apareceu e sem texto "
+                f"'Sem Resultados'. Selector pode ter mudado. Veja {screenshot}"
             )
             log.warning(res.motivo)
             log_evento("sem_documentos", cnpj=empresa.cnpj, screenshot=str(screenshot))
@@ -1321,29 +1343,65 @@ async def main_async(args: argparse.Namespace) -> int:
         log.info("Vai processar %d empresa(s)", len(empresas))
 
         resultados: list[ResultadoEmpresa] = []
+        # Nº de tentativas por empresa. A maioria dos erros (botão de cert não
+        # encontrado, form não carregou) é Cloudflare/portal lento TRANSITÓRIO —
+        # uma 2ª tentativa com context novo costuma resolver. Configurável.
+        max_tentativas = max(1, int(os.getenv("SEFAZ_MAX_TENTATIVAS", "2")))
         async with async_playwright() as pw:
             for emp in empresas:
                 log.info(
                     "==== Empresa %d: %s (%s) ====",
                     emp.id, emp.razao_social, emp.cnpj,
                 )
-                try:
-                    cert = pac.baixar_certificado(emp.id, CERT_DIR)
-                except Exception as exc:
-                    log.error("Falha ao baixar cert da empresa %d: %s", emp.id, exc)
+                # Download do cert com retry — em batch o backend (que roda o
+                # próprio agente em modo eager) fica ocupado e o cert às vezes
+                # dá "timed out" na 1ª. 2 tentativas com backoff curto.
+                cert = None
+                erro_cert: Exception | None = None
+                for tent_cert in range(1, 3):
+                    try:
+                        cert = pac.baixar_certificado(emp.id, CERT_DIR)
+                        break
+                    except Exception as exc:
+                        erro_cert = exc
+                        log.warning(
+                            "Cert empresa %d falhou (tentativa %d/2): %s",
+                            emp.id, tent_cert, exc,
+                        )
+                        if tent_cert < 2:
+                            await asyncio.sleep(4)
+                if cert is None:
+                    log.error("Falha ao baixar cert da empresa %d: %s", emp.id, erro_cert)
                     resultados.append(ResultadoEmpresa(
                         empresa_id=emp.id, cnpj=emp.cnpj,
                         razao_social=emp.razao_social, sucesso=False,
-                        motivo=f"cert_indisponivel: {exc}",
+                        motivo=f"cert_indisponivel: {erro_cert}",
                     ))
                     continue
 
                 try:
-                    res = await processar_empresa(
-                        pw, emp, cert, janela, DOWNLOAD_DIR, headless=headless,
-                    )
+                    # Retry da empresa inteira: context novo a cada tentativa
+                    # dribla o estado de Cloudflare/portal lento.
+                    res: ResultadoEmpresa | None = None
+                    for tentativa in range(1, max_tentativas + 1):
+                        res = await processar_empresa(
+                            pw, emp, cert, janela, DOWNLOAD_DIR, headless=headless,
+                        )
+                        if res.sucesso or res.sem_resultados:
+                            if tentativa > 1 and res.sucesso and not res.sem_resultados:
+                                res.motivo = (
+                                    f"OK na {tentativa}ª tentativa "
+                                    "(1ª falhou por portal lento/Cloudflare)"
+                                )
+                            break
+                        if tentativa < max_tentativas:
+                            log.warning(
+                                "Empresa %s falhou (tentativa %d/%d): %s — retry em 8s",
+                                emp.cnpj, tentativa, max_tentativas, res.motivo,
+                            )
+                            await asyncio.sleep(8)
                     # Upload pro PAC se baixou
-                    if res.sucesso and res.zip_path and not args.dry_run:
+                    if res and res.sucesso and res.zip_path and not args.dry_run:
                         try:
                             res.upload_pac = pac.upload_em_massa(
                                 Path(res.zip_path), empresa_id_fallback=emp.id,
@@ -1361,7 +1419,8 @@ async def main_async(args: argparse.Namespace) -> int:
                         except Exception as exc:
                             log.error("Falha upload PAC: %s", exc)
                             log_evento("upload_pac_erro", cnpj=emp.cnpj, erro=str(exc))
-                    resultados.append(res)
+                    if res is not None:
+                        resultados.append(res)
                 finally:
                     # Limpa cert temporário
                     try:
