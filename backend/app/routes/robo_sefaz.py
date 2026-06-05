@@ -251,3 +251,22 @@ def disparar_robo(
             ),
         )
     return ExecucaoRoboSefazRead.model_validate(execucao)
+
+
+@router.post("/execucoes/{execucao_id}/cancelar", response_model=ExecucaoRoboSefazRead)
+def cancelar_execucao(
+    execucao_id: int,
+    db: Session = Depends(get_db),
+) -> ExecucaoRoboSefazRead:
+    """Cancela uma execução presa em pendente/rodando (marca como erro).
+
+    Útil quando uma execução fica "zumbi" — ex.: o backend reiniciou (deploy)
+    no meio e a thread daemon do robô morreu, deixando a linha eternamente em
+    'Rodando'. Idempotente: se já terminou, devolve a linha sem alterar.
+    """
+    servico = RoboSefazService(db)
+    try:
+        execucao = servico.cancelar(execucao_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return ExecucaoRoboSefazRead.model_validate(execucao)

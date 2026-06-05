@@ -42,6 +42,15 @@ async def lifespan(_: FastAPI):
                 )
             )
             db.commit()
+        # Recupera execuções do robô SEFAZ presas em 'rodando'/'pendente' — em
+        # modo eager a thread morre junto com o processo no restart (deploy),
+        # deixando a linha zumbi. Finaliza como erro pra não ficar eterna.
+        try:
+            from app.services.robo_sefaz_service import RoboSefazService
+            RoboSefazService(db).recuperar_execucoes_zumbis()
+        except Exception:  # noqa: BLE001 — nunca bloquear a subida do app por isso
+            import logging
+            logging.getLogger(__name__).exception("Falha ao recuperar execuções zumbis do robô")
         yield
     finally:
         db.close()

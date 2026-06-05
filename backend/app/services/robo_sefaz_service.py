@@ -263,6 +263,70 @@ class RoboSefazService:
         return self.db.get(ExecucaoRoboSefaz, execucao_id)
 
     # ------------------------------------------------------------------
+    # Cancelamento manual / recuperação de zumbis
+    # ------------------------------------------------------------------
+    def cancelar(self, execucao_id: int) -> ExecucaoRoboSefaz:
+        """Marca uma execução presa em pendente/rodando como erro.
+
+        Usado pelo botão "Cancelar" quando uma execução fica zumbi (ex.: o
+        backend reiniciou no meio e a thread daemon morreu, deixando a linha
+        eternamente em 'rodando'). Idempotente: se já terminou, é no-op.
+        """
+        execucao = self.db.get(ExecucaoRoboSefaz, execucao_id)
+        if execucao is None:
+            raise ValueError(f"Execução {execucao_id} não encontrada")
+        if execucao.status in {"concluido", "erro"}:
+            return execucao  # já finalizada — nada a fazer
+        execucao.status = "erro"
+        execucao.finalizado_em = self._now_compatible_with(execucao.iniciado_em)
+        execucao.motivo_erro = (
+            "Cancelada manualmente — estava presa em "
+            f"'{execucao.status}'. Provável reinício do backend (deploy) "
+            "matou a thread do robô no meio da execução."
+        )[:1000]
+        self.db.commit()
+        self.db.refresh(execucao)
+        return execucao
+
+    def recuperar_execucoes_zumbis(self) -> int:
+        """Finaliza execuções presas em pendente/rodando ao subir o backend.
+
+        Em modo eager (CELERY_TASK_ALWAYS_EAGER=true) o robô roda numa thread
+        daemon DENTRO do backend. Quando o processo reinicia (deploy/restart),
+        a thread morre, mas a linha fica presa em 'rodando' pra sempre — não há
+        worker externo pra finalizá-la. Na subida do app, marcamos essas órfãs
+        como erro pra não ficarem "Rodando" eternamente.
+
+        Só roda em modo eager. Em produção com Celery worker separado, um
+        restart do backend NÃO mata o worker, então uma execução 'rodando' pode
+        legitimamente continuar — nesse caso não mexemos.
+        """
+        from app.config import get_settings
+
+        if not get_settings().celery_task_always_eager:
+            return 0
+
+        presas = list(self.db.scalars(
+            select(ExecucaoRoboSefaz).where(
+                ExecucaoRoboSefaz.status.in_(["pendente", "rodando"]),
+            )
+        ).all())
+        for ex in presas:
+            ex.status = "erro"
+            ex.finalizado_em = self._now_compatible_with(ex.iniciado_em)
+            ex.motivo_erro = (
+                "Interrompida por reinício do backend (deploy/restart). A thread "
+                "do robô em modo eager morre junto com o processo. Dispare de novo."
+            )[:1000]
+        if presas:
+            self.db.commit()
+            logger.warning(
+                "recuperar_execucoes_zumbis: %d execução(ões) presas finalizadas como erro: %s",
+                len(presas), [e.id for e in presas],
+            )
+        return len(presas)
+
+    # ------------------------------------------------------------------
     # Helpers privados
     # ------------------------------------------------------------------
     @staticmethod

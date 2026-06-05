@@ -89,6 +89,14 @@ export function dispararRobo(payload?: DispararPayload) {
   });
 }
 
+/** Cancela uma execução presa em pendente/rodando (marca como erro). */
+export function cancelarExecucao(id: number) {
+  return apiFetch<ExecucaoRoboSefaz>(
+    `/api/v1/robo-sefaz/execucoes/${id}/cancelar`,
+    { method: "POST" },
+  );
+}
+
 // Helpers de UI ------------------------------------------------------
 
 export function statusPillClass(status: StatusExecucao): string {

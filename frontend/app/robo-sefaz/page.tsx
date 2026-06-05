@@ -11,6 +11,7 @@ import {
   DetalheEmpresa,
   ExecucaoRoboSefaz,
   ExecucaoRoboSefazDetail,
+  cancelarExecucao,
   dispararRobo,
   formatarDuracao,
   formatarPeriodo,
@@ -208,6 +209,31 @@ function RoboSefazContent() {
     }
   }
 
+  async function handleCancelar(id: number) {
+    const ok = confirm(
+      `Cancelar a execução #${id}?\n\n` +
+      "Use isso quando ela ficou presa em 'Rodando' (ex.: o backend reiniciou " +
+      "no meio e a thread do robô morreu). Marca como erro pra liberar o " +
+      "histórico. Não interrompe um robô que esteja realmente baixando notas.",
+    );
+    if (!ok) return;
+    setBusy(`cancelar-${id}`);
+    setErro(null);
+    try {
+      await cancelarExecucao(id);
+      setToast(`Execução #${id} cancelada (marcada como erro).`);
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+      await carregar();
+    } catch (e) {
+      setErro(e instanceof ApiError ? e.message : "Falha ao cancelar execução");
+    } finally {
+      setBusy(null);
+    }
+  }
+
   const headers = [
     "ID",
     "Disparo",
@@ -236,14 +262,26 @@ function RoboSefazContent() {
       e.erros > 0 ? <strong key={`err-${e.id}`}>{e.erros}</strong> : 0,
       e.persistidos,
       formatarDuracao(e.duracao_segundos),
-      <button
-        key={`btn-${e.id}`}
-        className="btn-ghost"
-        onClick={() => handleVerDetalhes(e.id)}
-        disabled={busy !== null}
-      >
-        Detalhes
-      </button>,
+      <span key={`acoes-${e.id}`} style={{ display: "inline-flex", gap: 6 }}>
+        <button
+          className="btn-ghost"
+          onClick={() => handleVerDetalhes(e.id)}
+          disabled={busy !== null}
+        >
+          Detalhes
+        </button>
+        {e.status === "rodando" || e.status === "pendente" ? (
+          <button
+            className="btn-ghost"
+            style={{ color: "rgb(248,113,113)" }}
+            onClick={() => handleCancelar(e.id)}
+            disabled={busy !== null}
+            title="Cancelar execução presa em Rodando"
+          >
+            {busy === `cancelar-${e.id}` ? "..." : "Cancelar"}
+          </button>
+        ) : null}
+      </span>,
     ]) ?? [];
 
   return (
