@@ -24,6 +24,12 @@ from app.services.auth_service import hash_password
 
 settings = get_settings()
 
+# Marcador de build — BUMP a cada deploy importante. Como o Easypanel não passa
+# BUILD_COMMIT no build (commit fica "unknown"), este é o sinal confiável pra
+# saber, via GET /version, se o deploy pegou o código novo (cache stale é
+# recorrente). Formato livre: AAAA-MM-DD + resumo curto.
+APP_BUILD_TAG = "2026-06-05-robo-retry-zumbi"
+
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
@@ -107,6 +113,7 @@ def version() -> dict:
 
     return {
         "app": settings.app_name,
+        "build_tag": APP_BUILD_TAG,
         "commit": commit,
         "build_date": build_date,
         "mock_provider": settings.use_mock_focus_nfe,
