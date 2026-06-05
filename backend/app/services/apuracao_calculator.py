@@ -93,6 +93,10 @@ class DocumentoAnalise:
     cfops: list[str] = field(default_factory=list)
     itens: list[ItemAnalisado] = field(default_factory=list)
     motivo_zero: str | None = None
+    # True = nota EMITIDA pela empresa (venda/receita). False = RECEBIDA (compra).
+    # Decidido pela emissão (origem/CNPJ), NÃO pelo CFOP — numa compra o CFOP é
+    # o de venda do fornecedor e enganaria o motor.
+    eh_emitida: bool = True
 
 
 @dataclass
@@ -201,6 +205,7 @@ class ApuracaoCalculator:
         for doc in documentos:
             try:
                 analise = self._analisar_documento(doc)
+                analise.eh_emitida = self._eh_emitida(doc, empresa)
                 analises.append(analise)
             except Exception as exc:
                 avisos.append(f"Doc #{doc.id} ({doc.chave_acesso[:10]}...) ignorado: {exc}")
@@ -226,6 +231,13 @@ class ApuracaoCalculator:
                 )
 
         for a in analises:
+            # SÓ EMITIDAS são receita da empresa. Uma RECEBIDA (compra) carrega
+            # o CFOP de VENDA do fornecedor — classificar por CFOP contaria a
+            # compra como nossa receita (era o bug: 10 compras viravam "saídas"
+            # e inflavam de 5.702 pra 9.265). Exceção: devolução de venda
+            # (recebida que SUBTRAI da receita).
+            if not a.eh_emitida and a.natureza_predominante != "DEVOLUCAO_VENDA":
+                continue
             if a.natureza_predominante == "SERVICO":
                 total_servicos += a.valor_nota
                 continue
@@ -322,8 +334,8 @@ class ApuracaoCalculator:
             empresa_nome=empresa.razao_social,
             ano_mes=ano_mes,
             total_docs=len(analises),
-            saidas=sum(1 for a in analises if a.direcao == "SAIDA"),
-            entradas=sum(1 for a in analises if a.direcao == "ENTRADA"),
+            saidas=sum(1 for a in analises if a.eh_emitida),
+            entradas=sum(1 for a in analises if not a.eh_emitida),
             docs_ignorados=sum(1 for a in analises if a.afeta_receita == 0),
             total_normal=total_normal_liquido.quantize(Decimal("0.01")),
             total_monofasico=total_monofasico.quantize(Decimal("0.01")),
@@ -377,6 +389,31 @@ class ApuracaoCalculator:
         return apur
 
     # --- Helpers ---
+
+    @staticmethod
+    def _so_digitos(valor: str | None) -> str:
+        return "".join(c for c in (valor or "") if c.isdigit())
+
+    def _eh_emitida(self, doc: DocumentoFiscal, empresa: Empresa) -> bool:
+        """A nota é EMITIDA pela empresa (venda/receita) ou RECEBIDA (compra)?
+
+        Fonte da verdade = quem EMITIU a nota, NÃO o CFOP (numa compra o CFOP é
+        o de venda do fornecedor e enganaria a classificação).
+
+        1) Se temos o CNPJ do emitente: é emitida quando o emitente é EXATAMENTE
+           a própria empresa (14 dígitos). CNPJ diferente = nota recebida
+           (compra) — mesmo de empresa do mesmo grupo, compra não é receita.
+        2) Sem CNPJ do emitente: usa o campo `origem` ('emitida'/'recebida')
+           gravado na importação (robô = emitida, Focus distribuição = recebida).
+        """
+        emit = self._so_digitos(doc.cnpj_emitente)
+        emp = self._so_digitos(empresa.cnpj)
+        if emit and emp:
+            return emit == emp
+        origem = (doc.origem or "").strip().lower()
+        if origem in ("emitida", "recebida"):
+            return origem == "emitida"
+        return True  # sem info → mantém comportamento antigo (assume emitida)
 
     def _anexo_padrao_por_atividade(self, empresa: Empresa) -> str:
         atividade = (empresa.atividade or "").upper()
