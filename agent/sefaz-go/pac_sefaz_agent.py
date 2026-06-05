@@ -1336,6 +1336,12 @@ async def main_async(args: argparse.Namespace) -> int:
         empresas = pac.listar_empresas(somente_com_cert=True)
         if args.empresa:
             empresas = [e for e in empresas if e.id == args.empresa]
+        elif getattr(args, "empresas", None):
+            ids_alvo = {
+                int(x) for x in args.empresas.split(",") if x.strip().isdigit()
+            }
+            empresas = [e for e in empresas if e.id in ids_alvo]
+            log.info("Reprocessando subconjunto: %d empresa(s) %s", len(empresas), sorted(ids_alvo))
         if not empresas:
             log.error("Nenhuma empresa elegível (ativa + com cert A1).")
             return 1
@@ -1465,6 +1471,10 @@ async def main_async(args: argparse.Namespace) -> int:
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="PAC SEFAZ-GO Agent")
     p.add_argument("--empresa", type=int, help="Processa só essa empresa (id PAC)")
+    p.add_argument(
+        "--empresas", type=str,
+        help="Lista de ids separados por vírgula (ex.: 6,12,30) — reprocessa só esses",
+    )
     p.add_argument("--periodo", type=str, help="YYYY-MM (default: mês anterior)")
     p.add_argument("--headed", action="store_true", help="Mostra browser (debug)")
     p.add_argument("--dry-run", action="store_true", help="Não envia ZIP pro PAC")

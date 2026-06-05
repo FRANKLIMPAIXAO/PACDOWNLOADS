@@ -98,11 +98,16 @@ class RoboSefazService:
     # ------------------------------------------------------------------
     # Execução síncrona (Celery task chama isso)
     # ------------------------------------------------------------------
-    def executar(self, execucao_id: int) -> ExecucaoRoboSefaz:
+    def executar(
+        self, execucao_id: int, *, empresa_ids: list[int] | None = None,
+    ) -> ExecucaoRoboSefaz:
         """Roda o subprocess do agente e atualiza a linha conforme resultado.
 
         Bloqueia até o agente terminar (timeout configurável). Não deve ser
         chamado direto pelo request HTTP — usar via Celery task assíncrona.
+
+        `empresa_ids` (opcional) restringe a execução a um subconjunto — usado
+        pelo "Reprocessar os que deram erro" (re-roda só as que falharam).
         """
         execucao = self.db.get(ExecucaoRoboSefaz, execucao_id)
         if execucao is None:
@@ -126,7 +131,9 @@ class RoboSefazService:
             "python", str(AGENT_SCRIPT),
             "--periodo", periodo_arg,
         ]
-        if execucao.empresa_id:
+        if empresa_ids:
+            cmd.extend(["--empresas", ",".join(str(i) for i in empresa_ids)])
+        elif execucao.empresa_id:
             cmd.extend(["--empresa", str(execucao.empresa_id)])
 
         # Em produção sempre headless; deixar variavel HEADLESS=true no .env do agent
@@ -261,6 +268,21 @@ class RoboSefazService:
 
     def obter(self, execucao_id: int) -> ExecucaoRoboSefaz | None:
         return self.db.get(ExecucaoRoboSefaz, execucao_id)
+
+    @staticmethod
+    def empresas_com_erro(execucao: ExecucaoRoboSefaz) -> list[int]:
+        """IDs das empresas que FALHARAM na execução (pra reprocessar).
+
+        Lê o `detalhes` (resumo por empresa do agente). 'Sem notas' tem
+        sucesso=True → não entra. Só conta sucesso=False com empresa_id.
+        """
+        ids: list[int] = []
+        for d in (execucao.detalhes or []):
+            if isinstance(d, dict) and not d.get("sucesso") and d.get("empresa_id"):
+                eid = d["empresa_id"]
+                if eid not in ids:
+                    ids.append(int(eid))
+        return ids
 
     # ------------------------------------------------------------------
     # Cancelamento manual / recuperação de zumbis

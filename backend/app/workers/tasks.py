@@ -99,16 +99,21 @@ def executar_robo_sefaz_mensal(empresa_id: int | None = None) -> dict:
 
 
 @celery_app.task(name="app.workers.tasks.executar_robo_sefaz_manual")
-def executar_robo_sefaz_manual(execucao_id: int) -> dict:
+def executar_robo_sefaz_manual(
+    execucao_id: int, empresa_ids: list[int] | None = None,
+) -> dict:
     """Continua execução manual já criada via rota POST /robo-sefaz/disparar.
 
     A linha já foi inserida com `disparo='manual'` antes do enqueue — aqui
     só roda o subprocess e atualiza.
+
+    `empresa_ids` (opcional) restringe a um subconjunto — usado pelo
+    "Reprocessar os que deram erro".
     """
     db = SessionLocal()
     try:
         servico = RoboSefazService(db)
-        resultado = servico.executar(execucao_id)
+        resultado = servico.executar(execucao_id, empresa_ids=empresa_ids)
         return {
             "execucao_id": resultado.id,
             "status": resultado.status,

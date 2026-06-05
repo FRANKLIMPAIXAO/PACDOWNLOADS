@@ -253,6 +253,67 @@ def disparar_robo(
     return ExecucaoRoboSefazRead.model_validate(execucao)
 
 
+@router.post("/execucoes/{execucao_id}/reprocessar-erros", response_model=ExecucaoRoboSefazRead, status_code=202)
+def reprocessar_erros(
+    execucao_id: int,
+    db: Session = Depends(get_db),
+) -> ExecucaoRoboSefazRead:
+    """Cria uma nova execução SÓ com as empresas que falharam na execução dada.
+
+    Lê os erros do `detalhes`, monta uma execução manual restrita a esses ids,
+    mesmo período, e dispara. Resolve o caso "rodou tudo, sobraram X erros de
+    portal lento/Cloudflare — re-roda só esses sem refazer a carteira".
+    """
+    from app.config import get_settings
+    from app.workers.tasks import executar_robo_sefaz_manual
+
+    servico = RoboSefazService(db)
+    origem = servico.obter(execucao_id)
+    if not origem:
+        raise HTTPException(status_code=404, detail="Execução não encontrada")
+    ids = servico.empresas_com_erro(origem)
+    if not ids:
+        raise HTTPException(
+            status_code=400,
+            detail="Nenhuma empresa com erro nessa execução pra reprocessar.",
+        )
+
+    nova = servico.criar_execucao(
+        disparo="manual",
+        periodo_inicio=origem.periodo_inicio,
+        periodo_fim=origem.periodo_fim,
+        empresa_id=None,
+        uf=origem.uf,
+    )
+    nova_id = nova.id
+
+    if get_settings().celery_task_always_eager:
+        import threading
+        threading.Thread(
+            target=executar_robo_sefaz_manual,
+            args=(nova_id, ids),
+            daemon=True,
+        ).start()
+        return ExecucaoRoboSefazRead.model_validate(nova)
+
+    try:
+        executar_robo_sefaz_manual.delay(nova_id, ids)
+    except Exception as exc:  # noqa: BLE001
+        try:
+            db.refresh(nova)
+            nova.status = "erro"
+            nova.finalizado_em = nova.iniciado_em
+            nova.motivo_erro = f"Falha ao enfileirar reprocesso: {exc!r}"[:1000]
+            db.commit()
+        except Exception:  # noqa: BLE001
+            db.rollback()
+        raise HTTPException(
+            status_code=503,
+            detail="Celery worker/Redis fora do ar — não foi possível reprocessar.",
+        )
+    return ExecucaoRoboSefazRead.model_validate(nova)
+
+
 @router.post("/execucoes/{execucao_id}/cancelar", response_model=ExecucaoRoboSefazRead)
 def cancelar_execucao(
     execucao_id: int,

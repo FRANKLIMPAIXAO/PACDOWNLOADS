@@ -13,6 +13,7 @@ import {
   ExecucaoRoboSefazDetail,
   cancelarExecucao,
   dispararRobo,
+  reprocessarErros,
   formatarDuracao,
   formatarPeriodo,
   listarExecucoes,
@@ -209,6 +210,28 @@ function RoboSefazContent() {
     }
   }
 
+  async function handleReprocessar(id: number, qtdErros: number) {
+    const ok = confirm(
+      `Reprocessar as ${qtdErros} empresa(s) que deram erro na execução #${id}?\n\n` +
+      "Cria uma nova execução só com essas empresas, no mesmo período. " +
+      "Útil quando o erro foi portal lento/Cloudflare passageiro.",
+    );
+    if (!ok) return;
+    setBusy(`reproc-${id}`);
+    setErro(null);
+    try {
+      const nova = await reprocessarErros(id);
+      setToast(`Reprocesso disparado! Execução #${nova.id} criada com as ${qtdErros} que falharam.`);
+      fastUntilRef.current = Date.now() + FAST_WINDOW_MS;
+      if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
+      await carregar();
+    } catch (e) {
+      setErro(e instanceof ApiError ? e.message : "Falha ao reprocessar.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function handleCancelar(id: number) {
     const ok = confirm(
       `Cancelar a execução #${id}?\n\n` +
@@ -279,6 +302,17 @@ function RoboSefazContent() {
             title="Cancelar execução presa em Rodando"
           >
             {busy === `cancelar-${e.id}` ? "..." : "Cancelar"}
+          </button>
+        ) : null}
+        {(e.status === "concluido" || e.status === "erro") && e.erros > 0 ? (
+          <button
+            className="btn-ghost"
+            style={{ color: "rgb(245,158,11)" }}
+            onClick={() => handleReprocessar(e.id, e.erros)}
+            disabled={busy !== null}
+            title={`Reprocessar só as ${e.erros} empresas que falharam`}
+          >
+            {busy === `reproc-${e.id}` ? "..." : `🔁 Reprocessar ${e.erros}`}
           </button>
         ) : null}
       </span>,

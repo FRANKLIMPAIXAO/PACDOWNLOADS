@@ -97,6 +97,14 @@ export function cancelarExecucao(id: number) {
   );
 }
 
+/** Cria nova execução só com as empresas que falharam na execução dada. */
+export function reprocessarErros(id: number) {
+  return apiFetch<ExecucaoRoboSefaz>(
+    `/api/v1/robo-sefaz/execucoes/${id}/reprocessar-erros`,
+    { method: "POST" },
+  );
+}
+
 // Helpers de UI ------------------------------------------------------
 
 export function statusPillClass(status: StatusExecucao): string {
