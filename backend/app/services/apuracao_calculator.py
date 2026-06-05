@@ -206,6 +206,19 @@ class ApuracaoCalculator:
             try:
                 analise = self._analisar_documento(doc)
                 analise.eh_emitida = self._eh_emitida(doc, empresa)
+                # Reflete no DETALHAMENTO (auditoria) que nota recebida = COMPRA
+                # e NÃO entra na receita. Sem isso, a nota do fornecedor aparece
+                # como "SAÍDA +receita" (pois o CFOP dela é o de VENDA dele) e
+                # confunde — mesmo o total já excluindo corretamente.
+                if not analise.eh_emitida:
+                    analise.direcao = "ENTRADA"
+                    if analise.natureza_predominante != "DEVOLUCAO_VENDA":
+                        analise.afeta_receita = 0
+                        analise.contribuicao_receita = Decimal("0")
+                        if not analise.motivo_zero:
+                            analise.motivo_zero = (
+                                "Compra (emitente ≠ empresa) — não é sua receita"
+                            )
                 analises.append(analise)
             except Exception as exc:
                 avisos.append(f"Doc #{doc.id} ({doc.chave_acesso[:10]}...) ignorado: {exc}")
@@ -336,7 +349,7 @@ class ApuracaoCalculator:
             total_docs=len(analises),
             saidas=sum(1 for a in analises if a.eh_emitida),
             entradas=sum(1 for a in analises if not a.eh_emitida),
-            docs_ignorados=sum(1 for a in analises if a.afeta_receita == 0),
+            docs_ignorados=sum(1 for a in analises if a.eh_emitida and a.afeta_receita == 0),
             total_normal=total_normal_liquido.quantize(Decimal("0.01")),
             total_monofasico=total_monofasico.quantize(Decimal("0.01")),
             total_st=total_st.quantize(Decimal("0.01")),
