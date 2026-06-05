@@ -372,6 +372,12 @@ class ApuracaoCalculator:
 
     def calcular_e_salvar(self, empresa_id: int, ano_mes: str) -> Apuracao:
         resumo = self.calcular(empresa_id, ano_mes)
+        return self._salvar_resumo(resumo, empresa_id, ano_mes)
+
+    def _salvar_resumo(
+        self, resumo: ResumoApuracao, empresa_id: int, ano_mes: str,
+    ) -> Apuracao:
+        """Persiste (cria/atualiza idempotente) a apuração DRAFT a partir do resumo."""
         existente = self.db.scalar(
             select(Apuracao).where(
                 Apuracao.empresa_id == empresa_id, Apuracao.ano_mes == ano_mes,
@@ -400,6 +406,52 @@ class ApuracaoCalculator:
         self.db.commit()
         self.db.refresh(apur)
         return apur
+
+    def calcular_lote(self, empresa_ids: list[int], ano_mes: str) -> list[dict[str, Any]]:
+        """Calcula + salva a apuração de várias empresas (fechamento em lote).
+
+        Resiliente: erro numa empresa não derruba o lote — vira item com
+        `ok=False` + motivo. O frontend manda em blocos (pra caber no Traefik)
+        e acumula. Cada item já traz receita/DAS/anexo/avisos pra montar a
+        tabela do fechamento da carteira.
+        """
+        resultados: list[dict[str, Any]] = []
+        for eid in empresa_ids:
+            empresa = self.db.get(Empresa, eid)
+            nome = empresa.razao_social if empresa else f"#{eid}"
+            if not empresa:
+                resultados.append({
+                    "empresa_id": eid, "razao_social": nome, "ok": False,
+                    "erro": "Empresa não encontrada", "avisos": [],
+                })
+                continue
+            try:
+                resumo = self.calcular(eid, ano_mes)
+                apur = self._salvar_resumo(resumo, eid, ano_mes)
+                resultados.append({
+                    "empresa_id": eid,
+                    "razao_social": nome,
+                    "ok": True,
+                    "apuracao_id": apur.id,
+                    "status": apur.status.value if hasattr(apur.status, "value") else str(apur.status),
+                    "total_docs": resumo.total_docs,
+                    "saidas": resumo.saidas,
+                    "receita_bruta": str(resumo.receita_bruta),
+                    "valor_devido": str(resumo.calculo.valor_devido) if resumo.calculo else None,
+                    "anexo": resumo.anexo,
+                    "faixa": resumo.calculo.faixa if resumo.calculo else None,
+                    "aliquota_efetiva": str(resumo.calculo.aliquota_efetiva) if resumo.calculo else None,
+                    "primeira_apuracao": resumo.primeira_apuracao,
+                    "avisos": resumo.avisos,
+                    "erro": None,
+                })
+            except Exception as exc:  # noqa: BLE001 — um erro não derruba o lote
+                self.db.rollback()
+                resultados.append({
+                    "empresa_id": eid, "razao_social": nome, "ok": False,
+                    "erro": str(exc)[:300], "avisos": [],
+                })
+        return resultados
 
     # --- Helpers ---
 

@@ -176,6 +176,9 @@ function ApuracoesContent() {
               }}
             />
           </label>
+          <Link href="/apuracoes/lote" className="btn-secondary" style={{ textDecoration: "none" }}>
+            ▶ Fechar em lote
+          </Link>
           <button type="button" className="btn-primary" onClick={() => setShowNova((v) => !v)}>
             {showNova ? "Fechar" : "+ Nova apuração"}
           </button>

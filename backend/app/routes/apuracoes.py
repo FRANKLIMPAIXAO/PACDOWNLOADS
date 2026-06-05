@@ -2,6 +2,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -11,6 +12,11 @@ from app.schemas.apuracao_schema import (
 from app.services.apuracao_calculator import ApuracaoCalculator
 from app.services.apuracao_service import ApuracaoService
 from app.services.auth_service import get_current_user
+
+
+class CalcularLotePayload(BaseModel):
+    ano_mes: str = Field(..., description="Competência YYYYMM")
+    empresa_ids: list[int] = Field(..., description="IDs das empresas do bloco")
 
 
 router = APIRouter(
@@ -114,6 +120,28 @@ def calcular_preview(empresa_id: int, ano_mes: str, db: Session = Depends(get_db
     """
     resumo = ApuracaoCalculator(db).calcular(empresa_id, ano_mes)
     return resumo.to_payload()
+
+
+@router.post("/calcular-lote")
+def calcular_lote(payload: CalcularLotePayload, db: Session = Depends(get_db)):
+    """Fechamento em LOTE: calcula + salva a apuração de várias empresas.
+
+    Recebe um BLOCO de empresa_ids (o frontend fatia a carteira em blocos pra
+    caber no timeout do Traefik ~60s) e devolve um item por empresa com
+    receita/DAS/anexo/avisos — ou ok=False + erro se alguma falhar (não derruba
+    o bloco). Idempotente: re-rodar atualiza a apuração existente.
+    """
+    if len(payload.ano_mes) != 6 or not payload.ano_mes.isdigit():
+        raise HTTPException(status_code=400, detail="ano_mes deve ser YYYYMM")
+    if not payload.empresa_ids:
+        return {"ano_mes": payload.ano_mes, "resultados": []}
+    if len(payload.empresa_ids) > 25:
+        raise HTTPException(
+            status_code=400,
+            detail="Máximo 25 empresas por bloco (pra caber no timeout). Fatie no frontend.",
+        )
+    resultados = ApuracaoCalculator(db).calcular_lote(payload.empresa_ids, payload.ano_mes)
+    return {"ano_mes": payload.ano_mes, "resultados": resultados}
 
 
 @router.post("/calcular/{empresa_id}/{ano_mes}")

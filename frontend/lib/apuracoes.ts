@@ -202,6 +202,36 @@ export function calcularESalvar(empresaId: number, anoMes: string) {
   });
 }
 
+// --- Fechamento em lote (a carteira inteira de uma vez) ---
+
+export type LoteItem = {
+  empresa_id: number;
+  razao_social: string;
+  ok: boolean;
+  apuracao_id?: number;
+  status?: string;
+  total_docs?: number;
+  saidas?: number;
+  receita_bruta?: string;
+  valor_devido?: string | null;
+  anexo?: string;
+  faixa?: number | null;
+  aliquota_efetiva?: string | null;
+  primeira_apuracao?: boolean;
+  avisos: string[];
+  erro?: string | null;
+};
+
+export type LoteResposta = { ano_mes: string; resultados: LoteItem[] };
+
+/** Calcula+salva um BLOCO de empresas (frontend fatia a carteira). Máx 25/bloco. */
+export function calcularLote(anoMes: string, empresaIds: number[]) {
+  return apiFetch<LoteResposta>(`/api/v1/apuracoes/calcular-lote`, {
+    method: "POST",
+    body: JSON.stringify({ ano_mes: anoMes, empresa_ids: empresaIds }),
+  });
+}
+
 export async function abrirDasPdf(apuracaoId: number, anoMes: string): Promise<void> {
   const base = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
   const token = typeof window !== "undefined"
