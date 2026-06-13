@@ -90,21 +90,28 @@ function DocumentosContent() {
       let recebidas = 0;
       let completas = 0;
       let erros = 0;
-      const CH = 5;
-      for (let i = 0; i < ids.length; i += CH) {
-        const bloco = ids.slice(i, i + CH);
-        try {
-          const r = await dfeDistribuirLote(bloco, 8);
-          for (const res of r.resultados) {
-            recebidas += res.resumos_recebidas_novos || 0;
-            completas += res.nfes_completas_novas || 0;
-            if (res.erro) erros += 1;
+      // Uma empresa por vez, DRENANDO até a Receita dizer "não tem mais"
+      // (concluido) — senão paramos cedo e perdíamos as notas mais recentes
+      // (NSU é ordem antiga→nova). Guard evita loop infinito.
+      for (let i = 0; i < ids.length; i++) {
+        const id = ids[i];
+        for (let guard = 0; guard < 8; guard++) {
+          let res;
+          try {
+            const r = await dfeDistribuirLote([id], 20);
+            res = r.resultados[0];
+          } catch {
+            erros += 1;
+            break;
           }
-        } catch {
-          erros += bloco.length;
+          if (!res) break;
+          recebidas += res.resumos_recebidas_novos || 0;
+          completas += res.nfes_completas_novas || 0;
+          if (res.erro) { erros += 1; break; }
+          if (res.concluido || res.cstat === "656") break;
         }
         setDfeMsg(
-          `Processadas ${Math.min(i + CH, ids.length)}/${ids.length} empresas · ` +
+          `Processadas ${i + 1}/${ids.length} empresas · ` +
           `${recebidas} recebidas novas` + (erros ? ` · ${erros} com aviso` : ""),
         );
       }

@@ -12,6 +12,7 @@ export type DfeResultado = {
   empresa_id: number;
   razao_social?: string;
   ok?: boolean;
+  concluido?: boolean;
   resumos_recebidas_novos?: number;
   nfes_completas_novas?: number;
   eventos?: number;

@@ -74,6 +74,7 @@ class DfeDistribuicaoService:
         paginas = 0
         cstat = ""
         motivo = ""
+        concluido = False  # True quando drenou tudo (137 ou sem mais backlog)
 
         try:
             while paginas < max_paginas:
@@ -107,8 +108,9 @@ class DfeDistribuicaoService:
                     self.db.commit()
 
                 paginas += 1
-                # 137 = nenhum doc; sem mais backlog → fim
+                # 137 = nenhum doc; sem mais backlog → drenou tudo
                 if res.cstat == "137" or not res.tem_mais:
+                    concluido = True
                     break
         except HTTPException:
             raise
@@ -121,6 +123,7 @@ class DfeDistribuicaoService:
             "razao_social": empresa.razao_social,
             "ult_nsu": ult_nsu,
             "paginas": paginas,
+            "concluido": concluido,
             "resumos_recebidas_novos": resumos_novos,
             "nfes_completas_novas": completas_novas,
             "eventos": eventos,
