@@ -72,6 +72,9 @@ class Empresa(Base):
     cert_a1_senha_cifrada: Mapped[str | None] = mapped_column(String(300), nullable=True)
     cert_a1_validade_ate: Mapped[date | None] = mapped_column(Date(), nullable=True)
     cert_a1_subject: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    # Último NSU sacado da Distribuição DF-e da NFe (Ambiente Nacional). Permite
+    # puxar incrementalmente as recebidas+emitidas direto com o cert (sem Focus).
+    nfe_dist_ult_nsu: Mapped[str | None] = mapped_column(String(20), nullable=True)
     # Logins externos (senhas TODAS cifradas via cofre Fernet)
     prefeitura_login: Mapped[str | None] = mapped_column(String(80), nullable=True)
     prefeitura_senha_cifrada: Mapped[str | None] = mapped_column(String(300), nullable=True)

@@ -18,7 +18,7 @@ from app.models.procuracao import Procuracao  # noqa: F401
 from app.models.receita_mensal import ReceitaMensal  # noqa: F401
 from app.models.situacao_fiscal import SituacaoFiscal  # noqa: F401
 from app.models.usuario import Usuario
-from app.routes import agenda, apuracoes, auth, certidoes, dashboard, documentos, empresas, guias_das, guias_dctfweb, guias_fgts, integra, parcelamentos_pgfn, parcelamentos_simples, receitas_mensais, relatorios, robo, robo_sefaz, usuarios
+from app.routes import agenda, apuracoes, auth, certidoes, dashboard, dfe_distribuicao, documentos, empresas, guias_das, guias_dctfweb, guias_fgts, integra, parcelamentos_pgfn, parcelamentos_simples, receitas_mensais, relatorios, robo, robo_sefaz, usuarios
 from app.services.auth_service import hash_password
 
 
@@ -28,7 +28,7 @@ settings = get_settings()
 # BUILD_COMMIT no build (commit fica "unknown"), este é o sinal confiável pra
 # saber, via GET /version, se o deploy pegou o código novo (cache stale é
 # recorrente). Formato livre: AAAA-MM-DD + resumo curto.
-APP_BUILD_TAG = "2026-06-13-faturamento-tpnf"
+APP_BUILD_TAG = "2026-06-13-dfe-distribuicao-nfe"
 
 
 @asynccontextmanager
@@ -126,6 +126,7 @@ app.include_router(auth.router, prefix=settings.api_v1_prefix)
 app.include_router(usuarios.router, prefix=settings.api_v1_prefix)
 app.include_router(empresas.router, prefix=settings.api_v1_prefix)
 app.include_router(documentos.router, prefix=settings.api_v1_prefix)
+app.include_router(dfe_distribuicao.router, prefix=settings.api_v1_prefix)
 app.include_router(robo.router, prefix=settings.api_v1_prefix)
 app.include_router(robo_sefaz.router, prefix=settings.api_v1_prefix)
 app.include_router(guias_das.router, prefix=settings.api_v1_prefix)
