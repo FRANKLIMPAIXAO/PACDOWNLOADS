@@ -131,11 +131,82 @@ def resumo_documentos(
 
     emitidas = _agg("emitida")
     recebidas = _agg("recebida")
+
+    # FATURAMENTO = só SAÍDAS reais (eh_saida != False) emitidas e ativas.
+    # Exclui as "notas de entrada própria" (eh_saida=False: compra de produtor
+    # rural, retorno de industrialização) — a empresa EMITE mas é COMPRA, não
+    # venda. Sem isso o card inflava (ex.: CLAVEAUX 2,18M vs 1,45M oficial).
+    # eh_saida NULL (doc antigo, antes do backfill) entra como saída (compat).
+    fat_stmt = _periodo(
+        select(func.coalesce(func.sum(DocumentoFiscal.valor_total), 0)).where(
+            DocumentoFiscal.origem == "emitida",
+            DocumentoFiscal.cancelada == False,  # noqa: E712
+            DocumentoFiscal.eh_saida.isnot(False),
+        )
+    )
+    faturamento = float(db.execute(fat_stmt).scalar() or 0)
+
+    # Quantidade de notas de entrada própria (emitidas mas são compra)
+    ent_stmt = _periodo(
+        select(func.count(DocumentoFiscal.id)).where(
+            DocumentoFiscal.origem == "emitida",
+            DocumentoFiscal.eh_saida == False,  # noqa: E712
+        )
+    )
+    entradas_proprias = int(db.execute(ent_stmt).scalar() or 0)
+
     return {
-        "emitidas": emitidas,   # SAIDA — robô SEFAZ
-        "recebidas": recebidas,  # ENTRADA — Focus DF-e
-        "faturamento": emitidas["valor_ativas"],  # vendas (emitidas ativas)
+        "emitidas": emitidas,   # tudo que a empresa emitiu (saídas + entradas próprias)
+        "recebidas": recebidas,  # ENTRADA de terceiros — Focus DF-e
+        "faturamento": faturamento,  # SÓ vendas/saídas reais (exclui entrada própria)
+        "entradas_proprias": entradas_proprias,  # nota emitida que é compra
         "total_geral": emitidas["total"] + recebidas["total"],
+    }
+
+
+@router.post("/backfill-eh-saida")
+def backfill_eh_saida(limite: int = 1500, db: Session = Depends(get_db)):
+    """Preenche `eh_saida` (tpNF) dos documentos antigos (NULL) lendo o XML.
+
+    Necessário UMA vez após a migration, pros docs já importados. Lê o `<tpNF>`
+    direto do XML (1=saída, 0=entrada própria). Sem tpNF (NFSe/CTe/XML ilegível)
+    cai pra origem (emitida=saída). Processa em lote (`limite`) pra caber no
+    timeout — re-chame até `restantes_null` zerar.
+    """
+    import re as _re
+    from sqlalchemy import func
+
+    docs = db.scalars(
+        select(DocumentoFiscal).where(DocumentoFiscal.eh_saida.is_(None)).limit(limite)
+    ).all()
+    por_tpnf = 0
+    por_origem = 0
+    for d in docs:
+        tp = None
+        try:
+            p = Path(d.xml_path)
+            if p.exists():
+                txt = p.read_text(encoding="utf-8", errors="ignore")
+                m = _re.search(r"<tpNF>\s*([01])\s*</tpNF>", txt)
+                if m:
+                    tp = m.group(1)
+        except Exception:  # noqa: BLE001
+            tp = None
+        if tp == "1":
+            d.eh_saida = True; por_tpnf += 1
+        elif tp == "0":
+            d.eh_saida = False; por_tpnf += 1
+        else:
+            d.eh_saida = (d.origem == "emitida"); por_origem += 1
+    db.commit()
+    restantes = db.scalar(
+        select(func.count(DocumentoFiscal.id)).where(DocumentoFiscal.eh_saida.is_(None))
+    )
+    return {
+        "processados": len(docs),
+        "por_tpnf": por_tpnf,
+        "por_origem_fallback": por_origem,
+        "restantes_null": int(restantes or 0),
     }
 
 

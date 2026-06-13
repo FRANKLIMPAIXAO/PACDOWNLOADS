@@ -40,6 +40,10 @@ class DocumentoFiscal(Base):
         String(20), default="emitida", server_default="emitida", nullable=False, index=True
     )
     json_original: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # tpNF da NFe: True=saída (venda/remessa), False=ENTRADA (nota de entrada
+    # própria — compra de produtor rural, retorno de industrialização: a empresa
+    # EMITE mas é compra, NÃO é faturamento). NULL = doc antigo antes do backfill.
+    eh_saida: Mapped[bool | None] = mapped_column(Boolean, nullable=True, index=True)
     # Cancelamento (migration 0013) — detectado quando XML pos-manifestacao
     # vira procEventoNFe com descEvento=Cancelamento.
     cancelada: Mapped[bool] = mapped_column(

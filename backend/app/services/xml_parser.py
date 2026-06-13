@@ -74,6 +74,10 @@ class XMLParserService:
             "nome_destinatario": self._nth_value(root, "xNome", 1),
             "valor_total": _to_decimal(_find_text(root, {"vNF"})),
             "cfops": _findall_text(root, "CFOP"),
+            # tpNF: "1"=saída (venda/remessa), "0"=entrada (nota de entrada
+            # própria — compra de produtor rural, retorno de industrialização).
+            # Distingue faturamento real de nota que a empresa EMITE mas é compra.
+            "tipo_nf": _find_text(root, {"tpNF"}),
         }
 
     def parse_cte(self, root: ET.Element) -> dict:

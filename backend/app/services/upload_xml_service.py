@@ -281,6 +281,10 @@ class UploadXmlService:
             resultado.detalhes.append(det)
             return
 
+        # tpNF: "1"=saída (venda/remessa), "0"=entrada (nota de entrada própria).
+        _tp = (parsed.get("tipo_nf") or "").strip()
+        eh_saida = True if _tp == "1" else (False if _tp == "0" else None)
+
         documento = DocumentoFiscal(
             empresa_id=empresa.id,
             tipo_documento=tipo,
@@ -296,6 +300,7 @@ class UploadXmlService:
             status="baixado",
             xml_path=xml_path,
             origem=origem or "emitida",
+            eh_saida=eh_saida,
             json_original={"importado_em": datetime.utcnow().isoformat(), "arquivo_origem": nome},
         )
         try:
