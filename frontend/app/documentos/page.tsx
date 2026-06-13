@@ -71,22 +71,35 @@ function DocumentosContent() {
   // Distribuição Direta DF-e: puxa as RECEBIDAS de toda a carteira (empresas
   // com cert A1, sem Focus) direto da Receita, de graça. Fatia em blocos de 5.
   async function handleDistribuirDfe() {
+    const umaEmpresa = empresaId !== "";
+    const nomeSel = umaEmpresa
+      ? (empresas.find((e) => e.id === empresaId)?.razao_social ?? "esta empresa")
+      : "";
     if (!confirm(
-      "Puxar as notas RECEBIDAS (entradas) de TODAS as empresas com certificado " +
-      "(sem Focus), direto da Receita — de graça?\n\nNa 1ª vez pode demorar " +
-      "(busca ~90 dias de histórico). Pode rodar de novo depois (incremental)."
+      umaEmpresa
+        ? `Puxar as RECEBIDAS de ${nomeSel} direto da Receita (grátis)?\n\n` +
+          "Empresa grande pode bater no limite da Receita (656) e pedir ~1h " +
+          "entre passadas — rode de novo mais tarde pra completar."
+        : "Puxar as RECEBIDAS de TODAS as empresas com certificado (sem Focus), " +
+          "direto da Receita — de graça?\n\nNa 1ª vez pode demorar (busca ~90 " +
+          "dias de histórico). Pode rodar de novo depois (incremental)."
     )) return;
     setDfeBusy(true);
-    setDfeMsg("Buscando empresas elegíveis...");
+    setDfeMsg(umaEmpresa ? "Puxando..." : "Buscando empresas elegíveis...");
     setError(null);
     try {
-      const elegiveis = await dfeElegiveis();
-      if (elegiveis.length === 0) {
-        setDfeMsg(null);
-        setToast("Nenhuma empresa elegível (precisa de cert A1 e não ter Focus).");
-        return;
+      let ids: number[];
+      if (umaEmpresa) {
+        ids = [empresaId as number];
+      } else {
+        const elegiveis = await dfeElegiveis();
+        if (elegiveis.length === 0) {
+          setDfeMsg(null);
+          setToast("Nenhuma empresa elegível (precisa de cert A1 e não ter Focus).");
+          return;
+        }
+        ids = elegiveis.map((e) => e.id);
       }
-      const ids = elegiveis.map((e) => e.id);
       let recebidas = 0;
       let completas = 0;
       let erros = 0;
@@ -472,7 +485,11 @@ function DocumentosContent() {
           title="Puxa as RECEBIDAS de toda a carteira direto da Receita com o cert A1 — grátis, sem Focus"
           style={{ alignSelf: "end", background: "rgb(16,185,129)" }}
         >
-          {dfeBusy ? (dfeMsg ? "Sincronizando..." : "...") : "⬇ DF-e Nacional (grátis)"}
+          {dfeBusy
+            ? "Sincronizando..."
+            : empresaId !== ""
+              ? "⬇ DF-e: esta empresa"
+              : "⬇ DF-e Nacional (todas)"}
         </button>
         <button
           type="button"
