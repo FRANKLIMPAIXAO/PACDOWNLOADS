@@ -122,6 +122,49 @@ def calcular_preview(empresa_id: int, ano_mes: str, db: Session = Depends(get_db
     return resumo.to_payload()
 
 
+@router.get("/diagnostico/{empresa_id}/{ano_mes}")
+def diagnostico_documentos(empresa_id: int, ano_mes: str, db: Session = Depends(get_db)):
+    """Reconcilia o 'Faturamento' da tela de Documentos com o que o motor apura.
+
+    Mostra DE ONDE vem a diferença vs o relatório oficial:
+    - total_emitido_bruto = soma de TODAS as emitidas (= card de Documentos)
+    - receita_bruta_vendas = só VENDAS (= o que bate com o oficial)
+    - emitidas_por_natureza = quebra (venda × remessa × transferência × devolução)
+    - duplicatas removidas pelo dedup (motor) vs a tela (que não deduplica)
+    """
+    from collections import defaultdict
+
+    resumo = ApuracaoCalculator(db).calcular(empresa_id, ano_mes)
+    por_natureza: dict[str, dict] = defaultdict(lambda: {"qtd": 0, "valor": 0.0})
+    emitidas_qtd = 0
+    recebidas_qtd = 0
+    total_emitido = 0.0
+    for d in resumo.documentos:
+        if d.eh_emitida:
+            emitidas_qtd += 1
+            v = float(d.valor_nota or 0)
+            total_emitido += v
+            por_natureza[d.natureza_predominante]["qtd"] += 1
+            por_natureza[d.natureza_predominante]["valor"] += v
+        else:
+            recebidas_qtd += 1
+    return {
+        "empresa": resumo.empresa_nome,
+        "cnpj": resumo.empresa_cnpj,
+        "ano_mes": ano_mes,
+        "docs_apos_dedup": resumo.total_docs,
+        "emitidas": emitidas_qtd,
+        "recebidas": recebidas_qtd,
+        "total_emitido_bruto": round(total_emitido, 2),
+        "receita_bruta_vendas": str(resumo.receita_bruta),
+        "emitidas_por_natureza": {
+            k: {"qtd": v["qtd"], "valor": round(v["valor"], 2)}
+            for k, v in sorted(por_natureza.items(), key=lambda x: -x[1]["valor"])
+        },
+        "avisos": resumo.avisos,
+    }
+
+
 @router.post("/calcular-lote")
 def calcular_lote(payload: CalcularLotePayload, db: Session = Depends(get_db)):
     """Fechamento em LOTE: calcula + salva a apuração de várias empresas.
