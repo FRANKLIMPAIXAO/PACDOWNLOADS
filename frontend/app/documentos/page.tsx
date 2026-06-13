@@ -27,6 +27,7 @@ import {
   verificarCanceladas,
 } from "../../lib/documentos";
 import { Empresa, listarEmpresas } from "../../lib/empresas";
+import { dfeDistribuirLote, dfeElegiveis } from "../../lib/dfe";
 
 const TIPOS: TipoDocumento[] = ["NFE", "CTE", "NFSE"];
 
@@ -64,6 +65,62 @@ function DocumentosContent() {
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
   const [uploadResultado, setUploadResultado] = useState<UploadResultado | null>(null);
   const [syncFocusModalOpen, setSyncFocusModalOpen] = useState(false);
+  const [dfeBusy, setDfeBusy] = useState(false);
+  const [dfeMsg, setDfeMsg] = useState<string | null>(null);
+
+  // Distribuição Direta DF-e: puxa as RECEBIDAS de toda a carteira (empresas
+  // com cert A1, sem Focus) direto da Receita, de graça. Fatia em blocos de 5.
+  async function handleDistribuirDfe() {
+    if (!confirm(
+      "Puxar as notas RECEBIDAS (entradas) de TODAS as empresas com certificado " +
+      "(sem Focus), direto da Receita — de graça?\n\nNa 1ª vez pode demorar " +
+      "(busca ~90 dias de histórico). Pode rodar de novo depois (incremental)."
+    )) return;
+    setDfeBusy(true);
+    setDfeMsg("Buscando empresas elegíveis...");
+    setError(null);
+    try {
+      const elegiveis = await dfeElegiveis();
+      if (elegiveis.length === 0) {
+        setDfeMsg(null);
+        setToast("Nenhuma empresa elegível (precisa de cert A1 e não ter Focus).");
+        return;
+      }
+      const ids = elegiveis.map((e) => e.id);
+      let recebidas = 0;
+      let completas = 0;
+      let erros = 0;
+      const CH = 5;
+      for (let i = 0; i < ids.length; i += CH) {
+        const bloco = ids.slice(i, i + CH);
+        try {
+          const r = await dfeDistribuirLote(bloco, 8);
+          for (const res of r.resultados) {
+            recebidas += res.resumos_recebidas_novos || 0;
+            completas += res.nfes_completas_novas || 0;
+            if (res.erro) erros += 1;
+          }
+        } catch {
+          erros += bloco.length;
+        }
+        setDfeMsg(
+          `Processadas ${Math.min(i + CH, ids.length)}/${ids.length} empresas · ` +
+          `${recebidas} recebidas novas` + (erros ? ` · ${erros} com aviso` : ""),
+        );
+      }
+      setDfeMsg(null);
+      setToast(
+        `✅ DF-e Nacional: ${recebidas} recebidas + ${completas} completas importadas ` +
+        `de ${ids.length} empresas (grátis). ${erros ? erros + " com aviso." : ""}`,
+      );
+      setRefreshTick((t) => t + 1);
+    } catch (e) {
+      setDfeMsg(null);
+      setError(e instanceof ApiError ? e.message : "Falha na Distribuição DF-e.");
+    } finally {
+      setDfeBusy(false);
+    }
+  }
 
   function handleUploadConcluido(r: UploadResultado) {
     setUploadResultado(r);
@@ -403,8 +460,18 @@ function DocumentosContent() {
         <button
           type="button"
           className="btn-primary"
+          onClick={handleDistribuirDfe}
+          disabled={dfeBusy}
+          title="Puxa as RECEBIDAS de toda a carteira direto da Receita com o cert A1 — grátis, sem Focus"
+          style={{ alignSelf: "end", background: "rgb(16,185,129)" }}
+        >
+          {dfeBusy ? (dfeMsg ? "Sincronizando..." : "...") : "⬇ DF-e Nacional (grátis)"}
+        </button>
+        <button
+          type="button"
+          className="btn-primary"
           onClick={() => setSyncFocusModalOpen(true)}
-          title="Baixar NFes recebidas (entradas) via Focus NFe — DF-e Distribuição"
+          title="Baixar NFes recebidas (entradas) via Focus NFe — DF-e Distribuição (paga)"
           style={{ alignSelf: "end" }}
         >
           ⬇ Sincronizar Focus NFe
@@ -587,6 +654,11 @@ function DocumentosContent() {
 
       {toast ? <p className="toast">{toast}</p> : null}
       {error ? <p className="toast toast-error">{error}</p> : null}
+      {dfeMsg ? (
+        <p className="toast" style={{ background: "rgba(16,185,129,0.12)", border: "1px solid rgba(16,185,129,0.4)" }}>
+          ⬇ {dfeMsg}
+        </p>
+      ) : null}
 
       {/* Totalizadores estilo Jettax: separação Emitidas (saída) × Recebidas (entrada) */}
       {resumo ? (

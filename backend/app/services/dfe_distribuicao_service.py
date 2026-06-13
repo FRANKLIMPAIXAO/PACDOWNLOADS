@@ -132,6 +132,37 @@ class DfeDistribuicaoService:
             ),
         }
 
+    def listar_elegiveis(self) -> list[Empresa]:
+        """Empresas aptas pra Distribuição Direta: ativas, com cert A1, SEM token
+        Focus (as com Focus já têm a fila consumida por ela → 656)."""
+        return list(self.db.scalars(
+            select(Empresa).where(
+                Empresa.ativo.is_(True),
+                Empresa.cert_a1_path.isnot(None),
+                Empresa.focus_token.is_(None),
+            ).order_by(Empresa.razao_social)
+        ).all())
+
+    def distribuir_lote(self, empresa_ids: list[int], *, max_paginas: int = 8) -> list[dict]:
+        """Distribui um BLOCO de empresas (o frontend fatia a carteira). Erro
+        numa empresa não derruba o bloco."""
+        resultados: list[dict] = []
+        for eid in empresa_ids:
+            try:
+                resultados.append(self.distribuir_empresa(eid, max_paginas=max_paginas))
+            except HTTPException as exc:
+                resultados.append({
+                    "empresa_id": eid, "ok": False,
+                    "erro": str(exc.detail), "resumos_recebidas_novos": 0,
+                })
+            except Exception as exc:  # noqa: BLE001
+                self.db.rollback()
+                resultados.append({
+                    "empresa_id": eid, "ok": False,
+                    "erro": str(exc)[:200], "resumos_recebidas_novos": 0,
+                })
+        return resultados
+
     def _salvar_resumo(self, empresa: Empresa, doc) -> bool:
         """Grava o resumo de uma recebida (resNFe) — sem XML completo ainda."""
         if not doc.chave:
