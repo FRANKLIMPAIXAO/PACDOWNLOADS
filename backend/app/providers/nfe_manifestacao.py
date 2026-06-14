@@ -47,6 +47,23 @@ def _local(tag: str) -> str:
     return tag.split("}", 1)[-1]
 
 
+def _c14n(elem) -> bytes:
+    """C14N 1.0 inclusiva COMPATÍVEL com a da SEFAZ.
+
+    Bug do lxml: ao canonicalizar uma sub-árvore cujo namespace default vem de
+    um ancestral (caso do nosso <infEvento>/<SignedInfo>), ele emite `xmlns=""`
+    espúrio nos elementos aninhados — bytes que NÃO batem com a C14N que a
+    Receita recalcula → DigestValue/SignatureValue divergem → cStat 297.
+
+    Serializar e reparsear o elemento isola os namespaces NELE mesmo, e aí a
+    C14N sai correta (validado: bate byte a byte com xml.etree.canonicalize).
+    """
+    return etree.tostring(
+        etree.fromstring(etree.tostring(elem)),
+        method="c14n", exclusive=False, with_comments=False,
+    )
+
+
 def _extrair_fault(corpo: str) -> str | None:
     """Tira o motivo legível de um corpo de erro do .asmx.
 
@@ -143,7 +160,7 @@ class NFeManifestacaoProvider:
         from cryptography.hazmat.primitives.asymmetric import padding
 
         # 1. DigestValue = base64(SHA1(C14N(infEvento)))
-        c14n_inf = etree.tostring(inf_el, method="c14n", exclusive=False, with_comments=False)
+        c14n_inf = _c14n(inf_el)
         digest = base64.b64encode(hashlib.sha1(c14n_inf).digest()).decode()
 
         S = "{%s}" % NS_SIG
@@ -165,7 +182,7 @@ class NFeManifestacaoProvider:
         etree.SubElement(ref, S + "DigestValue").text = digest
 
         # 2. SignatureValue = base64(RSA-SHA1(C14N(SignedInfo)))
-        c14n_si = etree.tostring(signed_info, method="c14n", exclusive=False, with_comments=False)
+        c14n_si = _c14n(signed_info)
         assinatura = key.sign(c14n_si, padding.PKCS1v15(), hashes.SHA1())
         etree.SubElement(sig, S + "SignatureValue").text = base64.b64encode(assinatura).decode()
 
@@ -267,13 +284,17 @@ class NFeManifestacaoProvider:
         try:
             cert_f.write(cert_pem); cert_f.close()
             key_f.write(key_pem); key_f.close()
+            # IMPORTANTE: o corpo leva <nfeDadosMsg> DIRETO (com o namespace do
+            # WSDL), SEM o wrapper <nfeRecepcaoEvento>. Com o wrapper o AN
+            # responde "action não reconhecida"; sem ele, processa (confirmado
+            # pelo diagnóstico de variantes). É o oposto da Distribuição DFe.
             envelope = (
                 '<?xml version="1.0" encoding="UTF-8"?>'
                 '<soap12:Envelope xmlns:soap12="http://www.w3.org/2003/05/soap-envelope">'
                 '<soap12:Body>'
-                '<nfeRecepcaoEvento xmlns="http://www.portalfiscal.inf.br/nfe/wsdl/NFeRecepcaoEvento4">'
-                '<nfeDadosMsg>' + env_evento.decode("utf-8") + '</nfeDadosMsg>'
-                '</nfeRecepcaoEvento>'
+                '<nfeDadosMsg xmlns="http://www.portalfiscal.inf.br/nfe/wsdl/NFeRecepcaoEvento4">'
+                + env_evento.decode("utf-8") +
+                '</nfeDadosMsg>'
                 '</soap12:Body></soap12:Envelope>'
             )
             headers = {
