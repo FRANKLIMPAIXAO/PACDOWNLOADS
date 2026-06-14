@@ -45,6 +45,20 @@ def distribuir(
     return DfeDistribuicaoService(db).distribuir_empresa(empresa_id, max_paginas=max_paginas)
 
 
+@router.post("/empresa/{empresa_id}/manifestar")
+def manifestar(
+    empresa_id: int,
+    limite: int = 20,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Manifesta (Ciência da Operação) as recebidas em resumo da empresa.
+
+    Envia o evento assinado (XML-DSig) pra cada nota; depois rode a Distribuição
+    de novo pra baixar o XML completo. Processa em lote (`limite`).
+    """
+    return DfeDistribuicaoService(db).manifestar_recebidas(empresa_id, limite=limite)
+
+
 @router.post("/distribuir-lote")
 def distribuir_lote(payload: DistribuirLotePayload, db: Session = Depends(get_db)) -> dict:
     """Distribui um BLOCO de empresas (o frontend fatia a carteira em blocos

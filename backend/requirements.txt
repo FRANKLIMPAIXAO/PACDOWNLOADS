@@ -36,3 +36,7 @@ brazilfiscalreport==0.7.7
 # Usado em receita_mensal_service.puxar_da_receita pra ler a receita bruta
 # de cada declaração e preencher o RBT12 (12 meses anteriores).
 pdfplumber==0.11.9
+
+# --- lxml: C14N (canonicalização) pra assinar o XML do evento de
+# manifestação do destinatário (Ciência da Operação) — XML-DSig manual. ---
+lxml==5.3.0

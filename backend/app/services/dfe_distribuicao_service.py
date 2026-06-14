@@ -17,12 +17,13 @@ from decimal import Decimal, InvalidOperation
 
 from fastapi import HTTPException
 from pathlib import Path
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.documento_fiscal import DocumentoFiscal, TipoDocumento
 from app.models.empresa import Empresa
 from app.providers.nfe_distribuicao import NFeDistribuicaoProvider
+from app.providers.nfe_manifestacao import NFeManifestacaoProvider
 from app.services.upload_xml_service import UploadXmlService
 
 logger = logging.getLogger(__name__)
@@ -165,6 +166,72 @@ class DfeDistribuicaoService:
                     "erro": str(exc)[:200], "resumos_recebidas_novos": 0,
                 })
         return resultados
+
+    def manifestar_recebidas(self, empresa_id: int, *, limite: int = 20) -> dict:
+        """Manifesta (Ciência da Operação) as recebidas em RESUMO da empresa.
+
+        Libera o XML completo: após a ciência, a próxima Distribuição traz o
+        procNFe. Aqui só ENVIA o evento assinado (XML-DSig) e marca status.
+        Processa em lote (`limite`) pra caber no timeout.
+        """
+        empresa = self.db.get(Empresa, empresa_id)
+        if not empresa:
+            raise HTTPException(status_code=404, detail="Empresa não encontrada")
+        if not empresa.cert_a1_path or not Path(empresa.cert_a1_path).exists():
+            raise HTTPException(status_code=400, detail="Empresa sem certificado A1.")
+        senha = empresa.get_cert_a1_senha() or ""
+
+        pendentes = list(self.db.scalars(
+            select(DocumentoFiscal).where(
+                DocumentoFiscal.empresa_id == empresa_id,
+                DocumentoFiscal.tipo_documento == TipoDocumento.NFE,
+                DocumentoFiscal.origem == "recebida",
+                DocumentoFiscal.status == "resumo",
+            ).limit(limite)
+        ).all())
+
+        prov = NFeManifestacaoProvider()
+        manifestadas = 0
+        ja_cientes = 0
+        erros: list[str] = []
+        for doc in pendentes:
+            try:
+                res = prov.manifestar_ciencia(
+                    chave=doc.chave_acesso, cnpj=empresa.cnpj,
+                    pfx_path=empresa.cert_a1_path, pfx_senha=senha,
+                )
+                if res["ok"]:
+                    doc.status = "manifestado"
+                    if res["cstat"] == "573":
+                        ja_cientes += 1
+                    else:
+                        manifestadas += 1
+                    self.db.commit()
+                else:
+                    erros.append(f"{doc.chave_acesso[-6:]}: {res['cstat']} {res['motivo']}")
+            except Exception as exc:  # noqa: BLE001
+                self.db.rollback()
+                erros.append(f"{doc.chave_acesso[-6:]}: {exc}")
+
+        restantes = self.db.scalar(
+            select(func.count(DocumentoFiscal.id)).where(
+                DocumentoFiscal.empresa_id == empresa_id,
+                DocumentoFiscal.origem == "recebida",
+                DocumentoFiscal.status == "resumo",
+            )
+        )
+        return {
+            "empresa_id": empresa_id,
+            "manifestadas": manifestadas,
+            "ja_cientes": ja_cientes,
+            "erros": erros[:10],
+            "restantes_resumo": int(restantes or 0),
+            "aviso": (
+                "Pronto! Rode a Distribuição DF-e de novo pra baixar o XML "
+                "completo das que você acabou de dar ciência."
+                if (manifestadas or ja_cientes) else None
+            ),
+        }
 
     def _salvar_resumo(self, empresa: Empresa, doc) -> bool:
         """Grava o resumo de uma recebida (resNFe) — sem XML completo ainda."""
