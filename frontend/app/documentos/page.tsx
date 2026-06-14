@@ -27,7 +27,7 @@ import {
   verificarCanceladas,
 } from "../../lib/documentos";
 import { Empresa, listarEmpresas } from "../../lib/empresas";
-import { dfeDistribuirLote, dfeElegiveis } from "../../lib/dfe";
+import { dfeDistribuirLote, dfeElegiveis, dfeManifestar } from "../../lib/dfe";
 
 const TIPOS: TipoDocumento[] = ["NFE", "CTE", "NFSE"];
 
@@ -137,6 +137,65 @@ function DocumentosContent() {
     } catch (e) {
       setDfeMsg(null);
       setError(e instanceof ApiError ? e.message : "Falha na Distribuição DF-e.");
+    } finally {
+      setDfeBusy(false);
+    }
+  }
+
+  // Manifestação (Ciência da Operação) das recebidas em resumo → libera o XML
+  // completo. Contextual: empresa selecionada OU todas as elegíveis. Drena
+  // cada empresa (re-chama até restantes_resumo=0).
+  async function handleManifestarDfe() {
+    const umaEmpresa = empresaId !== "";
+    if (!confirm(
+      (umaEmpresa
+        ? "Dar CIÊNCIA DA OPERAÇÃO nas recebidas (em resumo) desta empresa?"
+        : "Dar CIÊNCIA DA OPERAÇÃO em TODAS as recebidas em resumo da carteira?") +
+      "\n\nIsso assina e envia o evento à Receita (é a manifestação mais leve, " +
+      "sem aceite). Depois rode o DF-e Nacional de novo pra baixar o XML completo."
+    )) return;
+    setDfeBusy(true);
+    setDfeMsg("Manifestando...");
+    setError(null);
+    try {
+      let ids: number[];
+      if (umaEmpresa) {
+        ids = [empresaId as number];
+      } else {
+        const elegiveis = await dfeElegiveis();
+        ids = elegiveis.map((e) => e.id);
+      }
+      let manifestadas = 0;
+      let erros = 0;
+      for (let i = 0; i < ids.length; i++) {
+        const id = ids[i];
+        for (let guard = 0; guard < 30; guard++) {
+          let res;
+          try {
+            res = await dfeManifestar(id, 20);
+          } catch {
+            erros += 1;
+            break;
+          }
+          manifestadas += (res.manifestadas || 0) + (res.ja_cientes || 0);
+          erros += res.erros?.length || 0;
+          if (res.restantes_resumo <= 0) break;
+        }
+        setDfeMsg(
+          `Manifestadas ${manifestadas} · empresas ${i + 1}/${ids.length}` +
+          (erros ? ` · ${erros} com aviso` : ""),
+        );
+      }
+      setDfeMsg(null);
+      setToast(
+        `✍ Manifestação: ${manifestadas} notas com Ciência da Operação. ` +
+        `Agora rode "DF-e Nacional" de novo pra baixar o XML completo. ` +
+        (erros ? `${erros} com aviso.` : ""),
+      );
+      setRefreshTick((t) => t + 1);
+    } catch (e) {
+      setDfeMsg(null);
+      setError(e instanceof ApiError ? e.message : "Falha na manifestação.");
     } finally {
       setDfeBusy(false);
     }
@@ -490,6 +549,20 @@ function DocumentosContent() {
             : empresaId !== ""
               ? "⬇ DF-e: esta empresa"
               : "⬇ DF-e Nacional (todas)"}
+        </button>
+        <button
+          type="button"
+          className="btn-primary"
+          onClick={handleManifestarDfe}
+          disabled={dfeBusy}
+          title="Dá Ciência da Operação (assinada) nas recebidas em resumo → libera o XML completo"
+          style={{ alignSelf: "end", background: "rgb(139,92,246)" }}
+        >
+          {dfeBusy
+            ? "..."
+            : empresaId !== ""
+              ? "✍ Manifestar: esta"
+              : "✍ Manifestar DF-e (todas)"}
         </button>
         <button
           type="button"

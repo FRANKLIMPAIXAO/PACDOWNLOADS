@@ -35,3 +35,20 @@ export function dfeDistribuirLote(empresaIds: number[], maxPaginas = 8) {
     { method: "POST", body: JSON.stringify({ empresa_ids: empresaIds, max_paginas: maxPaginas }) },
   );
 }
+
+export type DfeManifestoResultado = {
+  empresa_id: number;
+  manifestadas: number;
+  ja_cientes: number;
+  erros: string[];
+  restantes_resumo: number;
+  aviso?: string | null;
+};
+
+/** Manifesta (Ciência da Operação) até `limite` recebidas em resumo da empresa. */
+export function dfeManifestar(empresaId: number, limite = 20) {
+  return apiFetch<DfeManifestoResultado>(
+    `/api/v1/dfe-nfe/empresa/${empresaId}/manifestar?limite=${limite}`,
+    { method: "POST" },
+  );
+}
