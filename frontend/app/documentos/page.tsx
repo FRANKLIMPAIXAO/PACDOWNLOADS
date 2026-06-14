@@ -27,6 +27,7 @@ import {
 } from "../../lib/documentos";
 import { Empresa, listarEmpresas } from "../../lib/empresas";
 import { dfeDistribuirLote, dfeElegiveis, dfeManifestar, dfeManifestarDoc } from "../../lib/dfe";
+import { nfseElegiveis, nfseSincronizar } from "../../lib/nfse";
 
 const TIPOS: TipoDocumento[] = ["NFE", "CTE", "NFSE"];
 
@@ -136,6 +137,53 @@ function DocumentosContent() {
     } catch (e) {
       setDfeMsg(null);
       setError(e instanceof ApiError ? e.message : "Falha na Distribuição DF-e.");
+    } finally {
+      setDfeBusy(false);
+    }
+  }
+
+  // Busca de NFS-e pelo ADN da Receita (mTLS cert A1, grátis). Contextual:
+  // empresa selecionada OU todas elegíveis. Drena cada empresa por NSU.
+  async function handleSincronizarNfse() {
+    const umaEmpresa = empresaId !== "";
+    if (!confirm(umaEmpresa
+      ? "Buscar NFS-e desta empresa pelo ADN da Receita (grátis, com o cert A1)?"
+      : "Buscar NFS-e de TODA a carteira elegível pelo ADN? Pode demorar.")) return;
+    setDfeBusy(true);
+    setDfeMsg("Buscando NFS-e...");
+    setError(null);
+    try {
+      const ids = umaEmpresa
+        ? [empresaId as number]
+        : (await nfseElegiveis()).map((e) => e.id);
+      let novos = 0, emitidas = 0, recebidas = 0, erros = 0;
+      for (let i = 0; i < ids.length; i++) {
+        const id = ids[i];
+        for (let guard = 0; guard < 20; guard++) {
+          let res;
+          try {
+            res = await nfseSincronizar(id, 50);
+          } catch {
+            erros += 1;
+            break;
+          }
+          novos += res.novos || 0;
+          emitidas += res.emitidas || 0;
+          recebidas += res.recebidas || 0;
+          erros += res.erros?.length || 0;
+          if (res.motivo_parada !== "limite_lotes") break; // drenou ou parou
+        }
+        setDfeMsg(`NFS-e: ${novos} nova(s) · empresas ${i + 1}/${ids.length}`);
+      }
+      setDfeMsg(null);
+      setToast(
+        `🧾 NFS-e: ${novos} nova(s) (${emitidas} emitidas · ${recebidas} recebidas)` +
+        (erros ? ` · ${erros} aviso` : "") + ".",
+      );
+      setRefreshTick((t) => t + 1);
+    } catch (e) {
+      setDfeMsg(null);
+      setError(e instanceof ApiError ? e.message : "Falha ao buscar NFS-e.");
     } finally {
       setDfeBusy(false);
     }
@@ -624,6 +672,20 @@ function DocumentosContent() {
             : empresaId !== ""
               ? "✍ Manifestar: esta"
               : "✍ Manifestar DF-e (todas)"}
+        </button>
+        <button
+          type="button"
+          className="btn-primary"
+          onClick={handleSincronizarNfse}
+          disabled={dfeBusy}
+          title="Busca as NFS-e (serviço) pelo ADN da Receita com o cert A1 — grátis, sem Focus"
+          style={{ alignSelf: "end", background: "rgb(234,88,12)" }}
+        >
+          {dfeBusy
+            ? "..."
+            : empresaId !== ""
+              ? "🧾 NFS-e: esta empresa"
+              : "🧾 NFS-e Nacional (todas)"}
         </button>
         <button
           type="button"
