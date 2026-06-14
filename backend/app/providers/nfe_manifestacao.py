@@ -31,8 +31,12 @@ logger = logging.getLogger(__name__)
 
 NS_NFE = "http://www.portalfiscal.inf.br/nfe"
 NS_SIG = "http://www.w3.org/2000/09/xmldsig#"
-URL_AN_EVENTO_PROD = "https://www1.nfe.fazenda.gov.br/NFeRecepcaoEvento4/NFeRecepcaoEvento4.asmx"
-URL_AN_EVENTO_HOM = "https://hom1.nfe.fazenda.gov.br/NFeRecepcaoEvento4/NFeRecepcaoEvento4.asmx"
+# ATENÇÃO ao host: o serviço de EVENTO/manifestação do Ambiente Nacional fica em
+# `www.nfe.fazenda.gov.br` (SEM o "1"), diferente da Distribuição DFe que fica em
+# `www1`. Usar www1 aqui devolve "action não reconhecida" (é outro deployment).
+# Confirmado no config do sped-nfe (AN RecepcaoEvento 4.00).
+URL_AN_EVENTO_PROD = "https://www.nfe.fazenda.gov.br/NFeRecepcaoEvento4/NFeRecepcaoEvento4.asmx"
+URL_AN_EVENTO_HOM = "https://hom.nfe.fazenda.gov.br/NFeRecepcaoEvento4/NFeRecepcaoEvento4.asmx"
 SOAP_ACTION_EVENTO = "http://www.portalfiscal.inf.br/nfe/wsdl/NFeRecepcaoEvento4/nfeRecepcaoEvento"
 
 # Brasília (sem horário de verão desde 2019)
