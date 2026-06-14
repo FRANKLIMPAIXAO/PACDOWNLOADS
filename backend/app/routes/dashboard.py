@@ -107,23 +107,18 @@ def resumo_dashboard(
     total_geral = db.scalar(select(func.count(DocumentoFiscal.id))) or 0
 
     # --- Pendentes de manifestacao ---
-    # Considera pendente: NFe recebida sem `json_original.manifestado_em`.
-    # SQLite/JSON1: usa json_extract.
-    pendentes_q = db.scalars(
-        select(DocumentoFiscal).where(
-            DocumentoFiscal.tipo_documento == TipoDocumento.NFE,
-            DocumentoFiscal.origem == "recebida",
-            DocumentoFiscal.cancelada == False,
-        )
-    ).all()
-    pendentes = sum(
-        1 for d in pendentes_q
-        if not (d.json_original or {}).get("manifestado_em")
+    # Pendente = NFe recebida ativa ainda em RESUMO (não manifestada).
+    # ANTES isto carregava TODAS as recebidas (1000+) como objetos ORM completos
+    # (com json_original) só pra contar — era o MAIOR gargalo do dashboard.
+    # Agora conta em SQL via a coluna `status` ('resumo' = não manifestada).
+    receb_base = select(func.count(DocumentoFiscal.id)).where(
+        DocumentoFiscal.tipo_documento == TipoDocumento.NFE,
+        DocumentoFiscal.origem == "recebida",
+        DocumentoFiscal.cancelada == False,  # noqa: E712
     )
-    manifestadas = sum(
-        1 for d in pendentes_q
-        if (d.json_original or {}).get("manifestado_em")
-    )
+    total_receb = db.scalar(receb_base) or 0
+    pendentes = db.scalar(receb_base.where(DocumentoFiscal.status == "resumo")) or 0
+    manifestadas = total_receb - pendentes
 
     # --- CNDs vencendo / vencidas ---
     limite_cnd = hoje + timedelta(days=30)

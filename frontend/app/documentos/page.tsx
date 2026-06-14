@@ -298,8 +298,11 @@ function DocumentosContent() {
           }
           setToast(
             r.cstat === "573"
-              ? `Esta nota já tinha Ciência (573)${baixou ? ` — ${baixou} XML(s) baixado(s)` : ""}.`
-              : `Ciência registrada (cStat ${r.cstat})! ${baixou} XML(s) completo(s) baixado(s).`,
+              ? `Esta nota já tinha Ciência (573)${baixou ? ` — ${baixou} XML(s) baixado(s)` : " — XML cai na próxima Distribuição"}.`
+              : `Ciência registrada (cStat ${r.cstat})! ` +
+                (baixou
+                  ? `${baixou} XML(s) baixado(s).`
+                  : "A Receita libera o XML completo em alguns minutos (rode a Distribuição depois ou deixe o cron)."),
           );
         } else {
           setError(`Não manifestou: cStat ${r.cstat} — ${r.motivo}`);
@@ -362,7 +365,10 @@ function DocumentosContent() {
         `Manifestação: ${res.manifestadas} nova(s) · ${res.ja_cientes} já tinham` +
         (fora ? ` · ${fora} fora do prazo (10 dias)` : "") +
         (outros ? ` · ${outros} erro` : "") +
-        ` → ${completas} XML(s) completo(s) baixado(s). Restam ${res.restantes_resumo} em resumo.`,
+        ` → ${completas} XML(s) já baixado(s).` +
+        (res.manifestadas > 0
+          ? " Os recém-manifestados a Receita libera em alguns minutos — rode de novo depois ou deixe o cron pegar."
+          : ""),
       );
       setRefreshTick((t) => t + 1);
     } catch (err) {
@@ -378,7 +384,9 @@ function DocumentosContent() {
   }, []);
 
   useEffect(() => {
-    setDocumentos(null);
+    // NÃO zera a lista aqui — zerar fazia a tela "reiniciar" (piscar
+    // "Carregando documentos...") a cada manifestação/refresh. Mantém os dados
+    // antigos visíveis enquanto recarrega; só troca quando o novo chega.
     setError(null);
     const cancFiltro =
       filtroCancelada === "ativas" ? false
