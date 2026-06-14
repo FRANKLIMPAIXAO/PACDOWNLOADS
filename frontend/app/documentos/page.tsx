@@ -19,7 +19,6 @@ import {
   formatDate,
   listarDocumentos,
   manifestarDocumento,
-  manifestarTodasEmpresa,
   resumoDocumentos,
   sincronizarFocusEmpresa,
   sincronizarFocusMultiempresas,
@@ -311,16 +310,25 @@ function DocumentosContent() {
     setError(null);
     setToast(null);
     try {
-      const r = await manifestarTodasEmpresa(Number(empresaId));
+      // Manifestação DIRETA (DF-e, cert próprio, sem Focus). Processa um bloco
+      // (limite 20) pra caber no timeout; o usuário clica de novo pra continuar.
+      const res = await dfeManifestar(Number(empresaId), 20);
+      // cStat 596 = fora do prazo de 10 dias da Ciência (nota antiga) — não é
+      // erro de verdade, separamos pra não assustar.
+      const fora = (res.erros || []).filter((e) => /596|prazo/i.test(e)).length;
+      const outros = (res.erros?.length || 0) - fora;
       setToast(
-        `Lote: ${r.manifestadas} novas · ${r.ja_manifestadas} ja estavam · ` +
-        `${r.pdf_baixadas} DANFE PDFs + ${r.xml_atualizadas} XMLs completos baixados · ` +
-        `${r.erros} erros.`,
+        `Manifestação DF-e: ${res.manifestadas} nova(s) ciência · ` +
+        `${res.ja_cientes} já tinham` +
+        (fora ? ` · ${fora} fora do prazo de 10 dias (Ciência só p/ notas recentes)` : "") +
+        (outros ? ` · ${outros} erro` : "") +
+        `. Restam ${res.restantes_resumo} em resumo. ` +
+        `Agora rode "DF-e: esta empresa" pra baixar o XML completo das manifestadas.`,
       );
       setRefreshTick((t) => t + 1);
     } catch (err) {
       if (err instanceof ApiError) setError(err.message);
-      else setError("Falha ao manifestar em lote.");
+      else setError("Falha ao manifestar.");
     } finally {
       setBusyId(null);
     }
