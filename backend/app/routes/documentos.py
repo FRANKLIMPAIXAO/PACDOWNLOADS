@@ -29,6 +29,7 @@ def listar_documentos(
     origem: str | None = None,
     data_inicio: str | None = None,
     data_fim: str | None = None,
+    limite: int = 500,
     db: Session = Depends(get_db),
 ) -> list[DocumentoFiscal]:
     """Lista documentos com filtros opcionais.
@@ -70,6 +71,10 @@ def listar_documentos(
             stmt = stmt.where(DocumentoFiscal.data_emissao <= dt)
         except ValueError:
             raise HTTPException(status_code=400, detail=f"data_fim invalida: {data_fim} (esperado YYYY-MM-DD)")
+    # Teto de segurança: sem isso a tela puxava a carteira INTEIRA (milhares de
+    # docs) e ficava lenta. Já vem ordenado por data desc, então pega as mais
+    # recentes. Filtro de empresa/período reduz mais.
+    stmt = stmt.limit(max(1, min(limite, 2000)))
     return db.scalars(stmt).unique().all()
 
 

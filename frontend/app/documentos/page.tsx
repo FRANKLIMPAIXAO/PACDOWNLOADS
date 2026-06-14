@@ -275,7 +275,7 @@ function DocumentosContent() {
     }
   }
 
-  async function handleManifestar(documentoId: number, ehResumo: boolean) {
+  async function handleManifestar(documentoId: number, ehResumo: boolean, empresaIdDoc?: number) {
     setBusyId(`manifest-${documentoId}`);
     setError(null);
     setToast(null);
@@ -284,10 +284,22 @@ function DocumentosContent() {
         // Nota da Distribuição DF-e (resumo) → manifestação DIRETA assinada.
         const r = await dfeManifestarDoc(documentoId);
         if (r.ok) {
+          // ENCADEIA: já roda a Distribuição da empresa pra baixar o XML que a
+          // Receita liberou agora (1 clique = ciência + XML completo).
+          let baixou = 0;
+          if (empresaIdDoc) {
+            try {
+              const dist = await dfeDistribuirLote([empresaIdDoc]);
+              baixou = (dist.resultados || []).reduce(
+                (s, x) => s + (x.nfes_completas_novas || 0), 0);
+            } catch {
+              // throttle/656 — o XML cai no próximo ciclo
+            }
+          }
           setToast(
             r.cstat === "573"
-              ? "Esta nota já tinha Ciência da Operação (cStat 573)."
-              : `Ciência registrada (cStat ${r.cstat})! Rode "DF-e: esta empresa" pra baixar o XML completo.`,
+              ? `Esta nota já tinha Ciência (573)${baixou ? ` — ${baixou} XML(s) baixado(s)` : ""}.`
+              : `Ciência registrada (cStat ${r.cstat})! ${baixou} XML(s) completo(s) baixado(s).`,
           );
         } else {
           setError(`Não manifestou: cStat ${r.cstat} — ${r.motivo}`);
@@ -332,13 +344,25 @@ function DocumentosContent() {
       // erro de verdade, separamos pra não assustar.
       const fora = (res.erros || []).filter((e) => /596|prazo/i.test(e)).length;
       const outros = (res.erros?.length || 0) - fora;
+      // ENCADEIA: se algo foi manifestado, já roda a Distribuição da empresa pra
+      // baixar os XMLs completos que a Receita acabou de liberar (1 clique só).
+      let completas = 0;
+      if (res.manifestadas + res.ja_cientes > 0) {
+        setToast("Manifestado ✓ — baixando os XMLs completos liberados...");
+        try {
+          const dist = await dfeDistribuirLote([Number(empresaId)]);
+          completas = (dist.resultados || []).reduce(
+            (s, r) => s + (r.nfes_completas_novas || 0), 0);
+        } catch {
+          // Distribuição pode falhar transitória (656/throttle) — o XML cai no
+          // próximo ciclo. Não trava a manifestação que já deu certo.
+        }
+      }
       setToast(
-        `Manifestação DF-e: ${res.manifestadas} nova(s) ciência · ` +
-        `${res.ja_cientes} já tinham` +
-        (fora ? ` · ${fora} fora do prazo de 10 dias (Ciência só p/ notas recentes)` : "") +
+        `Manifestação: ${res.manifestadas} nova(s) · ${res.ja_cientes} já tinham` +
+        (fora ? ` · ${fora} fora do prazo (10 dias)` : "") +
         (outros ? ` · ${outros} erro` : "") +
-        `. Restam ${res.restantes_resumo} em resumo. ` +
-        `Agora rode "DF-e: esta empresa" pra baixar o XML completo das manifestadas.`,
+        ` → ${completas} XML(s) completo(s) baixado(s). Restam ${res.restantes_resumo} em resumo.`,
       );
       setRefreshTick((t) => t + 1);
     } catch (err) {
@@ -501,7 +525,7 @@ function DocumentosContent() {
           type="button"
           className="btn-secondary"
           style={{ padding: "4px 10px", fontSize: "0.78rem" }}
-          onClick={() => handleManifestar(d.id, ehResumo)}
+          onClick={() => handleManifestar(d.id, ehResumo, d.empresa_id)}
           disabled={busyId === `manifest-${d.id}`}
           title="Registra Ciência da Operação na SEFAZ (libera o XML completo)"
         >
