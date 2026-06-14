@@ -233,6 +233,32 @@ class DfeDistribuicaoService:
             ),
         }
 
+    def diagnosticar_evento(self, empresa_id: int) -> dict:
+        """Dispara o evento assinado em várias formas de envelope/transporte e
+        devolve o que cada uma respondeu — pra achar a combinação que o
+        NFeRecepcaoEvento4 aceita. Usa uma chave de uma recebida em resumo."""
+        empresa = self.db.get(Empresa, empresa_id)
+        if not empresa:
+            raise HTTPException(status_code=404, detail="Empresa não encontrada")
+        if not empresa.cert_a1_path or not Path(empresa.cert_a1_path).exists():
+            raise HTTPException(status_code=400, detail="Empresa sem certificado A1.")
+        doc = self.db.scalar(
+            select(DocumentoFiscal).where(
+                DocumentoFiscal.empresa_id == empresa_id,
+                DocumentoFiscal.tipo_documento == TipoDocumento.NFE,
+                DocumentoFiscal.origem == "recebida",
+                DocumentoFiscal.status == "resumo",
+            ).limit(1)
+        )
+        if not doc:
+            raise HTTPException(status_code=400, detail="Sem recebida em resumo pra testar.")
+        senha = empresa.get_cert_a1_senha() or ""
+        variantes = NFeManifestacaoProvider().diagnosticar_variantes(
+            chave=doc.chave_acesso, cnpj=empresa.cnpj,
+            pfx_path=empresa.cert_a1_path, pfx_senha=senha,
+        )
+        return {"empresa_id": empresa_id, "chave": doc.chave_acesso, "variantes": variantes}
+
     def _salvar_resumo(self, empresa: Empresa, doc) -> bool:
         """Grava o resumo de uma recebida (resNFe) — sem XML completo ainda."""
         if not doc.chave:

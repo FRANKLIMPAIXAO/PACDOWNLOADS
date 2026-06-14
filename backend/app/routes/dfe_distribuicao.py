@@ -59,6 +59,14 @@ def manifestar(
     return DfeDistribuicaoService(db).manifestar_recebidas(empresa_id, limite=limite)
 
 
+@router.post("/empresa/{empresa_id}/diagnostico-evento")
+def diagnostico_evento(empresa_id: int, db: Session = Depends(get_db)) -> dict:
+    """Dispara o evento assinado em 5 variantes de envelope/transporte SOAP e
+    devolve o que cada uma respondeu. Acha sem chute qual o NFeRecepcaoEvento4
+    do AN aceita (resolve o 'action não reconhecida')."""
+    return DfeDistribuicaoService(db).diagnosticar_evento(empresa_id)
+
+
 @router.post("/distribuir-lote")
 def distribuir_lote(payload: DistribuirLotePayload, db: Session = Depends(get_db)) -> dict:
     """Distribui um BLOCO de empresas (o frontend fatia a carteira em blocos

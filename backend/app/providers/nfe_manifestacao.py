@@ -175,6 +175,84 @@ class NFeManifestacaoProvider:
         cert_der = cert.public_bytes(serialization.Encoding.DER)
         etree.SubElement(x509, S + "X509Certificate").text = base64.b64encode(cert_der).decode()
 
+    # ------------------------------------------------------------------
+    def diagnosticar_variantes(self, *, chave: str, cnpj: str, pfx_path: str,
+                               pfx_senha: str) -> list[dict]:
+        """Dispara o MESMO evento assinado em várias formas de envelope/transporte
+        e devolve o que cada uma respondeu. Serve pra descobrir, sem chute, qual
+        combinação (SOAP 1.1/1.2, SOAPAction em header, wrapper, host) o
+        NFeRecepcaoEvento4 do AN aceita — em vez de deploy a deploy.
+        """
+        from cryptography.hazmat.primitives import serialization
+
+        cnpj_num = "".join(c for c in (cnpj or "") if c.isdigit())
+        chave = "".join(c for c in (chave or "") if c.isdigit())
+        if len(chave) != 44:
+            raise ValueError(f"Chave NFe inválida (len={len(chave)})")
+        key, cert = self._carregar_pfx(pfx_path, pfx_senha)
+        env = self._montar_evento_assinado(chave, cnpj_num, 1, key, cert).decode("utf-8")
+
+        wsdl_ns = "http://www.portalfiscal.inf.br/nfe/wsdl/NFeRecepcaoEvento4"
+        url_www = "https://www.nfe.fazenda.gov.br/NFeRecepcaoEvento4/NFeRecepcaoEvento4.asmx"
+        url_www1 = "https://www1.nfe.fazenda.gov.br/NFeRecepcaoEvento4/NFeRecepcaoEvento4.asmx"
+
+        wrap = f'<nfeRecepcaoEvento xmlns="{wsdl_ns}"><nfeDadosMsg>{env}</nfeDadosMsg></nfeRecepcaoEvento>'
+        sem_wrap = f'<nfeDadosMsg xmlns="{wsdl_ns}">{env}</nfeDadosMsg>'
+
+        def env12(inner: str) -> str:
+            return ('<?xml version="1.0" encoding="UTF-8"?>'
+                    '<soap12:Envelope xmlns:soap12="http://www.w3.org/2003/05/soap-envelope">'
+                    f'<soap12:Body>{inner}</soap12:Body></soap12:Envelope>')
+
+        def env11(inner: str) -> str:
+            return ('<?xml version="1.0" encoding="UTF-8"?>'
+                    '<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">'
+                    f'<soap:Body>{inner}</soap:Body></soap:Envelope>')
+
+        ct12 = f'application/soap+xml; charset=utf-8; action="{SOAP_ACTION_EVENTO}"'
+        casos = [
+            ("1: soap1.2 action-no-CT (atual)", url_www, env12(wrap),
+             {"Content-Type": ct12}),
+            ("2: soap1.2 + SOAPAction header", url_www, env12(wrap),
+             {"Content-Type": ct12, "SOAPAction": f'"{SOAP_ACTION_EVENTO}"'}),
+            ("3: soap1.1 text/xml + SOAPAction", url_www, env11(wrap),
+             {"Content-Type": "text/xml; charset=utf-8", "SOAPAction": f'"{SOAP_ACTION_EVENTO}"'}),
+            ("4: soap1.2 SEM wrapper (nfeDadosMsg direto)", url_www, env12(sem_wrap),
+             {"Content-Type": ct12}),
+            ("5: soap1.2 host www1", url_www1, env12(wrap),
+             {"Content-Type": ct12}),
+        ]
+
+        key_pem = key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.TraditionalOpenSSL,
+            serialization.NoEncryption())
+        cert_pem = cert.public_bytes(serialization.Encoding.PEM)
+        cert_f = tempfile.NamedTemporaryFile(delete=False, suffix=".crt.pem")
+        key_f = tempfile.NamedTemporaryFile(delete=False, suffix=".key.pem")
+        out: list[dict] = []
+        try:
+            cert_f.write(cert_pem); cert_f.close()
+            key_f.write(key_pem); key_f.close()
+            for nome, url, envelope, headers in casos:
+                try:
+                    r = requests.post(url, data=envelope.encode("utf-8"), headers=headers,
+                                      cert=(cert_f.name, key_f.name), timeout=self.timeout)
+                    corpo = (r.text or "").strip()
+                    out.append({
+                        "variante": nome, "http": r.status_code,
+                        "motivo": _extrair_fault(corpo) or corpo[:200] or "(vazio)",
+                    })
+                except Exception as exc:  # noqa: BLE001
+                    out.append({"variante": nome, "http": "EXC", "motivo": str(exc)[:200]})
+        finally:
+            for f in (cert_f.name, key_f.name):
+                try:
+                    os.unlink(f)
+                except OSError:
+                    pass
+        return out
+
     def _post_mtls(self, env_evento: bytes, key, cert) -> str:
         from cryptography.hazmat.primitives import serialization
 
