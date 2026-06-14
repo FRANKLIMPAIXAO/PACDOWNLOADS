@@ -59,6 +59,12 @@ def manifestar(
     return DfeDistribuicaoService(db).manifestar_recebidas(empresa_id, limite=limite)
 
 
+@router.post("/documento/{documento_id}/manifestar")
+def manifestar_documento(documento_id: int, db: Session = Depends(get_db)) -> dict:
+    """Manifesta (Ciência da Operação) UMA nota — botão da linha em /documentos."""
+    return DfeDistribuicaoService(db).manifestar_documento(documento_id)
+
+
 @router.post("/empresa/{empresa_id}/diagnostico-evento")
 def diagnostico_evento(empresa_id: int, db: Session = Depends(get_db)) -> dict:
     """Dispara o evento assinado em 5 variantes de envelope/transporte SOAP e

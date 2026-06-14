@@ -238,9 +238,15 @@ def baixar_xml_individual(documento_id: int, db: Session = Depends(get_db)) -> F
     documento = db.get(DocumentoFiscal, documento_id)
     if not documento:
         raise HTTPException(status_code=404, detail="Documento nao encontrado")
+    # Nota em RESUMO (DF-e recebida ainda não manifestada) tem xml_path="" →
+    # Path("") vira "." (diretório) e .exists() dá True, servindo um diretório =
+    # 500 sem CORS. is_file() + guard de string vazia evita isso.
+    if not documento.xml_path or not Path(documento.xml_path).is_file():
+        raise HTTPException(
+            status_code=404,
+            detail="XML completo ainda não disponível — nota em resumo. Manifeste a nota primeiro.",
+        )
     path = Path(documento.xml_path)
-    if not path.exists():
-        raise HTTPException(status_code=404, detail="XML nao encontrado no storage")
     filename = _filename_amigavel(documento, "xml")
     return FileResponse(
         path=path,
@@ -261,6 +267,12 @@ def baixar_pdf_individual(documento_id: int, db: Session = Depends(get_db)) -> F
     documento = db.get(DocumentoFiscal, documento_id)
     if not documento:
         raise HTTPException(status_code=404, detail="Documento nao encontrado")
+    # Resumo (sem XML no disco) → não há como gerar DANFE. 404 limpo (não 500).
+    if not documento.xml_path:
+        raise HTTPException(
+            status_code=404,
+            detail="DANFE ainda não disponível — nota em resumo. Manifeste a nota primeiro.",
+        )
     xml_path = Path(documento.xml_path)
     pdf_path = xml_path.with_suffix(".pdf")
 

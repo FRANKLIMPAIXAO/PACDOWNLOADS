@@ -233,6 +233,38 @@ class DfeDistribuicaoService:
             ),
         }
 
+    def manifestar_documento(self, documento_id: int) -> dict:
+        """Manifesta (Ciência da Operação) UMA nota específica (botão da linha)."""
+        doc = self.db.get(DocumentoFiscal, documento_id)
+        if not doc:
+            raise HTTPException(status_code=404, detail="Documento não encontrado")
+        empresa = self.db.get(Empresa, doc.empresa_id)
+        if not empresa or not empresa.cert_a1_path or not Path(empresa.cert_a1_path).exists():
+            raise HTTPException(status_code=400, detail="Empresa sem certificado A1.")
+        if not doc.chave_acesso or len(doc.chave_acesso) != 44:
+            raise HTTPException(status_code=400, detail="Documento sem chave de acesso válida.")
+        senha = empresa.get_cert_a1_senha() or ""
+        try:
+            res = NFeManifestacaoProvider().manifestar_ciencia(
+                chave=doc.chave_acesso, cnpj=empresa.cnpj,
+                pfx_path=empresa.cert_a1_path, pfx_senha=senha,
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=502, detail=f"Falha ao manifestar: {exc}")
+        if res["ok"]:
+            doc.status = "manifestado"
+            self.db.commit()
+        return {
+            "documento_id": documento_id,
+            "ok": res["ok"],
+            "cstat": res["cstat"],
+            "motivo": res["motivo"],
+            "aviso": (
+                "Ciência registrada! Rode a Distribuição DF-e da empresa pra baixar o XML completo."
+                if res["ok"] else None
+            ),
+        }
+
     def diagnosticar_evento(self, empresa_id: int) -> dict:
         """Dispara o evento assinado em várias formas de envelope/transporte e
         devolve o que cada uma respondeu — pra achar a combinação que o

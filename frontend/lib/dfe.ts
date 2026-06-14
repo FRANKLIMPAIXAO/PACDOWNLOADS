@@ -52,3 +52,11 @@ export function dfeManifestar(empresaId: number, limite = 20) {
     { method: "POST" },
   );
 }
+
+/** Manifesta (Ciência da Operação) UMA nota específica (botão da linha). */
+export function dfeManifestarDoc(documentoId: number) {
+  return apiFetch<{ ok: boolean; cstat: string; motivo: string; aviso?: string | null }>(
+    `/api/v1/dfe-nfe/documento/${documentoId}/manifestar`,
+    { method: "POST" },
+  );
+}

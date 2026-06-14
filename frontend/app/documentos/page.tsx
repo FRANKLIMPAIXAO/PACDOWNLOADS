@@ -26,7 +26,7 @@ import {
   verificarCanceladas,
 } from "../../lib/documentos";
 import { Empresa, listarEmpresas } from "../../lib/empresas";
-import { dfeDistribuirLote, dfeElegiveis, dfeManifestar } from "../../lib/dfe";
+import { dfeDistribuirLote, dfeElegiveis, dfeManifestar, dfeManifestarDoc } from "../../lib/dfe";
 
 const TIPOS: TipoDocumento[] = ["NFE", "CTE", "NFSE"];
 
@@ -275,22 +275,37 @@ function DocumentosContent() {
     }
   }
 
-  async function handleManifestar(documentoId: number) {
+  async function handleManifestar(documentoId: number, ehResumo: boolean) {
     setBusyId(`manifest-${documentoId}`);
     setError(null);
     setToast(null);
     try {
-      const r = await manifestarDocumento(documentoId, "ciencia");
-      if (r.ja_estava_manifestado) {
-        setToast(`NF ja estava manifestada (${r.manifestado_em?.slice(0, 10)}).`);
+      if (ehResumo) {
+        // Nota da Distribuição DF-e (resumo) → manifestação DIRETA assinada.
+        const r = await dfeManifestarDoc(documentoId);
+        if (r.ok) {
+          setToast(
+            r.cstat === "573"
+              ? "Esta nota já tinha Ciência da Operação (cStat 573)."
+              : `Ciência registrada (cStat ${r.cstat})! Rode "DF-e: esta empresa" pra baixar o XML completo.`,
+          );
+        } else {
+          setError(`Não manifestou: cStat ${r.cstat} — ${r.motivo}`);
+        }
       } else {
-        const extras: string[] = [];
-        if (r.xml_atualizado) extras.push("XML completo OK");
-        if (r.pdf_baixado) extras.push("DANFE PDF OK");
-        const detalhe = extras.length
-          ? ` (${extras.join(" + ")})`
-          : " (Focus ainda sincronizando — DANFE chega em ~5min)";
-        setToast(`Manifestada · SEFAZ ${r.status_sefaz ?? "OK"}${detalhe}.`);
+        // Nota legada (Focus) → fluxo antigo.
+        const r = await manifestarDocumento(documentoId, "ciencia");
+        if (r.ja_estava_manifestado) {
+          setToast(`NF ja estava manifestada (${r.manifestado_em?.slice(0, 10)}).`);
+        } else {
+          const extras: string[] = [];
+          if (r.xml_atualizado) extras.push("XML completo OK");
+          if (r.pdf_baixado) extras.push("DANFE PDF OK");
+          const detalhe = extras.length
+            ? ` (${extras.join(" + ")})`
+            : " (Focus ainda sincronizando — DANFE chega em ~5min)";
+          setToast(`Manifestada · SEFAZ ${r.status_sefaz ?? "OK"}${detalhe}.`);
+        }
       }
       setRefreshTick((t) => t + 1);
     } catch (err) {
@@ -434,6 +449,8 @@ function DocumentosContent() {
       const manifestadoEm = d.json_original?.manifestado_em;
       const isNFe = d.tipo_documento === "NFE";
       const ehSaida = ehSaidaPropria(d);
+      // Nota da Distribuição DF-e ainda em resumo: sem XML completo no disco.
+      const ehResumo = d.status === "resumo" || !d.xml_path;
 
       const statusVenda = d.cancelada ? (
         <span
@@ -484,9 +501,9 @@ function DocumentosContent() {
           type="button"
           className="btn-secondary"
           style={{ padding: "4px 10px", fontSize: "0.78rem" }}
-          onClick={() => handleManifestar(d.id)}
+          onClick={() => handleManifestar(d.id, ehResumo)}
           disabled={busyId === `manifest-${d.id}`}
-          title="Registra Ciência da Operação na SEFAZ e tenta baixar DANFE PDF"
+          title="Registra Ciência da Operação na SEFAZ (libera o XML completo)"
         >
           {busyId === `manifest-${d.id}` ? "..." : "Manifestar"}
         </button>
@@ -514,8 +531,10 @@ function DocumentosContent() {
             className="btn-secondary"
             style={{ padding: "4px 10px", fontSize: "0.78rem" }}
             onClick={() => handleBaixar(d.id, "xml")}
-            disabled={busyId === `xml-${d.id}`}
-            title="Baixa o XML como arquivo"
+            disabled={busyId === `xml-${d.id}` || ehResumo}
+            title={ehResumo
+              ? "XML completo ainda não disponível — nota em resumo. Manifeste primeiro."
+              : "Baixa o XML como arquivo"}
           >
             {busyId === `xml-${d.id}` ? "..." : "⬇ XML"}
           </button>
@@ -524,8 +543,10 @@ function DocumentosContent() {
             className="btn-secondary"
             style={{ padding: "4px 10px", fontSize: "0.78rem" }}
             onClick={() => handleBaixar(d.id, "pdf")}
-            disabled={busyId === `pdf-${d.id}`}
-            title="Baixa o DANFE PDF (disponivel apos manifestacao + sync Focus)"
+            disabled={busyId === `pdf-${d.id}` || ehResumo}
+            title={ehResumo
+              ? "DANFE ainda não disponível — nota em resumo. Manifeste primeiro."
+              : "Baixa o DANFE PDF (disponivel apos manifestacao + sync Focus)"}
           >
             {busyId === `pdf-${d.id}` ? "..." : "⬇ PDF"}
           </button>
