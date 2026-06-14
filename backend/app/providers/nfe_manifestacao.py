@@ -43,6 +43,34 @@ def _local(tag: str) -> str:
     return tag.split("}", 1)[-1]
 
 
+def _extrair_fault(corpo: str) -> str | None:
+    """Tira o motivo legível de um corpo de erro do .asmx.
+
+    A SEFAZ devolve HTTP 500 com o motivo real dentro: SOAP 1.2 usa
+    <env:Reason><env:Text>, SOAP 1.1 usa <faultstring>; às vezes ainda vem um
+    cStat/xMotivo estruturado. Pega o que existir.
+    """
+    if not corpo:
+        return None
+    try:
+        root = etree.fromstring(corpo.encode("utf-8"))
+    except Exception:  # noqa: BLE001 — corpo pode não ser XML
+        return None
+    alvos = ("Text", "faultstring", "xMotivo", "Reason", "Detail")
+    achados: list[str] = []
+    cstat = None
+    for e in root.iter():
+        nome = _local(e.tag)
+        if nome == "cStat" and e.text:
+            cstat = e.text.strip()
+        if nome in alvos and e.text and e.text.strip():
+            achados.append(e.text.strip())
+    msg = " | ".join(dict.fromkeys(achados)) if achados else None
+    if cstat and msg:
+        return f"cStat {cstat}: {msg}"
+    return msg or (f"cStat {cstat}" if cstat else None)
+
+
 class NFeManifestacaoProvider:
     def __init__(self) -> None:
         self.homolog = os.getenv("NFE_DIST_HOMOLOG", "false").lower() == "true"
@@ -173,7 +201,13 @@ class NFeManifestacaoProvider:
                 self.url, data=envelope.encode("utf-8"), headers=headers,
                 cert=(cert_f.name, key_f.name), timeout=self.timeout,
             )
-            resp.raise_for_status()
+            # NÃO usar raise_for_status cego: o .asmx da Receita devolve o motivo
+            # real (SOAP Fault / Rejeição) DENTRO do corpo mesmo com HTTP 500.
+            # Engolir isso = "500 Server Error" opaco. Capturamos o corpo.
+            if resp.status_code >= 400:
+                corpo = (resp.text or "").strip()
+                motivo = _extrair_fault(corpo) or corpo[:600] or "(corpo vazio)"
+                raise RuntimeError(f"HTTP {resp.status_code} NFeRecepcaoEvento4: {motivo}")
             return resp.text
         finally:
             for f in (cert_f.name, key_f.name):
