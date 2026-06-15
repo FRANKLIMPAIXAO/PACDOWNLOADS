@@ -252,7 +252,7 @@ def _completar_cadeia_icp(leaf_cert) -> list:
 
     cadeia: list = []
     atual = leaf_cert
-    vistos: set = set()
+    vistos: set = {leaf_cert.fingerprint(hashes.SHA256())}
     for _ in range(8):  # teto de profundidade
         if atual.issuer == atual.subject:  # raiz auto-assinada
             break
@@ -260,15 +260,21 @@ def _completar_cadeia_icp(leaf_cert) -> list:
         if not url:
             break
         candidatos = _baixar(url)
-        prox = next((c for c in candidatos if c.subject == atual.issuer), None) \
-            or (candidatos[0] if candidatos else None)
+        if not candidatos:
+            break
+        # O .p7b da ICP-Brasil normalmente traz a CADEIA INTEIRA (intermediária +
+        # AC RFB + Raiz). Adiciona TODAS as CAs novas — não só a emissora
+        # imediata — senão a cadeia fica incompleta e o portal recusa (alert 40).
+        prox = None
+        for c in candidatos:
+            fp = c.fingerprint(hashes.SHA256())
+            if fp not in vistos:
+                vistos.add(fp)
+                cadeia.append(c)
+            if c.subject == atual.issuer:
+                prox = c
         if prox is None:
             break
-        fp = prox.fingerprint(hashes.SHA256())
-        if fp in vistos:
-            break
-        vistos.add(fp)
-        cadeia.append(prox)
         atual = prox
     return cadeia
 
