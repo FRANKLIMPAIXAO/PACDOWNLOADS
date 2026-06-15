@@ -291,35 +291,28 @@ def baixar_pdf_individual(documento_id: int, db: Session = Depends(get_db)) -> F
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
 
-    # Se eh NFe de SAIDA (a empresa eh a emitente) — Focus nao tem DANFE PDF
-    # (so devolve pra notas RECEBIDAS apos manifestacao). Gera DANFE localmente
-    # a partir do XML via brazilfiscalreport e cacheia no disco.
-    eh_saida = documento.origem == "emitida"
-    if not eh_saida and documento.chave_acesso and len(documento.chave_acesso) >= 20:
-        # Fallback: detecta saida comparando CNPJ na chave com CNPJ da empresa
-        emp_check = db.get(Empresa, documento.empresa_id)
-        if emp_check:
-            cnpj_emitente = documento.chave_acesso[6:20]
-            cnpj_empresa = "".join(c for c in (emp_check.cnpj or "") if c.isdigit())
-            eh_saida = cnpj_emitente == cnpj_empresa
-
-    if eh_saida and xml_path.exists() and documento.tipo_documento.value == "NFE":
-        try:
-            from brazilfiscalreport.danfe import Danfe, DanfeConfig
-            xml_str = xml_path.read_text(encoding="utf-8")
-            danfe = Danfe(xml=xml_str, config=DanfeConfig())
-            danfe.output(str(pdf_path))
+    # DANFE gerado LOCALMENTE a partir do XML completo (procNFe) — vale pra
+    # SAÍDA e pra RECEBIDA. A Distribuição DF-e já traz o XML completo das
+    # recebidas; o brazilfiscalreport monta o DANFE de QUALQUER NFe (independe
+    # de saída/entrada). Antes só gerava pra eh_saida → recebida ficava sem PDF.
+    if documento.tipo_documento.value == "NFE" and xml_path.exists():
+        xml_str = xml_path.read_text(encoding="utf-8", errors="replace")
+        if "<infNFe" in xml_str:  # XML completo (não é só resumo)
+            try:
+                from brazilfiscalreport.danfe import Danfe, DanfeConfig
+                danfe = Danfe(xml=xml_str, config=DanfeConfig())
+                danfe.output(str(pdf_path))
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Falha ao gerar DANFE PDF a partir do XML: {exc!r}",
+                )
             filename = _filename_amigavel(documento, "pdf")
             return FileResponse(
                 path=pdf_path,
                 filename=filename,
                 media_type="application/pdf",
                 headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-            )
-        except Exception as exc:  # noqa: BLE001
-            raise HTTPException(
-                status_code=500,
-                detail=f"Falha ao gerar DANFE PDF a partir do XML: {exc!r}",
             )
 
     # Nao temos local: ja foi manifestada? Tenta puxar da Focus agora
