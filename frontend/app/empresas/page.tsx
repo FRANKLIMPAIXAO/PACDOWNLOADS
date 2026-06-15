@@ -31,6 +31,7 @@ function EmpresasContent() {
   const [error, setError] = useState<string | null>(null);
   const [autoCadBusy, setAutoCadBusy] = useState(false);
   const [autoCadResult, setAutoCadResult] = useState<AutoCadastrarTodasResultado | null>(null);
+  const [filtro, setFiltro] = useState("");
 
   function recarregar() {
     listarEmpresas()
@@ -189,7 +190,21 @@ function EmpresasContent() {
     );
   }
 
-  const rows: ReactNode[][] = empresas.map((empresa) => [
+  const termo = filtro.trim().toLowerCase();
+  const termoDigitos = termo.replace(/\D/g, "");
+  const empresasFiltradas = !termo
+    ? empresas
+    : empresas.filter((e) => {
+        const cnpjDig = (e.cnpj || "").replace(/\D/g, "");
+        return (
+          (e.razao_social || "").toLowerCase().includes(termo) ||
+          (e.municipio || "").toLowerCase().includes(termo) ||
+          (e.regime_tributario || "").toLowerCase().includes(termo) ||
+          (termoDigitos.length >= 2 && cnpjDig.includes(termoDigitos))
+        );
+      });
+
+  const rows: ReactNode[][] = empresasFiltradas.map((empresa) => [
     <Link key={empresa.id} href={`/empresas/${empresa.id}`} className="row-link">
       {empresa.razao_social}
     </Link>,
@@ -208,9 +223,27 @@ function EmpresasContent() {
     <>
       {header}
       {autoCadToast}
+      <div style={{ marginBottom: 12, position: "relative", maxWidth: 420 }}>
+        <input
+          type="search"
+          value={filtro}
+          onChange={(e) => setFiltro(e.target.value)}
+          placeholder="🔎 Filtrar por razão social, CNPJ, cidade ou regime..."
+          aria-label="Filtrar empresas"
+          style={{
+            width: "100%", padding: "9px 12px", borderRadius: 8,
+            border: "1px solid var(--border, #334)", background: "var(--input-bg, #0f172a)",
+            color: "inherit", fontSize: "0.9rem",
+          }}
+        />
+      </div>
       <DataTable
         title=""
-        subtitle={`${empresas.length} empresa(s) cadastrada(s).`}
+        subtitle={
+          termo
+            ? `${empresasFiltradas.length} de ${empresas.length} empresa(s) — filtro "${filtro}".`
+            : `${empresas.length} empresa(s) cadastrada(s).`
+        }
         headers={["Empresa", "CNPJ", "Cidade", "Regime", "Status", "Ultimo NSU"]}
         rows={rows}
       />

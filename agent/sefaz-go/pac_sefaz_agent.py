@@ -191,13 +191,97 @@ def janela_mes_especifico(ano_mes: str) -> JanelaPeriodo:
 # ============================================================
 
 
+def _completar_cadeia_icp(leaf_cert) -> list:
+    """Completa a cadeia ICP-Brasil do cert lendo a extensão AIA (caIssuers).
+
+    PFX A1 quase sempre traz só a folha. O portal SEFAZ-GO (OpenSSL 3.x via
+    Playwright) exige a cadeia no handshake → rejeita com 'sslv3 alert handshake
+    failure (alert 40)' os certs cuja intermediária ele não tem (ex.: emitidos
+    por videoconferência — NEVES E MIRANDA). Aqui sobe a cadeia pela URL
+    caIssuers do próprio cert, baixando as intermediárias (cacheadas em disco).
+    Resiliente: qualquer falha devolve o que tiver — sem regressão.
+    """
+    import hashlib
+    import urllib.request
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.serialization import pkcs7
+    from cryptography.x509.oid import AuthorityInformationAccessOID, ExtensionOID
+
+    cache_dir = Path(__file__).parent / ".ca_cache"
+    try:
+        cache_dir.mkdir(exist_ok=True)
+    except OSError:
+        cache_dir = None
+
+    def _baixar(url: str) -> list:
+        cf = (cache_dir / f"{hashlib.sha1(url.encode()).hexdigest()}.bin") if cache_dir else None
+        if cf and cf.exists():
+            data = cf.read_bytes()
+        else:
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": "pac-agent/1.0"})
+                data = urllib.request.urlopen(req, timeout=10).read()
+                if cf:
+                    cf.write_bytes(data)
+            except Exception:  # noqa: BLE001
+                return []
+        for loader in (x509.load_der_x509_certificate, x509.load_pem_x509_certificate):
+            try:
+                return [loader(data)]
+            except Exception:  # noqa: BLE001
+                pass
+        for loader in (pkcs7.load_der_pkcs7_certificates, pkcs7.load_pem_pkcs7_certificates):
+            try:
+                return list(loader(data))
+            except Exception:  # noqa: BLE001
+                pass
+        return []
+
+    def _aia(cert) -> str | None:
+        try:
+            aia = cert.extensions.get_extension_for_oid(
+                ExtensionOID.AUTHORITY_INFORMATION_ACCESS).value
+            for d in aia:
+                if d.access_method == AuthorityInformationAccessOID.CA_ISSUERS:
+                    return d.access_location.value
+        except Exception:  # noqa: BLE001
+            return None
+        return None
+
+    cadeia: list = []
+    atual = leaf_cert
+    vistos: set = set()
+    for _ in range(8):  # teto de profundidade
+        if atual.issuer == atual.subject:  # raiz auto-assinada
+            break
+        url = _aia(atual)
+        if not url:
+            break
+        candidatos = _baixar(url)
+        prox = next((c for c in candidatos if c.subject == atual.issuer), None) \
+            or (candidatos[0] if candidatos else None)
+        if prox is None:
+            break
+        fp = prox.fingerprint(hashes.SHA256())
+        if fp in vistos:
+            break
+        vistos.add(fp)
+        cadeia.append(prox)
+        atual = prox
+    return cadeia
+
+
 def reembrulhar_pfx_moderno(pfx_bytes: bytes, senha: str) -> bytes:
     """Re-empacota um PFX da ICP-Brasil em formato moderno (AES-256+SHA256).
 
     PFX legado (RC2-40 + 3DES + SHA1) é bloqueado pelo OpenSSL 3.x que
     Node.js/Playwright usam. Esta função decifra o PFX antigo via Python
     cryptography (que tem provider legacy) e re-empacota com algoritmos
-    modernos compatíveis com OpenSSL 3 sem flags especiais.
+    modernos compatíveis com OpenSSL 3 sem flags especiais. Também COMPLETA a
+    cadeia ICP-Brasil (via AIA) quando o PFX só traz a folha — senão o portal
+    SEFAZ-GO rejeita certos certs no handshake (alert 40).
     """
     from cryptography.hazmat.primitives.serialization import (
         BestAvailableEncryption, pkcs12,
@@ -210,12 +294,22 @@ def reembrulhar_pfx_moderno(pfx_bytes: bytes, senha: str) -> bytes:
     if not private_key or not certificate:
         raise RuntimeError("PFX sem chave/certificado ao re-empacotar")
 
+    # Cadeia: o que veio no PFX + intermediárias completadas via AIA (dedup).
+    cas = list(additional or [])
+    try:
+        for c in _completar_cadeia_icp(certificate):
+            if c not in cas:
+                cas.append(c)
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("cadeia-icp").warning(
+            "Falha ao completar cadeia ICP-Brasil (segue com a folha): %s", exc)
+
     # Mantém a MESMA senha mas re-empacota com AES-256 + SHA256 (compatível OpenSSL 3)
     return pkcs12.serialize_key_and_certificates(
         name=b"agent-cert",
         key=private_key,
         cert=certificate,
-        cas=additional or None,
+        cas=cas or None,
         encryption_algorithm=BestAvailableEncryption(senha_bytes),
     )
 
