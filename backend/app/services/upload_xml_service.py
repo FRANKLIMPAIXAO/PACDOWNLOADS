@@ -49,7 +49,14 @@ class UploadResultado:
     detalhes: list[UploadDetalhe] = field(default_factory=list)
 
     def to_dict(self) -> dict:
+        # Cap nos detalhes: ZIP de varejo (milhares de XMLs) geraria uma lista
+        # gigante na resposta (memória + transferência pro robô). Mantém os
+        # contadores agregados; serializa só uma AMOSTRA dos detalhes.
         d = asdict(self)
+        if len(self.detalhes) > 100:
+            d["detalhes"] = [asdict(x) for x in self.detalhes[:100]]
+            d["detalhes_total"] = len(self.detalhes)
+            d["detalhes_truncado"] = True
         return d
 
 
