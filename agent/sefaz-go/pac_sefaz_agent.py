@@ -1258,9 +1258,23 @@ async def processar_empresa(
         log_evento("erro_inesperado", cnpj=empresa.cnpj, erro=str(exc))
     finally:
         res.duracao_segundos = (dt.datetime.now() - inicio).total_seconds()
+        # Fecha o CONTEXT **e** o BROWSER (processo Chromium). Só context.close()
+        # deixava o processo Chromium VIVO — com o chunk de varejo (~15 janelas
+        # por empresa) acumulavam ~15 Chromiums → estourava a RAM do container →
+        # OOM → restart → robô morria no meio. Fechar o browser libera ~300MB
+        # por janela.
+        try:
+            navegador = context.browser
+        except Exception:  # noqa: BLE001
+            navegador = None
         try:
             await context.close()
-        except Exception:
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if navegador:
+                await navegador.close()
+        except Exception:  # noqa: BLE001
             pass
 
     return res
