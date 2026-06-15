@@ -1446,6 +1446,100 @@ async def aguardar_e_baixar_zip(
 # ============================================================
 
 
+# Limite prático do portal SEFAZ-GO por consulta. NEVES (farmácia) bateu ~2223
+# num mês. Acima disso a consulta volta CAPADA → dividimos a janela e somamos.
+LIMITE_CAP_PORTAL = 2000
+MAX_PROF_CHUNK = 8  # teto de recursão (mês → ... → ~dias)
+
+
+def _contar_xmls_no_zip(zip_path) -> int:
+    """Conta quantos .xml tem no ZIP baixado (pra detectar consulta capada)."""
+    import zipfile
+    try:
+        with zipfile.ZipFile(zip_path) as z:
+            return sum(1 for n in z.namelist() if n.lower().endswith(".xml"))
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+async def baixar_empresa_com_chunk(
+    pw, emp, cert, data_ini, data_fim, download_dir, pac, *,
+    headless, max_tentativas, dry_run, prof=0,
+):
+    """Baixa a janela [data_ini, data_fim]; se vier CAPADA (≥ LIMITE_CAP_PORTAL
+    notas), divide ao meio e baixa cada metade (recursivo) — garante completude
+    pra varejo de alto volume (NFC-e: farmácia ~9k/mês, supermercado ~25k/mês).
+    Empresa de baixo volume: 1 janela só, igual antes (sem regressão).
+    Faz o upload de cada FOLHA (janela sob o limite). Devolve lista de folhas.
+    """
+    log = logging.getLogger(f"chunk[{emp.cnpj}]")
+    janela = JanelaPeriodo(data_inicio=data_ini, data_fim=data_fim)
+    res = None
+    for tentativa in range(1, max_tentativas + 1):
+        res = await processar_empresa(pw, emp, cert, janela, download_dir, headless=headless)
+        if res.sucesso or res.sem_resultados:
+            break
+        if tentativa < max_tentativas:
+            log.warning("Empresa %s janela %s..%s falhou (tent %d/%d): %s — retry 8s",
+                        emp.cnpj, janela.formatado_br_inicio, janela.formatado_br_fim,
+                        tentativa, max_tentativas, res.motivo)
+            await asyncio.sleep(8)
+    if not res or not res.sucesso or not res.zip_path:
+        return [res] if res else []
+
+    n = _contar_xmls_no_zip(res.zip_path)
+    pode_dividir = (data_fim - data_ini).days >= 1 and prof < MAX_PROF_CHUNK
+    if n >= LIMITE_CAP_PORTAL and pode_dividir:
+        meio = data_ini + (data_fim - data_ini) // 2
+        log.warning(
+            "Janela %s..%s veio com %d notas (≥ %d = capada). Dividindo: %s..%s | %s..%s",
+            janela.formatado_br_inicio, janela.formatado_br_fim, n, LIMITE_CAP_PORTAL,
+            data_ini, meio, meio + dt.timedelta(days=1), data_fim,
+        )
+        folhas = []
+        folhas += await baixar_empresa_com_chunk(
+            pw, emp, cert, data_ini, meio, download_dir, pac,
+            headless=headless, max_tentativas=max_tentativas, dry_run=dry_run, prof=prof + 1)
+        folhas += await baixar_empresa_com_chunk(
+            pw, emp, cert, meio + dt.timedelta(days=1), data_fim, download_dir, pac,
+            headless=headless, max_tentativas=max_tentativas, dry_run=dry_run, prof=prof + 1)
+        return folhas
+
+    # Folha (sob o limite, ou não dá pra dividir mais) → upload
+    if not dry_run:
+        try:
+            res.upload_pac = pac.upload_em_massa(Path(res.zip_path), empresa_id_fallback=emp.id)
+            log.info("Upload janela %s..%s: %d persistidos, %d dup, %d erros",
+                     janela.formatado_br_inicio, janela.formatado_br_fim,
+                     res.upload_pac.get("persistidos", 0), res.upload_pac.get("duplicados", 0),
+                     res.upload_pac.get("erros", 0))
+            log_evento("upload_pac_ok", cnpj=emp.cnpj, resultado=res.upload_pac,
+                       janela=[janela.formatado_br_inicio, janela.formatado_br_fim])
+        except Exception as exc:  # noqa: BLE001
+            log.error("Falha upload PAC: %s", exc)
+            log_evento("upload_pac_erro", cnpj=emp.cnpj, erro=str(exc))
+    return [res]
+
+
+def _agregar_folhas(folhas: list):
+    """Junta as folhas (janelas) de uma empresa num ResultadoEmpresa só."""
+    folhas = [f for f in folhas if f]
+    if not folhas:
+        return None
+    res = next((f for f in folhas if f.sucesso), folhas[0])
+    if len(folhas) > 1:
+        soma = {"persistidos": 0, "duplicados": 0, "erros": 0}
+        for f in folhas:
+            for k in soma:
+                soma[k] += (f.upload_pac or {}).get(k, 0)
+        res.upload_pac = soma
+        res.sucesso = any(f.sucesso for f in folhas)
+        res.sem_resultados = all(f.sem_resultados for f in folhas)
+        n_ok = sum(1 for f in folhas if f.sucesso)
+        res.motivo = f"{n_ok} janela(s) baixada(s) (chunk de varejo, {soma['persistidos']} notas novas)"
+    return res
+
+
 async def main_async(args: argparse.Namespace) -> int:
     setup_logging()
     log = logging.getLogger("agente")
@@ -1515,45 +1609,17 @@ async def main_async(args: argparse.Namespace) -> int:
                     continue
 
                 try:
-                    # Retry da empresa inteira: context novo a cada tentativa
-                    # dribla o estado de Cloudflare/portal lento.
-                    res: ResultadoEmpresa | None = None
-                    for tentativa in range(1, max_tentativas + 1):
-                        res = await processar_empresa(
-                            pw, emp, cert, janela, DOWNLOAD_DIR, headless=headless,
-                        )
-                        if res.sucesso or res.sem_resultados:
-                            if tentativa > 1 and res.sucesso and not res.sem_resultados:
-                                res.motivo = (
-                                    f"OK na {tentativa}ª tentativa "
-                                    "(1ª falhou por portal lento/Cloudflare)"
-                                )
-                            break
-                        if tentativa < max_tentativas:
-                            log.warning(
-                                "Empresa %s falhou (tentativa %d/%d): %s — retry em 8s",
-                                emp.cnpj, tentativa, max_tentativas, res.motivo,
-                            )
-                            await asyncio.sleep(8)
-                    # Upload pro PAC se baixou
-                    if res and res.sucesso and res.zip_path and not args.dry_run:
-                        try:
-                            res.upload_pac = pac.upload_em_massa(
-                                Path(res.zip_path), empresa_id_fallback=emp.id,
-                            )
-                            log.info(
-                                "Upload PAC: %d persistidos, %d duplicados, %d erros",
-                                res.upload_pac["persistidos"],
-                                res.upload_pac["duplicados"],
-                                res.upload_pac["erros"],
-                            )
-                            log_evento(
-                                "upload_pac_ok", cnpj=emp.cnpj,
-                                resultado=res.upload_pac,
-                            )
-                        except Exception as exc:
-                            log.error("Falha upload PAC: %s", exc)
-                            log_evento("upload_pac_erro", cnpj=emp.cnpj, erro=str(exc))
+                    # Baixa com CHUNK adaptativo: se a janela vier CAPADA pelo
+                    # limite do portal (varejo/NFC-e: farmácia ~9k, supermercado
+                    # ~25k/mês), divide ao meio e soma até cada pedaço caber.
+                    # Empresa de baixo volume = 1 janela só (sem regressão).
+                    # Retry + upload moram dentro do helper, por janela.
+                    folhas = await baixar_empresa_com_chunk(
+                        pw, emp, cert, janela.data_inicio, janela.data_fim,
+                        DOWNLOAD_DIR, pac, headless=headless,
+                        max_tentativas=max_tentativas, dry_run=args.dry_run,
+                    )
+                    res = _agregar_folhas(folhas)
                     if res is not None:
                         resultados.append(res)
                 finally:
