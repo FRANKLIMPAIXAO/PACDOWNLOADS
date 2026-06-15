@@ -1,7 +1,9 @@
 """Rotas da Distribuição DF-e da NFe (direto com cert A1, sem Focus)."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+import os
+
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -12,6 +14,29 @@ from app.services.dfe_distribuicao_service import DfeDistribuicaoService
 router = APIRouter(
     prefix="/dfe-nfe", tags=["dfe-nfe"], dependencies=[Depends(get_current_user)],
 )
+
+# Router do cron: SEM JWT (um cron externo chama), protegido por token em header.
+router_cron = APIRouter(prefix="/dfe-nfe", tags=["dfe-nfe-cron"])
+
+
+@router_cron.post("/cron")
+def cron_diario(
+    x_cron_token: str = Header(default=""),
+    chunk: int = 2,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Passo do cron diário (distribuir + manifestar um pedaço da carteira).
+
+    Chamado por um cron EXTERNO a cada ~10-15 min. Protegido por `X-Cron-Token`
+    (env `DFE_CRON_TOKEN`). `chunk` = empresas por chamada (cap interno por
+    tempo pra caber no proxy).
+    """
+    esperado = os.getenv("DFE_CRON_TOKEN", "")
+    if not esperado:
+        raise HTTPException(status_code=503, detail="DFE_CRON_TOKEN não configurado no servidor.")
+    if not x_cron_token or x_cron_token != esperado:
+        raise HTTPException(status_code=401, detail="Token do cron inválido.")
+    return DfeDistribuicaoService(db).cron_diario(chunk=max(1, min(chunk, 5)))
 
 
 class DistribuirLotePayload(BaseModel):

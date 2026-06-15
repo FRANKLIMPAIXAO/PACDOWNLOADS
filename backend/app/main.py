@@ -28,7 +28,7 @@ settings = get_settings()
 # BUILD_COMMIT no build (commit fica "unknown"), este é o sinal confiável pra
 # saber, via GET /version, se o deploy pegou o código novo (cache stale é
 # recorrente). Formato livre: AAAA-MM-DD + resumo curto.
-APP_BUILD_TAG = "2026-06-14-nfse-adn-e-manifestar-so-na-janela"
+APP_BUILD_TAG = "2026-06-14-cron-diario-dfe"
 
 
 @asynccontextmanager
@@ -127,6 +127,7 @@ app.include_router(usuarios.router, prefix=settings.api_v1_prefix)
 app.include_router(empresas.router, prefix=settings.api_v1_prefix)
 app.include_router(documentos.router, prefix=settings.api_v1_prefix)
 app.include_router(dfe_distribuicao.router, prefix=settings.api_v1_prefix)
+app.include_router(dfe_distribuicao.router_cron, prefix=settings.api_v1_prefix)
 app.include_router(nfse_adn.router, prefix=settings.api_v1_prefix)
 app.include_router(robo.router, prefix=settings.api_v1_prefix)
 app.include_router(robo_sefaz.router, prefix=settings.api_v1_prefix)
