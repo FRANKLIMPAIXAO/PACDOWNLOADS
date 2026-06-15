@@ -256,7 +256,10 @@ class UploadXmlService:
                 DocumentoFiscal.chave_acesso == chave,
             )
         )
-        if existente:
+        # Duplicado DE VERDADE só se o existente já tem XML completo. Se existe
+        # mas é só RESUMO (recebida da Distribuição, xml_path vazio), NÃO pula:
+        # completa o registro com o procNFe que acabou de chegar (pós-Ciência).
+        if existente and existente.xml_path:
             det.status = "duplicado"
             det.mensagem = f"Documento ja existe (id={existente.id})"
             resultado.duplicados += 1
@@ -284,6 +287,32 @@ class UploadXmlService:
         # tpNF: "1"=saída (venda/remessa), "0"=entrada (nota de entrada própria).
         _tp = (parsed.get("tipo_nf") or "").strip()
         eh_saida = True if _tp == "1" else (False if _tp == "0" else None)
+
+        # Se já existia como RESUMO (sem XML), COMPLETA com o XML que chegou —
+        # é a recebida virando completa pós-manifestação. Não cria duplicado.
+        if existente:
+            existente.xml_path = xml_path
+            existente.status = "baixado"
+            existente.numero = existente.numero or parsed.get("numero")
+            existente.serie = existente.serie or parsed.get("serie")
+            if existente.data_emissao is None:
+                existente.data_emissao = parsed.get("data_emissao")
+            if existente.valor_total is None:
+                existente.valor_total = parsed.get("valor_total")
+            if existente.eh_saida is None:
+                existente.eh_saida = eh_saida
+            try:
+                self.db.commit()
+                resultado.persistidos += 1
+                det.status = "ok"
+                det.mensagem = "Resumo completado com XML"
+            except Exception as exc:  # noqa: BLE001
+                self.db.rollback()
+                resultado.erros += 1
+                det.status = "erro"
+                det.mensagem = f"Falha ao completar resumo: {exc}"
+            resultado.detalhes.append(det)
+            return
 
         documento = DocumentoFiscal(
             empresa_id=empresa.id,

@@ -59,6 +59,7 @@ def elegiveis(db: Session = Depends(get_db)) -> list[dict]:
 def distribuir(
     empresa_id: int,
     max_paginas: int = 15,
+    reset: bool = False,
     db: Session = Depends(get_db),
 ) -> dict:
     """Puxa do Ambiente Nacional as NFes da empresa (recebidas resumo + completas).
@@ -66,8 +67,11 @@ def distribuir(
     Usa o certificado A1 da empresa (mTLS), modelo NSU — incremental, de graça.
     `max_paginas`: limite de páginas (cada ~50 docs) por chamada, pra caber no
     timeout. Re-chame até `cstat`=137 (sem mais docs).
+    `reset=true`: re-puxa do começo (90 dias) — recupera o XML completo de notas
+    cujo resumo já existe mas o procNFe foi descartado antes do fix do dedup.
     """
-    return DfeDistribuicaoService(db).distribuir_empresa(empresa_id, max_paginas=max_paginas)
+    return DfeDistribuicaoService(db).distribuir_empresa(
+        empresa_id, max_paginas=max_paginas, reset_nsu=reset)
 
 
 @router.post("/empresa/{empresa_id}/manifestar")

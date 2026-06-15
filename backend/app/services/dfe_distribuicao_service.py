@@ -56,7 +56,8 @@ class DfeDistribuicaoService:
         self.provider = NFeDistribuicaoProvider()
         self.upload = UploadXmlService(db)
 
-    def distribuir_empresa(self, empresa_id: int, *, max_paginas: int = 15) -> dict:
+    def distribuir_empresa(self, empresa_id: int, *, max_paginas: int = 15,
+                           reset_nsu: bool = False) -> dict:
         empresa = self.db.get(Empresa, empresa_id)
         if not empresa:
             raise HTTPException(status_code=404, detail="Empresa não encontrada")
@@ -67,7 +68,9 @@ class DfeDistribuicaoService:
             )
         senha = empresa.get_cert_a1_senha() or ""
         uf = (getattr(empresa, "uf", None) or "GO")
-        ult_nsu = empresa.nfe_dist_ult_nsu or "0"
+        # reset_nsu=True re-puxa do começo (90 dias) — usado pra recuperar o
+        # procNFe completo de notas cujo resumo já existe (pós-manifestação).
+        ult_nsu = "0" if reset_nsu else (empresa.nfe_dist_ult_nsu or "0")
 
         resumos_novos = 0
         completas_novas = 0
