@@ -486,6 +486,92 @@ async def importar_empresas_xlsx(
     return resultado.to_dict()
 
 
+@router.get("/{empresa_id}/cert-cadeia")
+def cert_cadeia(empresa_id: int, db: Session = Depends(get_db)) -> dict:
+    """Diagnostica a cadeia de certificação do A1: sobe pela AIA (caIssuers) e
+    reporta se dá pra baixar as intermediárias do container. Usado pra entender
+    o alert 40 do robô SEFAZ (cadeia incompleta no handshake do portal)."""
+    import urllib.request
+    from pathlib import Path
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives.serialization import pkcs12, pkcs7
+    from cryptography.x509.oid import AuthorityInformationAccessOID, ExtensionOID
+
+    empresa = db.get(Empresa, empresa_id)
+    if not empresa:
+        raise HTTPException(status_code=404, detail="Empresa não encontrada")
+    if not empresa.cert_a1_path or not Path(empresa.cert_a1_path).exists():
+        raise HTTPException(status_code=400, detail="Empresa sem certificado A1.")
+    senha = (empresa.get_cert_a1_senha() or "").encode("utf-8")
+    pfx = Path(empresa.cert_a1_path).read_bytes()
+    _key, cert, additional = pkcs12.load_key_and_certificates(pfx, senha)
+    if not cert:
+        raise HTTPException(status_code=400, detail="PFX sem certificado.")
+
+    def _aia(c):
+        try:
+            aia = c.extensions.get_extension_for_oid(
+                ExtensionOID.AUTHORITY_INFORMATION_ACCESS).value
+            for d in aia:
+                if d.access_method == AuthorityInformationAccessOID.CA_ISSUERS:
+                    return d.access_location.value
+        except Exception:  # noqa: BLE001
+            return None
+        return None
+
+    def _parse(data):
+        for loader in (x509.load_der_x509_certificate, x509.load_pem_x509_certificate):
+            try:
+                return [loader(data)]
+            except Exception:  # noqa: BLE001
+                pass
+        for loader in (pkcs7.load_der_pkcs7_certificates, pkcs7.load_pem_pkcs7_certificates):
+            try:
+                return list(loader(data))
+            except Exception:  # noqa: BLE001
+                pass
+        return []
+
+    passos = []
+    atual = cert
+    for _ in range(8):
+        info = {
+            "subject": atual.subject.rfc4514_string()[:120],
+            "issuer": atual.issuer.rfc4514_string()[:120],
+            "auto_assinado": atual.issuer == atual.subject,
+        }
+        if info["auto_assinado"]:
+            passos.append(info)
+            break
+        url = _aia(atual)
+        info["aia_url"] = url
+        if not url:
+            passos.append(info)
+            break
+        prox = None
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "pac-diag/1.0"})
+            data = urllib.request.urlopen(req, timeout=10).read()
+            certs = _parse(data)
+            info["download"] = f"ok ({len(data)} bytes, {len(certs)} cert)"
+            info["cas"] = [c.subject.rfc4514_string()[:100] for c in certs]
+            prox = next((c for c in certs if c.subject == atual.issuer),
+                        certs[0] if certs else None)
+        except Exception as exc:  # noqa: BLE001
+            info["download"] = f"FALHOU: {type(exc).__name__}: {exc}"
+        passos.append(info)
+        if prox is None:
+            break
+        atual = prox
+
+    return {
+        "empresa": empresa.razao_social,
+        "cadeia_no_pfx": len(additional or []),
+        "passos": passos,
+    }
+
+
 @router.post("/focus/diagnostico")
 def diagnostico_focus(
     empresa_id: int | None = None,
