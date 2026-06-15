@@ -12,7 +12,7 @@ SEM custo por nota (≠ Focus).
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 
 from fastapi import HTTPException
@@ -181,13 +181,23 @@ class DfeDistribuicaoService:
             raise HTTPException(status_code=400, detail="Empresa sem certificado A1.")
         senha = empresa.get_cert_a1_senha() or ""
 
+        # Janela da Ciência da Operação ~10 dias: notas mais velhas SEMPRE dão
+        # cStat 596 ("fora do prazo"). Pular as antigas (>15d, com folga) evita
+        # gastar milhares de chamadas assinadas à toa — e o lote drena rápido.
+        # data_emissao NULL entra (não dá pra saber a idade → tenta).
+        corte = datetime.now(timezone.utc) - timedelta(days=15)
+        na_janela = (
+            (DocumentoFiscal.data_emissao.is_(None))
+            | (DocumentoFiscal.data_emissao >= corte)
+        )
         pendentes = list(self.db.scalars(
             select(DocumentoFiscal).where(
                 DocumentoFiscal.empresa_id == empresa_id,
                 DocumentoFiscal.tipo_documento == TipoDocumento.NFE,
                 DocumentoFiscal.origem == "recebida",
                 DocumentoFiscal.status == "resumo",
-            ).limit(limite)
+                na_janela,
+            ).order_by(DocumentoFiscal.data_emissao.desc().nullslast()).limit(limite)
         ).all())
 
         prov = NFeManifestacaoProvider()
@@ -213,11 +223,14 @@ class DfeDistribuicaoService:
                 self.db.rollback()
                 erros.append(f"{doc.chave_acesso[-6:]}: {exc}")
 
+        # Conta só as DENTRO da janela — assim o lote drena até 0 e para (as
+        # antigas ficam em resumo de propósito, não são manifestáveis).
         restantes = self.db.scalar(
             select(func.count(DocumentoFiscal.id)).where(
                 DocumentoFiscal.empresa_id == empresa_id,
                 DocumentoFiscal.origem == "recebida",
                 DocumentoFiscal.status == "resumo",
+                na_janela,
             )
         )
         return {
