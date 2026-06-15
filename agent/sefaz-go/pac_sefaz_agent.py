@@ -860,6 +860,35 @@ async def processar_empresa(
         except Exception as exc:
             log.warning("Erro ao selecionar CNPJ no dropdown: %s", exc)
 
+        # Passo 4.6: Modelo = 55/65 (NF-e + NFC-e). O default do portal numa
+        # sessão nova traz só NF-e (55) → o robô perdia TODA a NFC-e (modelo
+        # 65), que num varejo/farmácia é o GROSSO do faturamento. Acha o select
+        # de Modelo pelas opções (sem depender do id) e escolhe a que cobre os
+        # dois modelos.
+        try:
+            modelo_res = await page.evaluate("""
+                () => {
+                    const selects = Array.from(document.querySelectorAll('select'));
+                    for (const s of selects) {
+                        const opts = Array.from(s.options);
+                        const blob = opts.map(o => (o.text||'')+' '+(o.value||'')).join(' | ');
+                        if (!/NFC-?e|\\b65\\b/i.test(blob)) continue;  // não é o Modelo
+                        let alvo = opts.find(o => /55.*65|65.*55/.test((o.text||'')+(o.value||'')))
+                                || opts.find(o => /65/.test((o.text||'')+(o.value||'')));
+                        if (alvo) {
+                            s.value = alvo.value;
+                            s.dispatchEvent(new Event('change', {bubbles:true}));
+                            return {ok:true, escolhido:(alvo.text||alvo.value), id:s.id||null};
+                        }
+                    }
+                    return {ok:false};
+                }
+            """)
+            log.info("Modelo (NF-e/NFC-e): %s", modelo_res)
+            log_evento("modelo_selecionado", cnpj=empresa.cnpj, resultado=modelo_res)
+        except Exception as exc:
+            log.warning("Falha ao selecionar Modelo 55/65: %s", exc)
+
         # Passo 5: Preenche datas — JÁ via jQuery UI Datepicker
         # IDs vêm do HTML do portal: cmpDataInicial / cmpDataFinal.
         # FIX (bug #10): fill() puro NÃO funciona com jQuery UI Datepicker

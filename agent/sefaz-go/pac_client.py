@@ -136,8 +136,12 @@ class PacClient:
         data: dict[str, str] = {}
         if empresa_id_fallback:
             data["empresa_id_fallback"] = str(empresa_id_fallback)
+        # Varejo/farmácia gera MILHARES de NFC-e/mês — o ZIP pode ter 9k+ XMLs
+        # (60MB+) e o parse demora minutos. É upload INTERNO (127.0.0.1, sem
+        # Traefik), então dá pra esperar muito sem corte de proxy.
         r = self._client.post(
             "/api/v1/documentos/upload-em-massa", files=files, data=data,
+            timeout=900.0,
         )
         r.raise_for_status()
         return r.json()

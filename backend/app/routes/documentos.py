@@ -512,10 +512,18 @@ async def upload_em_massa(
     service = UploadXmlService(db)
     nome = arquivo.filename.lower()
 
+    # ZIP de varejo (NFC-e) pode ter MILHARES de XMLs — o parse demora minutos.
+    # Roda em threadpool pra NÃO travar o event loop (cron/outros usuários)
+    # durante o processamento.
+    from starlette.concurrency import run_in_threadpool
+
     if nome.endswith(".zip"):
-        resultado = service.processar_zip(content, empresa_id_fallback=empresa_id_fallback)
+        resultado = await run_in_threadpool(
+            service.processar_zip, content, empresa_id_fallback=empresa_id_fallback,
+        )
     elif nome.endswith(".xml"):
-        resultado = service.processar_xmls(
+        resultado = await run_in_threadpool(
+            service.processar_xmls,
             [(arquivo.filename, content)], empresa_id_fallback=empresa_id_fallback,
         )
     else:
