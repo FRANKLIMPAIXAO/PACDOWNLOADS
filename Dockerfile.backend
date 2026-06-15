@@ -80,7 +80,12 @@ EXPOSE 8000
 ENTRYPOINT ["sh", "/app/entrypoint.sh"]
 
 # Default: backend FastAPI. Override no docker-compose pra worker/beat.
+# 1 WORKER de propósito: o robô SEFAZ roda em modo EAGER (thread daemon DENTRO
+# do processo) e o cron DF-e também. Com 2+ workers a memória dobra (cada um
+# carrega o app + Playwright), a recuperação de zumbis roda em todos e o robô
+# fica preso a 1 worker imprevisível. 1 worker = memória menor (menos OOM) +
+# robô/cron previsíveis. App de poucos usuários — concorrência não é gargalo.
 CMD ["python", "-m", "uvicorn", "app.main:app", \
      "--host", "0.0.0.0", "--port", "8000", \
-     "--workers", "2", "--proxy-headers", \
+     "--workers", "1", "--proxy-headers", \
      "--forwarded-allow-ips", "*"]
