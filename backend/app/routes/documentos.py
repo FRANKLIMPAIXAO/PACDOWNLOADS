@@ -315,6 +315,34 @@ def baixar_pdf_individual(documento_id: int, db: Session = Depends(get_db)) -> F
                 headers={"Content-Disposition": f'attachment; filename="{filename}"'},
             )
 
+    # CT-e completo (procCTe): gera o DACTE com o brazilfiscalreport (módulo
+    # próprio do CT-e). A Distribuição do CT-e já traz o XML completo direto pro
+    # tomador do frete (NÃO precisa manifestar). Sem este ramo, o botão PDF caía
+    # no fluxo da NFe e pedia "Manifestar" indevidamente.
+    if documento.tipo_documento.value == "CTE" and xml_path.exists():
+        xml_str = xml_path.read_text(encoding="utf-8", errors="replace")
+        if "<infCte" in xml_str:  # XML completo do CT-e
+            try:
+                from brazilfiscalreport.dacte import Dacte, DacteConfig
+                dacte = Dacte(xml=xml_str, config=DacteConfig())
+                dacte.output(str(pdf_path))
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Falha ao gerar DACTE PDF a partir do XML: {exc!r}",
+                )
+            filename = _filename_amigavel(documento, "pdf")
+            return FileResponse(
+                path=pdf_path,
+                filename=filename,
+                media_type="application/pdf",
+                headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            )
+        raise HTTPException(
+            status_code=404,
+            detail="CT-e sem XML completo — rode a busca de CT-e novamente.",
+        )
+
     # Nao temos local: ja foi manifestada? Tenta puxar da Focus agora
     raw = documento.json_original or {}
     if not raw.get("manifestado_em"):

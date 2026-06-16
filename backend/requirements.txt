@@ -28,9 +28,10 @@ playwright-stealth==2.0.3
 # Resolução de Cloudflare Turnstile no portal SEFAZ-GO
 2captcha-python==1.5.1
 
-# --- brazilfiscalreport: geração de DANFE PDF local a partir de XML ---
-# Usado em /documentos/{id}/pdf quando documento é saída e Focus não tem PDF
-brazilfiscalreport==0.7.7
+# --- brazilfiscalreport: geração de DANFE (NF-e) + DACTE (CT-e) PDF local ---
+# Usado em /documentos/{id}/pdf. A extra [dacte] puxa o `qrcode` (QR code do
+# DACTE) — sem ela o gerador do CT-e quebra com ModuleNotFoundError: qrcode.
+brazilfiscalreport[dacte]==0.7.7
 
 # --- pdfplumber: extrair texto do PDF da PGDAS-D (Serpro só devolve PDF) ---
 # Usado em receita_mensal_service.puxar_da_receita pra ler a receita bruta
