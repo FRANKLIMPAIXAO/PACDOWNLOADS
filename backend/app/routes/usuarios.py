@@ -14,8 +14,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.models.empresa import Empresa
 from app.models.usuario import Usuario
-from app.schemas.auth_schema import UsuarioAdminCreate, UsuarioRead, UsuarioUpdate
+from app.schemas.auth_schema import ClienteCreate, UsuarioAdminCreate, UsuarioRead, UsuarioUpdate
 from app.services.auth_service import get_current_admin, hash_password
 
 
@@ -44,6 +45,34 @@ def criar_usuario(payload: UsuarioAdminCreate, db: Session = Depends(get_db)) ->
         senha_hash=hash_password(payload.password),
         ativo=True,
         is_admin=payload.is_admin,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+@router.post("/cliente", response_model=UsuarioRead, status_code=status.HTTP_201_CREATED)
+def criar_acesso_cliente(payload: ClienteCreate, db: Session = Depends(get_db)) -> Usuario:
+    """Cria um acesso de CLIENTE (portal) vinculado a UMA empresa.
+
+    O cliente loga em /portal e vê SÓ os documentos dessa empresa. Nunca é
+    admin, nunca acessa o escritório (get_current_user rejeita cliente)."""
+    if db.scalar(select(Usuario).where(Usuario.email == payload.email)):
+        raise HTTPException(status_code=400, detail="Já existe um usuário com esse e-mail.")
+    if len(payload.password) < 6:
+        raise HTTPException(status_code=400, detail="Senha precisa de ao menos 6 caracteres.")
+    empresa = db.get(Empresa, payload.empresa_id)
+    if not empresa:
+        raise HTTPException(status_code=404, detail="Empresa não encontrada.")
+    user = Usuario(
+        nome=payload.nome,
+        email=payload.email,
+        senha_hash=hash_password(payload.password),
+        ativo=True,
+        is_admin=False,
+        is_cliente=True,
+        empresa_id=empresa.id,
     )
     db.add(user)
     db.commit()

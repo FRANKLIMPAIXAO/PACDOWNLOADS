@@ -25,6 +25,19 @@ export function criarUsuario(payload: {
   });
 }
 
+/** Cria um acesso de CLIENTE (portal) vinculado a uma empresa. Admin-only. */
+export function criarAcessoCliente(payload: {
+  nome: string;
+  email: string;
+  password: string;
+  empresa_id: number;
+}) {
+  return apiFetch<UsuarioAdmin>("/api/v1/usuarios/cliente", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
 export function atualizarUsuario(
   id: number,
   payload: {

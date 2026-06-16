@@ -25,12 +25,22 @@ class UsuarioAdminCreate(BaseModel):
     is_admin: bool = False
 
 
+class ClienteCreate(BaseModel):
+    """Criação de acesso de CLIENTE (portal) por um admin. Vincula a 1 empresa."""
+    nome: str
+    email: EmailStr
+    password: str
+    empresa_id: int
+
+
 class UsuarioRead(BaseModel):
     id: int
     nome: str
     email: EmailStr
     ativo: bool
     is_admin: bool
+    is_cliente: bool = False
+    empresa_id: int | None = None
 
     model_config = {"from_attributes": True}
 
