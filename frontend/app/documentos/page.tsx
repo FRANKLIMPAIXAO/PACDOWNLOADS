@@ -27,6 +27,7 @@ import {
 } from "../../lib/documentos";
 import { Empresa, listarEmpresas } from "../../lib/empresas";
 import { dfeDistribuirLote, dfeElegiveis, dfeManifestar, dfeManifestarDoc } from "../../lib/dfe";
+import { cteDistribuirLote, cteElegiveis } from "../../lib/cte";
 import { nfseElegiveis, nfseSincronizar } from "../../lib/nfse";
 
 const TIPOS: TipoDocumento[] = ["NFE", "CTE", "NFSE"];
@@ -243,6 +244,69 @@ function DocumentosContent() {
     } catch (e) {
       setDfeMsg(null);
       setError(e instanceof ApiError ? e.message : "Falha na manifestação.");
+    } finally {
+      setDfeBusy(false);
+    }
+  }
+
+  // Distribuição DF-e do CT-e — puxa os conhecimentos de transporte (frete)
+  // direto da Receita com o cert A1, grátis. Fila separada da NFe. Contextual:
+  // empresa selecionada OU toda a carteira elegível. Drena cada uma por NSU.
+  async function handleDistribuirCte() {
+    const umaEmpresa = empresaId !== "";
+    if (!confirm(umaEmpresa
+      ? "Buscar os CT-e (frete) desta empresa direto da Receita (grátis, com o cert A1)?"
+      : "Buscar os CT-e (frete) de TODA a carteira elegível? Pode demorar.")) return;
+    setDfeBusy(true);
+    setDfeMsg("Buscando CT-e...");
+    setError(null);
+    try {
+      let ids: number[];
+      if (umaEmpresa) {
+        ids = [empresaId as number];
+      } else {
+        const elegiveis = await cteElegiveis();
+        if (elegiveis.length === 0) {
+          setDfeMsg(null);
+          setToast("Nenhuma empresa elegível (precisa de cert A1).");
+          return;
+        }
+        ids = elegiveis.map((e) => e.id);
+      }
+      let recebidas = 0;
+      let completas = 0;
+      let erros = 0;
+      for (let i = 0; i < ids.length; i++) {
+        const id = ids[i];
+        for (let guard = 0; guard < 8; guard++) {
+          let res;
+          try {
+            const r = await cteDistribuirLote([id], 20);
+            res = r.resultados[0];
+          } catch {
+            erros += 1;
+            break;
+          }
+          if (!res) break;
+          recebidas += res.resumos_recebidas_novos || 0;
+          completas += res.ctes_completas_novas || 0;
+          if (res.erro) { erros += 1; break; }
+          if (res.concluido || res.cstat === "656") break;
+        }
+        setDfeMsg(
+          `CT-e: ${recebidas} resumo + ${completas} completos · empresas ${i + 1}/${ids.length}` +
+          (erros ? ` · ${erros} com aviso` : ""),
+        );
+      }
+      setDfeMsg(null);
+      setToast(
+        `🚚 CT-e: ${recebidas} resumos + ${completas} completos de ${ids.length} empresas (grátis).` +
+        (erros ? ` ${erros} com aviso.` : ""),
+      );
+      setRefreshTick((t) => t + 1);
+    } catch (e) {
+      setDfeMsg(null);
+      setError(e instanceof ApiError ? e.message : "Falha na Distribuição CT-e.");
     } finally {
       setDfeBusy(false);
     }
@@ -686,6 +750,20 @@ function DocumentosContent() {
             : empresaId !== ""
               ? "🧾 NFS-e: esta empresa"
               : "🧾 NFS-e Nacional (todas)"}
+        </button>
+        <button
+          type="button"
+          className="btn-primary"
+          onClick={handleDistribuirCte}
+          disabled={dfeBusy}
+          title="Busca os CT-e (conhecimentos de transporte / frete) direto da Receita com o cert A1 — grátis, sem Focus"
+          style={{ alignSelf: "end", background: "rgb(37,99,235)" }}
+        >
+          {dfeBusy
+            ? "..."
+            : empresaId !== ""
+              ? "🚚 CT-e: esta empresa"
+              : "🚚 CT-e Nacional (todas)"}
         </button>
         <button
           type="button"

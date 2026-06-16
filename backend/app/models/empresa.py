@@ -77,6 +77,9 @@ class Empresa(Base):
     nfe_dist_ult_nsu: Mapped[str | None] = mapped_column(String(20), nullable=True)
     # Último NSU sacado do ADN da NFS-e (cursor incremental, mesmo cert A1).
     nfse_adn_ult_nsu: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # Último NSU sacado da Distribuição DF-e do CT-e (fila separada da NFe, mesmo
+    # cert A1). Captura os conhecimentos de transporte (crédito de frete).
+    cte_dist_ult_nsu: Mapped[str | None] = mapped_column(String(20), nullable=True)
     # Logins externos (senhas TODAS cifradas via cofre Fernet)
     prefeitura_login: Mapped[str | None] = mapped_column(String(80), nullable=True)
     prefeitura_senha_cifrada: Mapped[str | None] = mapped_column(String(300), nullable=True)
