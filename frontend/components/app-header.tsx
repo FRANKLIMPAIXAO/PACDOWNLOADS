@@ -10,10 +10,8 @@ export function AppHeader() {
   const router = useRouter();
   const pathname = usePathname();
 
-  // Esconde header em paginas de auth (login/register) e em TODO o portal do
-  // cliente (/portal/*) — o portal tem layout e navegação próprios, não deve
-  // mostrar o menu do escritório.
-  if (pathname === "/login" || pathname === "/register" || pathname.startsWith("/portal")) {
+  // Esconde header em paginas de auth (login/register).
+  if (pathname === "/login" || pathname === "/register") {
     return null;
   }
 

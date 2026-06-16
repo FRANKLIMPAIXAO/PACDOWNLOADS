@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, func
+from sqlalchemy import Boolean, DateTime, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -15,15 +15,4 @@ class Usuario(Base):
     senha_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     ativo: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    # --- Portal do cliente (multi-tenant) ---
-    # is_cliente=True → usuário é um CLIENTE (dono da empresa), NÃO equipe do
-    # escritório. Vê SÓ a empresa dele (empresa_id) e SÓ pelo /portal — o
-    # get_current_user (usado por todo endpoint do escritório) rejeita cliente.
-    # Equipe do escritório: is_cliente=False, empresa_id=NULL (vê todas).
-    is_cliente: Mapped[bool] = mapped_column(
-        Boolean, default=False, server_default="false", nullable=False, index=True
-    )
-    empresa_id: Mapped[int | None] = mapped_column(
-        ForeignKey("empresas.id"), nullable=True, index=True
-    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

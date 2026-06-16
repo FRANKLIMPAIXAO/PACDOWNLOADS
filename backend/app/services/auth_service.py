@@ -38,9 +38,7 @@ def authenticate_user(db: Session, email: str, password: str) -> Usuario | None:
     return user
 
 
-def _user_from_token(token: str, db: Session) -> Usuario:
-    """Decodifica o JWT e carrega o Usuario ativo. NÃO aplica regra de papel —
-    quem chama (get_current_user / get_current_cliente) decide o que aceitar."""
+def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> Usuario:
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Nao autenticado",
@@ -57,35 +55,6 @@ def _user_from_token(token: str, db: Session) -> Usuario:
     user = db.scalar(select(Usuario).where(Usuario.email == subject, Usuario.ativo.is_(True)))
     if not user:
         raise credentials_exception
-    return user
-
-
-def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> Usuario:
-    """Usuário do ESCRITÓRIO (equipe). É a dependência de TODO endpoint interno.
-
-    BLOQUEIA cliente: um token de cliente (portal) bate aqui e leva 403 — assim
-    o isolamento multi-tenant é garantido num ponto só, sem precisar lembrar de
-    escopar cada rota do escritório. Cliente acessa SÓ pelo /portal."""
-    user = _user_from_token(token, db)
-    if user.is_cliente:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Esta área é do escritório. Acesse pelo portal do cliente (/portal).",
-        )
-    return user
-
-
-def get_current_cliente(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> Usuario:
-    """Usuário CLIENTE do portal. Exige is_cliente + empresa_id vinculada.
-
-    Todo endpoint do /portal escopa pela `empresa_id` DESTE usuário (derivada do
-    token, nunca do input) — o cliente não consegue pedir a empresa de outro."""
-    user = _user_from_token(token, db)
-    if not user.is_cliente or not user.empresa_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Acesso restrito ao portal do cliente.",
-        )
     return user
 
 

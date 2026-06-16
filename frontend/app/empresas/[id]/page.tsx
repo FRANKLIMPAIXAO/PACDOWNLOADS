@@ -4,7 +4,6 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { FormEvent, useCallback, useEffect, useState } from "react";
 
-import { ClienteAcessoCard } from "../../../components/cliente-acesso-card";
 import { CndCard } from "../../../components/cnd-card";
 import { ConfigFiscalCard } from "../../../components/config-fiscal-card";
 import { PrevencaoCard } from "../../../components/prevencao-card";
@@ -162,7 +161,6 @@ function DetalheEmpresaContent() {
       <CaixaPostalLinkCard empresaId={empresa.id} />
       <CndCard empresaId={empresa.id} />
       <PrevencaoCard empresaId={empresa.id} />
-      <ClienteAcessoCard empresaId={empresa.id} />
     </>
   );
 }
