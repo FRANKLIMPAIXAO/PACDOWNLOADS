@@ -39,14 +39,17 @@ logger = logging.getLogger(__name__)
 _settings = get_settings()
 
 
-# Endpoint do Ambiente Nacional do CT-e (produção). Override por env se preciso.
+# Endpoint do Ambiente Nacional do CT-e (produção). Host é `cte.fazenda.gov.br`
+# (NÃO `nfe`) — o CT-e tem ambiente próprio. Hom e prod usam o MESMO endereço
+# (o tpAmb diferencia). Confirmado na NT 2015.002 / impl. sped-cte. Override por
+# env se preciso (CTE_DIST_URL).
 URL_AN_PRODUCAO = os.getenv(
     "CTE_DIST_URL",
-    "https://www1.nfe.fazenda.gov.br/CTeDistribuicaoDFe/CTeDistribuicaoDFe.asmx",
+    "https://www1.cte.fazenda.gov.br/CTeDistribuicaoDFe/CTeDistribuicaoDFe.asmx",
 )
 URL_AN_HOMOLOG = os.getenv(
     "CTE_DIST_URL_HOMOLOG",
-    "https://hom1.nfe.fazenda.gov.br/CTeDistribuicaoDFe/CTeDistribuicaoDFe.asmx",
+    "https://www1.cte.fazenda.gov.br/CTeDistribuicaoDFe/CTeDistribuicaoDFe.asmx",
 )
 
 NS_CTE = "http://www.portalfiscal.inf.br/cte"
