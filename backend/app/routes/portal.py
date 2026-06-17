@@ -11,8 +11,10 @@ posse do documento.
 """
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -22,6 +24,7 @@ from app.models.usuario import Usuario
 from app.routes.documentos import (
     baixar_pdf_individual,
     baixar_xml_individual,
+    baixar_zip_lote,
     listar_documentos,
     resumo_documentos,
 )
@@ -76,7 +79,8 @@ def portal_documentos(
     db: Session = Depends(get_db),
 ) -> list[DocumentoFiscal]:
     """Lista as notas DA EMPRESA DO CLIENTE. empresa_id é FORÇADO pela identidade
-    (o cliente não escolhe empresa). Reaproveita a listagem do escritório."""
+    (o cliente não escolhe empresa). `origem`: emitida (saída) / recebida
+    (entrada) — usado pelas abas. Reaproveita a listagem do escritório."""
     return listar_documentos(
         empresa_id=cliente.empresa_id,
         tipo_documento=tipo_documento,
@@ -85,6 +89,30 @@ def portal_documentos(
         data_inicio=data_inicio,
         data_fim=data_fim,
         limite=limite,
+        db=db,
+    )
+
+
+@router.get("/documentos/zip")
+def portal_baixar_zip(
+    tipo_documento: TipoDocumento | None = None,
+    origem: str | None = None,
+    data_inicio: str | None = None,
+    data_fim: str | None = None,
+    arquivo: Literal["xml", "pdf", "ambos"] = "xml",
+    cliente: Usuario = Depends(get_current_cliente),
+    db: Session = Depends(get_db),
+) -> StreamingResponse:
+    """Baixa em LOTE (ZIP) as notas da empresa do cliente, respeitando os filtros
+    da tela (tipo/origem/período). empresa_id FORÇADO pela identidade. Só ativas."""
+    return baixar_zip_lote(
+        empresa_id=cliente.empresa_id,
+        tipo_documento=tipo_documento,
+        cancelada=False,
+        origem=origem,
+        data_inicio=data_inicio,
+        data_fim=data_fim,
+        arquivo=arquivo,
         db=db,
     )
 

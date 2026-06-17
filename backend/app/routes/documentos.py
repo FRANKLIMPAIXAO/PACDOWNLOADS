@@ -423,6 +423,7 @@ def baixar_zip_lote(
     empresa_id: int | None = None,
     tipo_documento: TipoDocumento | None = None,
     cancelada: bool | None = None,
+    origem: str | None = None,
     data_inicio: str | None = None,
     data_fim: str | None = None,
     arquivo: Literal["xml", "pdf", "ambos"] = "xml",
@@ -431,7 +432,7 @@ def baixar_zip_lote(
     """Empacota XMLs e/ou PDFs num ZIP e retorna pra download.
 
     Aceita os mesmos filtros que GET /documentos (empresa_id, tipo, cancelada,
-    data_inicio, data_fim). `arquivo`: xml | pdf | ambos.
+    origem, data_inicio, data_fim). `arquivo`: xml | pdf | ambos.
     """
     from datetime import datetime, timezone
 
@@ -444,6 +445,8 @@ def baixar_zip_lote(
         stmt = stmt.where(DocumentoFiscal.tipo_documento == tipo_documento)
     if cancelada is not None:
         stmt = stmt.where(DocumentoFiscal.cancelada == cancelada)
+    if origem in ("emitida", "recebida"):
+        stmt = stmt.where(DocumentoFiscal.origem == origem)
     if data_inicio:
         try:
             dt = datetime.strptime(data_inicio, "%Y-%m-%d").replace(tzinfo=timezone.utc)

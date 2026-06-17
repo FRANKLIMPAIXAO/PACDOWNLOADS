@@ -7,6 +7,7 @@ import { ApiError } from "../../lib/api";
 import {
   getPortalToken,
   portalBaixarArquivo,
+  portalBaixarZip,
   portalDocumentos,
   portalLogout,
   portalMe,
@@ -43,11 +44,13 @@ export default function PortalNotasPage() {
   const [resumo, setResumo] = useState<PortalResumo | null>(null);
   const [docs, setDocs] = useState<PortalDocumento[]>([]);
   const [tipo, setTipo] = useState("");
+  const [origem, setOrigem] = useState(""); // "" = todas | "emitida" | "recebida"
   const [dataInicio, setDataInicio] = useState(trintaDiasAtras());
   const [dataFim, setDataFim] = useState(hoje());
   const [loading, setLoading] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
   const [baixando, setBaixando] = useState<string | null>(null);
+  const [zipBusy, setZipBusy] = useState(false);
 
   // Guard: sem token do portal → manda pro login.
   useEffect(() => {
@@ -70,7 +73,12 @@ export default function PortalNotasPage() {
       const params = { data_inicio: dataInicio, data_fim: dataFim };
       const [r, d] = await Promise.all([
         portalResumo(params),
-        portalDocumentos({ ...params, tipo_documento: tipo || undefined, cancelada: false }),
+        portalDocumentos({
+          ...params,
+          tipo_documento: tipo || undefined,
+          origem: origem || undefined,
+          cancelada: false,
+        }),
       ]);
       setResumo(r);
       setDocs(d);
@@ -79,7 +87,7 @@ export default function PortalNotasPage() {
     } finally {
       setLoading(false);
     }
-  }, [dataInicio, dataFim, tipo]);
+  }, [dataInicio, dataFim, tipo, origem]);
 
   useEffect(() => {
     if (getPortalToken()) carregar();
@@ -95,6 +103,24 @@ export default function PortalNotasPage() {
       setErro(err instanceof ApiError ? err.message : `Falha ao baixar ${t.toUpperCase()}.`);
     } finally {
       setBaixando(null);
+    }
+  }
+
+  async function baixarZip(arquivo: "xml" | "pdf" | "ambos") {
+    setZipBusy(true);
+    setErro(null);
+    try {
+      await portalBaixarZip({
+        tipo_documento: tipo || undefined,
+        origem: origem || undefined,
+        data_inicio: dataInicio,
+        data_fim: dataFim,
+        arquivo,
+      });
+    } catch (err) {
+      setErro(err instanceof ApiError ? err.message : "Falha ao baixar o ZIP.");
+    } finally {
+      setZipBusy(false);
     }
   }
 
@@ -166,8 +192,9 @@ export default function PortalNotasPage() {
             <strong style={{ fontSize: 22 }}>{resumo.emitidas.total}</strong>
           </div>
           <div className="card" style={{ borderLeft: "3px solid rgb(168,85,247)" }}>
-            <p className="muted" style={{ margin: 0 }}>Recebidas (entrada)</p>
-            <strong style={{ fontSize: 22 }}>{resumo.recebidas.total}</strong>
+            <p className="muted" style={{ margin: 0 }}>Compras (recebidas)</p>
+            <strong style={{ fontSize: 22, color: "rgb(168,85,247)" }}>{brl(resumo.recebidas.valor_ativas)}</strong>
+            <p className="muted" style={{ margin: 0 }}>{resumo.recebidas.total} notas de entrada</p>
           </div>
           <div className="card">
             <p className="muted" style={{ margin: 0 }}>Total geral</p>
@@ -175,6 +202,34 @@ export default function PortalNotasPage() {
           </div>
         </div>
       ) : null}
+
+      {/* Abas (origem) + download em lote */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {[
+            { v: "", label: "Todas" },
+            { v: "emitida", label: "Emitidas (saída)" },
+            { v: "recebida", label: "Compras (entrada)" },
+          ].map((t) => (
+            <button
+              key={t.v}
+              type="button"
+              className={origem === t.v ? "btn-primary" : "btn-ghost"}
+              onClick={() => setOrigem(t.v)}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button type="button" className="btn-ghost" onClick={() => baixarZip("xml")} disabled={zipBusy}>
+            {zipBusy ? "Gerando ZIP..." : "⬇ ZIP de XMLs"}
+          </button>
+          <button type="button" className="btn-ghost" onClick={() => baixarZip("pdf")} disabled={zipBusy}>
+            ⬇ ZIP de PDFs
+          </button>
+        </div>
+      </div>
 
       {erro ? <p style={{ color: "rgb(248,113,113)" }}>{erro}</p> : null}
 

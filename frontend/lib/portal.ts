@@ -96,17 +96,53 @@ export function portalMe() {
 
 export function portalDocumentos(params: {
   tipo_documento?: string;
+  origem?: string;
   data_inicio?: string;
   data_fim?: string;
   cancelada?: boolean;
 } = {}) {
   const q = new URLSearchParams();
   if (params.tipo_documento) q.set("tipo_documento", params.tipo_documento);
+  if (params.origem) q.set("origem", params.origem);
   if (params.data_inicio) q.set("data_inicio", params.data_inicio);
   if (params.data_fim) q.set("data_fim", params.data_fim);
   if (params.cancelada !== undefined) q.set("cancelada", String(params.cancelada));
   const qs = q.toString();
   return portalFetch<PortalDocumento[]>(`/api/v1/portal/documentos${qs ? `?${qs}` : ""}`);
+}
+
+/** Baixa em lote (ZIP) as notas do período, respeitando tipo/origem. */
+export async function portalBaixarZip(params: {
+  tipo_documento?: string;
+  origem?: string;
+  data_inicio?: string;
+  data_fim?: string;
+  arquivo?: "xml" | "pdf" | "ambos";
+}): Promise<void> {
+  const q = new URLSearchParams();
+  if (params.tipo_documento) q.set("tipo_documento", params.tipo_documento);
+  if (params.origem) q.set("origem", params.origem);
+  if (params.data_inicio) q.set("data_inicio", params.data_inicio);
+  if (params.data_fim) q.set("data_fim", params.data_fim);
+  q.set("arquivo", params.arquivo || "xml");
+  const token = getPortalToken();
+  const resp = await fetch(`${API_BASE_URL}/api/v1/portal/documentos/zip?${q.toString()}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!resp.ok) {
+    let msg = `Erro ${resp.status}`;
+    try { const j = await resp.json(); if (j?.detail) msg = j.detail; } catch { /* ignore */ }
+    throw new ApiError(resp.status, null, msg);
+  }
+  const blob = await resp.blob();
+  const cd = resp.headers.get("Content-Disposition") || "";
+  const m = cd.match(/filename="?([^"]+)"?/);
+  const filename = m ? m[1] : "documentos.zip";
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  window.URL.revokeObjectURL(url);
 }
 
 export function portalResumo(params: { data_inicio?: string; data_fim?: string } = {}) {
