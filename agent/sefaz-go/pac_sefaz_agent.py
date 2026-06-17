@@ -838,23 +838,41 @@ async def processar_empresa(
                     """
                 )
                 log.info("Dropdown CNPJ tem %d opções: %s", len(opcoes_cnpj), opcoes_cnpj)
-                if empresa.cnpj in opcoes_cnpj:
-                    await cnpj_select.select_option(empresa.cnpj)
-                    log.info("✓ CNPJ %s selecionado no dropdown", empresa.cnpj)
+
+                # Compara por DÍGITOS: o portal às vezes lista o value formatado
+                # ("63.790.096/0001-59") e empresa.cnpj vem só com dígitos
+                # ("63790096000159"). Sem normalizar, o match falhava, o robô
+                # deixava o dropdown no default EM BRANCO e o portal rejeitava
+                # com "Required String parameter 'cmpCnpj' is not present"
+                # (HUB CONECTA, RCHV). Comparar por dígitos resolve.
+                def _so_digitos(v: str) -> str:
+                    return "".join(c for c in (v or "") if c.isdigit())
+
+                alvo = _so_digitos(empresa.cnpj)
+                match = next((v for v in opcoes_cnpj if _so_digitos(v) == alvo), None)
+                if match is not None:
+                    await cnpj_select.select_option(match)
+                    log.info("✓ CNPJ %s selecionado no dropdown (value=%s)", empresa.cnpj, match)
                     log_evento(
                         "cnpj_selecionado", cnpj=empresa.cnpj,
-                        opcoes=opcoes_cnpj, escolhido=empresa.cnpj,
+                        opcoes=opcoes_cnpj, escolhido=match,
                     )
-                elif opcoes_cnpj:
-                    log.warning(
-                        "CNPJ %s NÃO está nas opções do dropdown %s — "
-                        "cert pode não autorizar essa empresa. Mantendo default.",
-                        empresa.cnpj, opcoes_cnpj,
-                    )
-                    log_evento(
-                        "cnpj_nao_encontrado_no_dropdown", cnpj=empresa.cnpj,
-                        opcoes=opcoes_cnpj,
-                    )
+                else:
+                    # Não bateu nenhuma opção. NUNCA deixar em branco (senão o
+                    # portal erra com 'cmpCnpj not present'): seleciona a 1ª
+                    # opção NÃO-VAZIA pra a consulta ao menos rodar.
+                    nao_vazias = [v for v in opcoes_cnpj if _so_digitos(v)]
+                    if nao_vazias:
+                        await cnpj_select.select_option(nao_vazias[0])
+                        log.warning(
+                            "CNPJ %s não bate com nenhuma opção %s — selecionando "
+                            "a 1ª não-vazia (%s) pra evitar cmpCnpj em branco.",
+                            empresa.cnpj, opcoes_cnpj, nao_vazias[0],
+                        )
+                        log_evento(
+                            "cnpj_nao_encontrado_no_dropdown", cnpj=empresa.cnpj,
+                            opcoes=opcoes_cnpj, fallback=nao_vazias[0],
+                        )
             else:
                 log.debug("Sem dropdown #cmpCnpj — cert tem 1 CNPJ só, OK")
         except Exception as exc:
