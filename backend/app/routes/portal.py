@@ -11,10 +11,12 @@ posse do documento.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
+from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -162,3 +164,113 @@ def portal_baixar_pdf(
     """Baixa o PDF (DANFE/DACTE) — só se o documento for da empresa do cliente."""
     _doc_do_cliente(documento_id, cliente, db)
     return baixar_pdf_individual(documento_id, db)
+
+
+# ---------------------------------------------------------------------------
+# Dashboard gerencial do cliente (agregações escopadas pela empresa do token)
+# ---------------------------------------------------------------------------
+def _corte_meses(meses: int) -> datetime:
+    """1º dia do mês `meses` meses atrás (inclui o mês atual)."""
+    now = datetime.now(timezone.utc)
+    total = (now.year * 12 + (now.month - 1)) - (meses - 1)
+    cy, cm = divmod(total, 12)
+    return datetime(cy, cm + 1, 1, tzinfo=timezone.utc)
+
+
+@router.get("/dashboard")
+def portal_dashboard(
+    meses: int = 6,
+    top: int = 8,
+    cliente: Usuario = Depends(get_current_cliente),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Painel do cliente: faturamento por mês + melhores clientes + maiores
+    fornecedores + nº a manifestar. Tudo SÓ da empresa do cliente."""
+    eid = cliente.empresa_id
+    meses = max(1, min(meses, 24))
+    top = max(1, min(top, 20))
+
+    # Faturamento por mês (emitidas, saída real, ativas)
+    mes_expr = func.to_char(DocumentoFiscal.data_emissao, "YYYY-MM")
+    fat_rows = db.execute(
+        select(
+            mes_expr.label("mes"),
+            func.coalesce(func.sum(DocumentoFiscal.valor_total), 0).label("valor"),
+        ).where(
+            DocumentoFiscal.empresa_id == eid,
+            DocumentoFiscal.origem == "emitida",
+            DocumentoFiscal.cancelada == False,  # noqa: E712
+            DocumentoFiscal.eh_saida.isnot(False),
+            DocumentoFiscal.data_emissao >= _corte_meses(meses),
+        ).group_by(mes_expr).order_by(mes_expr)
+    ).all()
+    faturamento_mensal = [{"mes": r.mes, "valor": float(r.valor or 0)} for r in fat_rows]
+
+    # Melhores clientes (destinatários nomeados das emitidas — exclui NFC-e balcão)
+    cli_rows = db.execute(
+        select(
+            DocumentoFiscal.nome_destinatario.label("nome"),
+            func.coalesce(func.sum(DocumentoFiscal.valor_total), 0).label("valor"),
+        ).where(
+            DocumentoFiscal.empresa_id == eid,
+            DocumentoFiscal.origem == "emitida",
+            DocumentoFiscal.cancelada == False,  # noqa: E712
+            DocumentoFiscal.eh_saida.isnot(False),
+            DocumentoFiscal.nome_destinatario.isnot(None),
+            DocumentoFiscal.nome_destinatario != "",
+        ).group_by(DocumentoFiscal.nome_destinatario).order_by(desc("valor")).limit(top)
+    ).all()
+    top_clientes = [{"nome": r.nome, "valor": float(r.valor or 0)} for r in cli_rows]
+
+    # Maiores fornecedores (emitentes das recebidas)
+    forn_rows = db.execute(
+        select(
+            DocumentoFiscal.nome_emitente.label("nome"),
+            func.coalesce(func.sum(DocumentoFiscal.valor_total), 0).label("valor"),
+        ).where(
+            DocumentoFiscal.empresa_id == eid,
+            DocumentoFiscal.origem == "recebida",
+            DocumentoFiscal.cancelada == False,  # noqa: E712
+            DocumentoFiscal.nome_emitente.isnot(None),
+            DocumentoFiscal.nome_emitente != "",
+        ).group_by(DocumentoFiscal.nome_emitente).order_by(desc("valor")).limit(top)
+    ).all()
+    top_fornecedores = [{"nome": r.nome, "valor": float(r.valor or 0)} for r in forn_rows]
+
+    a_manifestar = db.scalar(
+        select(func.count(DocumentoFiscal.id)).where(
+            DocumentoFiscal.empresa_id == eid,
+            DocumentoFiscal.origem == "recebida",
+            DocumentoFiscal.status == "resumo",
+        )
+    )
+    return {
+        "faturamento_mensal": faturamento_mensal,
+        "top_clientes": top_clientes,
+        "top_fornecedores": top_fornecedores,
+        "a_manifestar": int(a_manifestar or 0),
+    }
+
+
+@router.post("/documentos/{documento_id}/manifestar")
+def portal_manifestar_documento(
+    documento_id: int,
+    cliente: Usuario = Depends(get_current_cliente),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Cliente dá Ciência da Operação numa nota de COMPRA dele — libera o XML
+    completo. Confere posse antes de delegar pro serviço do escritório."""
+    _doc_do_cliente(documento_id, cliente, db)
+    from app.services.dfe_distribuicao_service import DfeDistribuicaoService
+    return DfeDistribuicaoService(db).manifestar_documento(documento_id)
+
+
+@router.post("/manifestar")
+def portal_manifestar_lote(
+    limite: int = 20,
+    cliente: Usuario = Depends(get_current_cliente),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Manifesta em lote as recebidas em resumo da empresa do cliente."""
+    from app.services.dfe_distribuicao_service import DfeDistribuicaoService
+    return DfeDistribuicaoService(db).manifestar_recebidas(cliente.empresa_id, limite=limite)

@@ -76,6 +76,14 @@ export type PortalResumo = {
   total_geral: number;
 };
 
+export type RankItem = { nome: string; valor: number };
+export type PortalDashboard = {
+  faturamento_mensal: { mes: string; valor: number }[];
+  top_clientes: RankItem[];
+  top_fornecedores: RankItem[];
+  a_manifestar: number;
+};
+
 // --- API ---
 export async function portalLogin(email: string, password: string): Promise<void> {
   const res = await portalFetch<{ access_token: string }>("/api/v1/portal/login", {
@@ -109,6 +117,27 @@ export function portalDocumentos(params: {
   if (params.cancelada !== undefined) q.set("cancelada", String(params.cancelada));
   const qs = q.toString();
   return portalFetch<PortalDocumento[]>(`/api/v1/portal/documentos${qs ? `?${qs}` : ""}`);
+}
+
+/** Painel gerencial: faturamento mensal + top clientes/fornecedores + a manifestar. */
+export function portalDashboard(meses = 6) {
+  return portalFetch<PortalDashboard>(`/api/v1/portal/dashboard?meses=${meses}`);
+}
+
+/** Cliente dá Ciência da Operação numa nota de compra (libera o XML completo). */
+export function portalManifestarDoc(documentoId: number) {
+  return portalFetch<{ ok: boolean; cstat: string; motivo: string; aviso?: string | null }>(
+    `/api/v1/portal/documentos/${documentoId}/manifestar`,
+    { method: "POST" },
+  );
+}
+
+/** Manifesta em lote as recebidas em resumo. */
+export function portalManifestarLote(limite = 20) {
+  return portalFetch<{ manifestadas: number; ja_cientes: number; restantes_resumo: number; aviso?: string | null }>(
+    `/api/v1/portal/manifestar?limite=${limite}`,
+    { method: "POST" },
+  );
 }
 
 /** Baixa em lote (ZIP) as notas do período, respeitando tipo/origem. */
