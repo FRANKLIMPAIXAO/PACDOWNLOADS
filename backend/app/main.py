@@ -18,7 +18,7 @@ from app.models.procuracao import Procuracao  # noqa: F401
 from app.models.receita_mensal import ReceitaMensal  # noqa: F401
 from app.models.situacao_fiscal import SituacaoFiscal  # noqa: F401
 from app.models.usuario import Usuario
-from app.routes import agenda, apuracoes, auth, certidoes, cte_distribuicao, dashboard, dfe_distribuicao, documentos, empresas, guias_das, guias_dctfweb, guias_fgts, integra, nfse_adn, parcelamentos_pgfn, parcelamentos_simples, receitas_mensais, relatorios, robo, robo_sefaz, usuarios
+from app.routes import agenda, apuracoes, auth, certidoes, cte_distribuicao, dashboard, dfe_distribuicao, documentos, empresas, guias_das, guias_dctfweb, guias_fgts, integra, nfse_adn, parcelamentos_pgfn, parcelamentos_simples, portal, receitas_mensais, relatorios, robo, robo_sefaz, usuarios
 from app.services.auth_service import hash_password
 
 
@@ -28,26 +28,41 @@ settings = get_settings()
 # BUILD_COMMIT no build (commit fica "unknown"), este é o sinal confiável pra
 # saber, via GET /version, se o deploy pegou o código novo (cache stale é
 # recorrente). Formato livre: AAAA-MM-DD + resumo curto.
-APP_BUILD_TAG = "2026-06-16-revert-portal-escritorio-ok"
+APP_BUILD_TAG = "2026-06-16-portal-fase1-blindado"
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    Base.metadata.create_all(bind=engine)
+    # BLINDAGEM (lição do deploy do portal 16/06): NADA no startup pode impedir
+    # o app de SUBIR. Se algo aqui falhar (ex.: uma migration que não aplicou e
+    # deixou o schema defasado), logamos e seguimos. Melhor o app no ar com uma
+    # feature quebrada (erro 500 claro no endpoint X) do que o sistema INTEIRO
+    # fora — quando o app nem sobe, o Traefik responde 502 SEM header CORS e o
+    # browser mostra um enganoso "erro de CORS / Failed to fetch".
+    import logging
+    log = logging.getLogger(__name__)
+    try:
+        Base.metadata.create_all(bind=engine)
+    except Exception:  # noqa: BLE001
+        log.exception("Falha no create_all do startup (seguindo mesmo assim)")
     db = SessionLocal()
     try:
-        admin = db.scalar(select(Usuario).where(Usuario.email == settings.first_superuser_email))
-        if not admin:
-            db.add(
-                Usuario(
-                    nome="Administrador",
-                    email=settings.first_superuser_email,
-                    senha_hash=hash_password(settings.first_superuser_password),
-                    ativo=True,
-                    is_admin=True,
+        try:
+            admin = db.scalar(select(Usuario).where(Usuario.email == settings.first_superuser_email))
+            if not admin:
+                db.add(
+                    Usuario(
+                        nome="Administrador",
+                        email=settings.first_superuser_email,
+                        senha_hash=hash_password(settings.first_superuser_password),
+                        ativo=True,
+                        is_admin=True,
+                    )
                 )
-            )
-            db.commit()
+                db.commit()
+        except Exception:  # noqa: BLE001 — nunca derrubar o app por causa do bootstrap
+            db.rollback()
+            log.exception("Bootstrap do admin falhou no startup (seguindo mesmo assim)")
         # Recupera execuções do robô SEFAZ presas em 'rodando'/'pendente' — em
         # modo eager a thread morre junto com o processo no restart (deploy),
         # deixando a linha zumbi. Finaliza como erro pra não ficar eterna.
@@ -55,8 +70,7 @@ async def lifespan(_: FastAPI):
             from app.services.robo_sefaz_service import RoboSefazService
             RoboSefazService(db).recuperar_execucoes_zumbis()
         except Exception:  # noqa: BLE001 — nunca bloquear a subida do app por isso
-            import logging
-            logging.getLogger(__name__).exception("Falha ao recuperar execuções zumbis do robô")
+            log.exception("Falha ao recuperar execuções zumbis do robô")
         yield
     finally:
         db.close()
@@ -129,6 +143,7 @@ app.include_router(documentos.router, prefix=settings.api_v1_prefix)
 app.include_router(dfe_distribuicao.router, prefix=settings.api_v1_prefix)
 app.include_router(dfe_distribuicao.router_cron, prefix=settings.api_v1_prefix)
 app.include_router(cte_distribuicao.router, prefix=settings.api_v1_prefix)
+app.include_router(portal.router, prefix=settings.api_v1_prefix)
 app.include_router(nfse_adn.router, prefix=settings.api_v1_prefix)
 app.include_router(robo.router, prefix=settings.api_v1_prefix)
 app.include_router(robo_sefaz.router, prefix=settings.api_v1_prefix)
