@@ -119,9 +119,14 @@ export function portalDocumentos(params: {
   return portalFetch<PortalDocumento[]>(`/api/v1/portal/documentos${qs ? `?${qs}` : ""}`);
 }
 
-/** Painel gerencial: faturamento mensal + top clientes/fornecedores + a manifestar. */
-export function portalDashboard(meses = 6) {
-  return portalFetch<PortalDashboard>(`/api/v1/portal/dashboard?meses=${meses}`);
+/** Painel gerencial: faturamento mensal (tendência) + top clientes/fornecedores
+ * (no período) + a manifestar. */
+export function portalDashboard(params: { meses?: number; data_inicio?: string; data_fim?: string } = {}) {
+  const q = new URLSearchParams();
+  q.set("meses", String(params.meses ?? 6));
+  if (params.data_inicio) q.set("data_inicio", params.data_inicio);
+  if (params.data_fim) q.set("data_fim", params.data_fim);
+  return portalFetch<PortalDashboard>(`/api/v1/portal/dashboard?${q.toString()}`);
 }
 
 /** Cliente dá Ciência da Operação numa nota de compra (libera o XML completo). */

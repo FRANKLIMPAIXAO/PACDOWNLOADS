@@ -177,18 +177,39 @@ def _corte_meses(meses: int) -> datetime:
     return datetime(cy, cm + 1, 1, tzinfo=timezone.utc)
 
 
+def _dt(s: str | None, fim: bool = False) -> datetime | None:
+    if not s:
+        return None
+    try:
+        d = datetime.strptime(s, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        return d.replace(hour=23, minute=59, second=59) if fim else d
+    except ValueError:
+        return None
+
+
 @router.get("/dashboard")
 def portal_dashboard(
     meses: int = 6,
     top: int = 8,
+    data_inicio: str | None = None,
+    data_fim: str | None = None,
     cliente: Usuario = Depends(get_current_cliente),
     db: Session = Depends(get_db),
 ) -> dict:
-    """Painel do cliente: faturamento por mês + melhores clientes + maiores
-    fornecedores + nº a manifestar. Tudo SÓ da empresa do cliente."""
+    """Painel do cliente: faturamento por mês (TENDÊNCIA, últimos `meses`) +
+    melhores clientes + maiores fornecedores (NO PERÍODO data_inicio/data_fim,
+    pra bater com os cards) + nº a manifestar. Tudo SÓ da empresa do cliente."""
     eid = cliente.empresa_id
     meses = max(1, min(meses, 24))
     top = max(1, min(top, 20))
+    di, df = _dt(data_inicio), _dt(data_fim, fim=True)
+
+    def _no_periodo(conds: list):
+        if di is not None:
+            conds.append(DocumentoFiscal.data_emissao >= di)
+        if df is not None:
+            conds.append(DocumentoFiscal.data_emissao <= df)
+        return conds
 
     # Faturamento por mês (emitidas, saída real, ativas)
     mes_expr = func.to_char(DocumentoFiscal.data_emissao, "YYYY-MM")
@@ -207,33 +228,37 @@ def portal_dashboard(
     faturamento_mensal = [{"mes": r.mes, "valor": float(r.valor or 0)} for r in fat_rows]
 
     # Melhores clientes (destinatários nomeados das emitidas — exclui NFC-e balcão)
+    cli_conds = _no_periodo([
+        DocumentoFiscal.empresa_id == eid,
+        DocumentoFiscal.origem == "emitida",
+        DocumentoFiscal.cancelada == False,  # noqa: E712
+        DocumentoFiscal.eh_saida.isnot(False),
+        DocumentoFiscal.nome_destinatario.isnot(None),
+        DocumentoFiscal.nome_destinatario != "",
+    ])
     cli_rows = db.execute(
         select(
             DocumentoFiscal.nome_destinatario.label("nome"),
             func.coalesce(func.sum(DocumentoFiscal.valor_total), 0).label("valor"),
-        ).where(
-            DocumentoFiscal.empresa_id == eid,
-            DocumentoFiscal.origem == "emitida",
-            DocumentoFiscal.cancelada == False,  # noqa: E712
-            DocumentoFiscal.eh_saida.isnot(False),
-            DocumentoFiscal.nome_destinatario.isnot(None),
-            DocumentoFiscal.nome_destinatario != "",
-        ).group_by(DocumentoFiscal.nome_destinatario).order_by(desc("valor")).limit(top)
+        ).where(*cli_conds)
+        .group_by(DocumentoFiscal.nome_destinatario).order_by(desc("valor")).limit(top)
     ).all()
     top_clientes = [{"nome": r.nome, "valor": float(r.valor or 0)} for r in cli_rows]
 
     # Maiores fornecedores (emitentes das recebidas)
+    forn_conds = _no_periodo([
+        DocumentoFiscal.empresa_id == eid,
+        DocumentoFiscal.origem == "recebida",
+        DocumentoFiscal.cancelada == False,  # noqa: E712
+        DocumentoFiscal.nome_emitente.isnot(None),
+        DocumentoFiscal.nome_emitente != "",
+    ])
     forn_rows = db.execute(
         select(
             DocumentoFiscal.nome_emitente.label("nome"),
             func.coalesce(func.sum(DocumentoFiscal.valor_total), 0).label("valor"),
-        ).where(
-            DocumentoFiscal.empresa_id == eid,
-            DocumentoFiscal.origem == "recebida",
-            DocumentoFiscal.cancelada == False,  # noqa: E712
-            DocumentoFiscal.nome_emitente.isnot(None),
-            DocumentoFiscal.nome_emitente != "",
-        ).group_by(DocumentoFiscal.nome_emitente).order_by(desc("valor")).limit(top)
+        ).where(*forn_conds)
+        .group_by(DocumentoFiscal.nome_emitente).order_by(desc("valor")).limit(top)
     ).all()
     top_fornecedores = [{"nome": r.nome, "valor": float(r.valor or 0)} for r in forn_rows]
 

@@ -45,7 +45,30 @@ const ROXO = "rgb(168,85,247)";
 const AZUL = "rgb(59,130,246)";
 const AMBAR = "rgb(234,179,8)";
 
+const CINZA = "rgb(148,163,184)";
 const MAX_LINHAS = 50; // não despejar 500 linhas — dashboard em cima + tabela enxuta
+
+function diasDesde(iso: string | null): number {
+  if (!iso) return 0;
+  const t = new Date(iso).getTime();
+  return Number.isNaN(t) ? 0 : Math.floor((Date.now() - t) / 86400000);
+}
+
+type StatusNota = { label: string; cor: string; baixar: boolean; manifestar: boolean; aguardando: boolean };
+function statusNota(doc: PortalDocumento): StatusNota {
+  // Vendas (emitidas próprias) e compras já baixadas: XML disponível.
+  if (doc.origem !== "recebida" || doc.status === "baixado") {
+    return { label: "Disponível", cor: VERDE, baixar: true, manifestar: false, aguardando: false };
+  }
+  if (doc.status === "manifestado") {
+    return { label: "Manifestada", cor: AZUL, baixar: false, manifestar: false, aguardando: true };
+  }
+  // resumo: dá pra manifestar se dentro da janela (~90 dias)
+  if (diasDesde(doc.data_emissao) > 90) {
+    return { label: "Fora do prazo", cor: CINZA, baixar: false, manifestar: false, aguardando: false };
+  }
+  return { label: "A manifestar", cor: AMBAR, baixar: false, manifestar: true, aguardando: false };
+}
 
 function Card({ children, accent }: { children: React.ReactNode; accent?: string }) {
   return (
@@ -102,7 +125,7 @@ export default function PortalNotasPage() {
       const params = { data_inicio: dataInicio, data_fim: dataFim };
       const [r, d, lst] = await Promise.all([
         portalResumo(params),
-        portalDashboard(6).catch(() => null), // painel é bônus; não derruba a tela
+        portalDashboard({ meses: 6, data_inicio: dataInicio, data_fim: dataFim }).catch(() => null), // painel é bônus
         portalDocumentos({ ...params, tipo_documento: tipo || undefined, origem: origem || undefined, cancelada: false }),
       ]);
       setResumo(r);
@@ -223,7 +246,7 @@ export default function PortalNotasPage() {
       {/* Faturamento por mês */}
       {dash && dash.faturamento_mensal.length > 0 ? (
         <div className="card" style={{ marginBottom: 16 }}>
-          <h3 style={{ marginTop: 0 }}>Faturamento por mês</h3>
+          <h3 style={{ marginTop: 0 }}>Faturamento por mês <span className="muted" style={{ fontSize: 13, fontWeight: 400 }}>(tendência — últimos 6 meses)</span></h3>
           <div style={{ display: "flex", alignItems: "flex-end", gap: 14, height: 150, padding: "8px 4px 0" }}>
             {dash.faturamento_mensal.map((f) => (
               <div key={f.mes} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 6, height: "100%", justifyContent: "flex-end" }} title={brl(f.valor)}>
@@ -272,32 +295,42 @@ export default function PortalNotasPage() {
           </div>
         </div>
 
-        <p className="muted" style={{ marginTop: 0 }}>
+        <p className="muted" style={{ marginTop: 0, marginBottom: 4 }}>
           {loading ? "Carregando..." : `${docs.length} nota(s) no período${docs.length > MAX_LINHAS ? ` — mostrando as ${MAX_LINHAS} mais recentes (use os filtros ou baixe o ZIP)` : ""}.`}
         </p>
+        {(origem === "recebida" || origem === "") && (dash?.a_manifestar ?? 0) > 0 ? (
+          <p className="muted" style={{ marginTop: 0, fontSize: 12 }}>
+            <i>Manifestação de compras — prazos: Ciência até 10 dias após a emissão · Confirmação até 90 dias. Notas mais antigas que 90 dias ficam fora do prazo.</i>
+          </p>
+        ) : null}
         <div style={{ overflowX: "auto" }}>
           <table className="data-table" style={{ width: "100%" }}>
             <thead>
               <tr>
                 <th>Tipo</th><th>Emissão</th><th>Emitente / Destinatário</th>
-                <th style={{ textAlign: "right" }}>Valor</th><th style={{ textAlign: "center" }}>Ações</th>
+                <th style={{ textAlign: "right" }}>Valor</th><th style={{ textAlign: "center" }}>Situação</th><th style={{ textAlign: "center" }}>Ações</th>
               </tr>
             </thead>
             <tbody>
               {docsVisiveis.map((doc) => {
-                const ehResumo = doc.status === "resumo" || !doc.status;
+                const s = statusNota(doc);
                 return (
                   <tr key={doc.id}>
                     <td>{doc.tipo_documento}</td>
                     <td>{dataBR(doc.data_emissao)}</td>
                     <td>{doc.origem === "emitida" ? (doc.nome_destinatario || "Consumidor (balcão)") : (doc.nome_emitente || "—")}</td>
                     <td style={{ textAlign: "right" }}>{brl(doc.valor_total)}</td>
+                    <td style={{ textAlign: "center" }}>
+                      <span style={{ fontSize: 12, padding: "2px 8px", borderRadius: 6, border: `1px solid ${s.cor}`, color: s.cor, whiteSpace: "nowrap" }}>{s.label}</span>
+                    </td>
                     <td style={{ textAlign: "center", whiteSpace: "nowrap" }}>
-                      {ehResumo && doc.origem === "recebida" ? (
+                      {s.manifestar ? (
                         <button type="button" className="btn-ghost" onClick={() => manifestarDoc(doc)} disabled={manifBusy === `${doc.id}`} title="Dar Ciência da Operação — libera o XML/PDF">
                           {manifBusy === `${doc.id}` ? "..." : "✍ Manifestar"}
                         </button>
-                      ) : (
+                      ) : s.aguardando ? (
+                        <span className="muted" style={{ fontSize: 12 }}>aguardando XML</span>
+                      ) : s.baixar ? (
                         <>
                           <button type="button" className="btn-ghost" onClick={() => baixar(doc, "xml")} disabled={baixando === `${doc.id}-xml`}>
                             {baixando === `${doc.id}-xml` ? "..." : "XML"}
@@ -306,13 +339,15 @@ export default function PortalNotasPage() {
                             {baixando === `${doc.id}-pdf` ? "..." : "PDF"}
                           </button>
                         </>
+                      ) : (
+                        <span className="muted">—</span>
                       )}
                     </td>
                   </tr>
                 );
               })}
               {!loading && docs.length === 0 ? (
-                <tr><td colSpan={5} className="muted" style={{ textAlign: "center", padding: 20 }}>Nenhuma nota no período.</td></tr>
+                <tr><td colSpan={6} className="muted" style={{ textAlign: "center", padding: 20 }}>Nenhuma nota no período.</td></tr>
               ) : null}
             </tbody>
           </table>
