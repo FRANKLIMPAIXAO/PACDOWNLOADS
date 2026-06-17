@@ -343,6 +343,37 @@ def baixar_pdf_individual(documento_id: int, db: Session = Depends(get_db)) -> F
             detail="CT-e sem XML completo — rode a busca de CT-e novamente.",
         )
 
+    # NFS-e: gera o DANFSe com o brazilfiscalreport (módulo próprio do NFS-e
+    # Nacional). O PAC já guarda o XML completo (status=completo) vindo do ADN,
+    # que é o padrão Nacional (tags infNFSe/DPS). NFS-e NÃO manifesta — o botão
+    # PDF caía no fluxo da NFe e dava "Manifestar". Espelha o ramo do CT-e.
+    if documento.tipo_documento.value == "NFSE" and xml_path.exists():
+        xml_str = xml_path.read_text(encoding="utf-8", errors="replace")
+        if "<infNFSe" in xml_str or "<DPS" in xml_str:  # padrão NFS-e Nacional
+            try:
+                from brazilfiscalreport.danfse import Danfse, DanfseConfig
+                danfse = Danfse(xml=xml_str, config=DanfseConfig())
+                danfse.output(str(pdf_path))
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Falha ao gerar DANFSe PDF a partir do XML: {exc!r}",
+                )
+            filename = _filename_amigavel(documento, "pdf")
+            return FileResponse(
+                path=pdf_path,
+                filename=filename,
+                media_type="application/pdf",
+                headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            )
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "NFS-e não está no padrão Nacional (ADN) — só geramos o DANFSe pra "
+                "NFS-e Nacional. NFS-e municipal antiga não tem layout único."
+            ),
+        )
+
     # Nao temos local: ja foi manifestada? Tenta puxar da Focus agora
     raw = documento.json_original or {}
     if not raw.get("manifestado_em"):
