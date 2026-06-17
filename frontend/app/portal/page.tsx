@@ -60,6 +60,11 @@ function statusNota(doc: PortalDocumento): StatusNota {
   if (doc.origem !== "recebida" || doc.status === "baixado") {
     return { label: "Disponível", cor: VERDE, baixar: true, manifestar: false, aguardando: false };
   }
+  // Manifestação (Ciência da Operação) SÓ existe pra NF-e (modelo 55). NFS-e
+  // (serviço, municipal) e CT-e NÃO manifestam — só ficam disponíveis.
+  if (doc.tipo_documento !== "NFE") {
+    return { label: "Disponível", cor: VERDE, baixar: true, manifestar: false, aguardando: false };
+  }
   if (doc.status === "manifestado") {
     return { label: "Manifestada", cor: AZUL, baixar: false, manifestar: false, aguardando: true };
   }

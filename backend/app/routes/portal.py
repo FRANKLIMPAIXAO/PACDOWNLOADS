@@ -262,11 +262,14 @@ def portal_dashboard(
     ).all()
     top_fornecedores = [{"nome": r.nome, "valor": float(r.valor or 0)} for r in forn_rows]
 
+    # SÓ NF-e (modelo 55) manifesta. NFS-e (serviço) e CT-e não têm Ciência da
+    # Operação — não entram na contagem nem têm botão Manifestar.
     a_manifestar = db.scalar(
         select(func.count(DocumentoFiscal.id)).where(
             DocumentoFiscal.empresa_id == eid,
             DocumentoFiscal.origem == "recebida",
             DocumentoFiscal.status == "resumo",
+            DocumentoFiscal.tipo_documento == TipoDocumento.NFE,
         )
     )
     return {
