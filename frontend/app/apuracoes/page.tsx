@@ -82,7 +82,12 @@ function ApuracoesContent() {
     } catch (err) {
       if (err instanceof ApiError) setError(err.message);
       else setError("Falha ao validar declaração.");
-    } finally { setBusy(null); }
+    } finally {
+      setBusy(null);
+      // O banner/erro renderiza no TOPO (acima da tabela) — sobe pra ele ficar
+      // visível, senão parece que "nada aconteceu" quando se clica numa linha lá embaixo.
+      if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
+    }
   }
 
   // PASSO 2: transmissão REAL — só após confirmar a comparação
