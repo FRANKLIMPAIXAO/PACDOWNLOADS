@@ -1,6 +1,6 @@
 // Camada tipada para apuracoes mensais (PGDAS-D)
 
-import { apiFetch } from "./api";
+import { apiFetch, ApiError } from "./api";
 
 export type StatusApuracao = "DRAFT" | "TRANSMITIDA" | "DAS_GERADO" | "PAGO" | "ERRO";
 
@@ -88,6 +88,45 @@ export function transmitir(id: number, dryRun = true) {
     `/api/v1/apuracoes/${id}/transmitir?dry_run=${dryRun ? "true" : "false"}`,
     { method: "POST" },
   );
+}
+
+export type TransmitirJob = {
+  status: "rodando" | "concluido" | "erro";
+  resultado?: ResultadoTransmissao;
+  erro?: string;
+  code?: number;
+};
+
+/** Dispara o dry-run/transmissão em BACKGROUND (não estoura o timeout ~60s do
+ * Traefik) e devolve um job_id pra consultar. */
+export function transmitirAsync(id: number, dryRun = true) {
+  return apiFetch<{ job_id: string; status: string }>(
+    `/api/v1/apuracoes/${id}/transmitir-async?dry_run=${dryRun ? "true" : "false"}`,
+    { method: "POST" },
+  );
+}
+export function transmitirJob(jobId: string) {
+  return apiFetch<TransmitirJob>(`/api/v1/apuracoes/transmitir-job/${jobId}`);
+}
+
+/** Dispara a transmissão em background e faz polling até concluir. Resolve com
+ * o ResultadoTransmissao ou lança ApiError com o motivo real. */
+export async function transmitirComPolling(
+  id: number,
+  dryRun = true,
+  { intervaloMs = 3000, timeoutMs = 180000 }: { intervaloMs?: number; timeoutMs?: number } = {},
+): Promise<ResultadoTransmissao> {
+  const { job_id } = await transmitirAsync(id, dryRun);
+  const inicio = Date.now();
+  for (;;) {
+    await new Promise((r) => setTimeout(r, intervaloMs));
+    const job = await transmitirJob(job_id);
+    if (job.status === "concluido" && job.resultado) return job.resultado;
+    if (job.status === "erro") throw new ApiError(job.code || 502, null, job.erro || "Falha na transmissão.");
+    if (Date.now() - inicio > timeoutMs) {
+      throw new ApiError(504, null, "A Receita está demorando muito pra responder. Tente de novo em instantes.");
+    }
+  }
 }
 
 export function gerarDas(id: number) {

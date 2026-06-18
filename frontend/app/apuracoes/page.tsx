@@ -26,7 +26,7 @@ import {
   previousAnoMes,
   statusLabel,
   statusPillClass,
-  transmitir,
+  transmitirComPolling,
 } from "../../lib/apuracoes";
 import { Empresa, listarEmpresas } from "../../lib/empresas";
 
@@ -77,7 +77,7 @@ function ApuracoesContent() {
   async function handleValidar(id: number) {
     setBusy(`t-${id}`); setError(null); setDryRun(null);
     try {
-      const r = await transmitir(id, true); // dry-run
+      const r = await transmitirComPolling(id, true); // dry-run em background + polling
       setDryRun(r);
     } catch (err) {
       if (err instanceof ApiError) setError(err.message);
@@ -96,7 +96,7 @@ function ApuracoesContent() {
     if (!ok) return;
     setBusy(`t-${id}`); setError(null);
     try {
-      await transmitir(id, false); // real
+      await transmitirComPolling(id, false); // real, em background + polling
       setDryRun(null);
       await reload();
     } catch (err) {
@@ -377,7 +377,7 @@ function ApuracaoActions({
         onClick={() => onValidar(id)} disabled={busy === `t-${id}`}
         title="Dry-run: a RFB calcula sem entregar. Mostra comparação antes de transmitir."
       >
-        {busy === `t-${id}` ? "..." : "🔍 Validar (dry-run)"}
+        {busy === `t-${id}` ? "⏳ Validando..." : "🔍 Validar (dry-run)"}
       </button>
     );
   }

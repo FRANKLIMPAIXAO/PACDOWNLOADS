@@ -1,11 +1,17 @@
+import logging
+import threading
+import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.database import get_db
+from app.database import SessionLocal, get_db
+
+logger = logging.getLogger(__name__)
 from app.schemas.apuracao_schema import (
     ApuracaoCreate, ApuracaoRead, ResumoMesResposta,
 )
@@ -71,6 +77,69 @@ def transmitir(
     só transmitir real (dry_run=false) se os valores baterem.
     """
     return ApuracaoService(db).transmitir(apuracao_id, dry_run=dry_run)
+
+
+# ---------------------------------------------------------------------------
+# Transmissão em BACKGROUND (thread) — o Serpro às vezes passa de 60s e o
+# Traefik corta a conexão sync (502 HTML sem CORS). Aqui o POST dispara numa
+# thread e responde NA HORA com um job_id; o front consulta o status até
+# concluir. Roda em modo eager (sem worker Celery), igual o robô já faz.
+# Job store em memória: some no restart (jobs são curtos) e funciona com
+# --workers 1 (1 processo), que é como o backend roda.
+# ---------------------------------------------------------------------------
+_TRANSM_JOBS: dict[str, dict] = {}
+_TRANSM_LOCK = threading.Lock()
+_TRANSM_MAX = 300
+
+
+def _rodar_transmissao(job_id: str, apuracao_id: int, dry_run: bool) -> None:
+    db = SessionLocal()
+    try:
+        resultado = ApuracaoService(db).transmitir(apuracao_id, dry_run=dry_run)
+        plano = jsonable_encoder(resultado)  # serializa igual o endpoint sync
+        with _TRANSM_LOCK:
+            _TRANSM_JOBS[job_id] = {"status": "concluido", "resultado": plano}
+    except HTTPException as exc:
+        with _TRANSM_LOCK:
+            _TRANSM_JOBS[job_id] = {"status": "erro", "erro": str(exc.detail), "code": exc.status_code}
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Transmissão async falhou (apuração %s)", apuracao_id)
+        with _TRANSM_LOCK:
+            _TRANSM_JOBS[job_id] = {"status": "erro", "erro": str(exc)}
+    finally:
+        db.close()
+
+
+@router.post("/{apuracao_id}/transmitir-async")
+def transmitir_async(
+    apuracao_id: int, dry_run: bool = True, db: Session = Depends(get_db),
+) -> dict:
+    """Inicia o dry-run/transmissão PGDAS-D em background e responde na hora com
+    `job_id`. O front consulta GET /apuracoes/transmitir-job/{job_id} até
+    `status` virar `concluido` (com `resultado`) ou `erro`."""
+    ApuracaoService(db).get_or_404(apuracao_id)  # erro rápido se não existir
+    job_id = uuid.uuid4().hex
+    with _TRANSM_LOCK:
+        if len(_TRANSM_JOBS) > _TRANSM_MAX:
+            _TRANSM_JOBS.clear()
+        _TRANSM_JOBS[job_id] = {"status": "rodando"}
+    threading.Thread(
+        target=_rodar_transmissao, args=(job_id, apuracao_id, dry_run), daemon=True,
+    ).start()
+    return {"job_id": job_id, "status": "rodando"}
+
+
+@router.get("/transmitir-job/{job_id}")
+def transmitir_job(job_id: str) -> dict:
+    """Status do job de transmissão: rodando | concluido | erro."""
+    with _TRANSM_LOCK:
+        job = _TRANSM_JOBS.get(job_id)
+    if not job:
+        raise HTTPException(
+            status_code=404,
+            detail="Job não encontrado (pode ter expirado num restart). Tente de novo.",
+        )
+    return job
 
 
 @router.post("/{apuracao_id}/das/gerar", response_model=ApuracaoRead)
