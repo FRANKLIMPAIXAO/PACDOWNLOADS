@@ -511,6 +511,38 @@ def portal_guias_das(
     return {"guias": out, "valor_recalculo_extra": float(VALOR_RECALCULO)}
 
 
+@router.post("/guias-das/sync")
+def portal_sync_guias_das(
+    ano: int | None = None,
+    cliente: Usuario = Depends(get_current_cliente),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Cliente puxa as PRÓPRIAS guias DAS do Simples via Integra (self-service
+    estilo Jettax/Nibo) — sem depender do escritório sincronizar antes. Escopado
+    pela empresa do token. Sem `ano`, busca o ano atual + o anterior (pega
+    atrasadas). Cada ano num try próprio pra um erro não derrubar o outro."""
+    ano_atual = datetime.now(timezone.utc).year
+    anos = [ano] if ano else [ano_atual, ano_atual - 1]
+    agg = {"novas": 0, "atualizadas": 0, "pagas_detectadas": 0, "erros": 0}
+    svc = GuiaDASService(db)
+    for a in anos:
+        try:
+            r = svc.sync_empresa(cliente.empresa_id, ano=a)
+            agg["novas"] += r.novas
+            agg["atualizadas"] += r.atualizadas
+            agg["pagas_detectadas"] += r.pagas_detectadas
+            agg["erros"] += r.erros
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        except IntegraContadorError:
+            agg["erros"] += 1  # um ano sem dado/erro não invalida o outro
+        except HTTPException:
+            raise
+        except Exception as exc:  # noqa: BLE001 — blinda 500 sem CORS
+            raise HTTPException(status_code=502, detail=f"Falha ao buscar guias: {exc}")
+    return {"anos": anos, **agg}
+
+
 @router.post("/guias-das/{guia_id}/atualizar")
 def portal_atualizar_guia(
     guia_id: int,

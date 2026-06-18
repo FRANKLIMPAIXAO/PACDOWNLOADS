@@ -24,6 +24,7 @@ import {
   portalManifestarLote,
   portalMe,
   portalResumo,
+  portalSyncGuias,
   type DocEscritorio,
   type DocsEscritorio,
   type PortalCertidao,
@@ -228,6 +229,17 @@ export default function PortalPage() {
     try { await portalBaixarGuia(g.id); }
     catch (err) { setErro(err instanceof ApiError ? err.message : "Falha ao baixar o PDF da guia."); }
     finally { setGuiaBusy(null); }
+  }
+
+  async function buscarGuias() {
+    setGuiaBusy("sync"); setErro(null); setAviso(null);
+    try {
+      const r = await portalSyncGuias();
+      setAviso(`Busca concluída — ${r.novas} nova(s), ${r.atualizadas} atualizada(s).`);
+      carregarFiscal();
+    } catch (err) {
+      setErro(err instanceof ApiError ? err.message : "Falha ao buscar as guias.");
+    } finally { setGuiaBusy(null); }
   }
 
   async function baixarCertidao(c: PortalCertidao) {
@@ -676,8 +688,13 @@ export default function PortalPage() {
             <>
               {tituloSecao("receipt", "Guias / impostos")}
               <div className="pac-card" style={{ marginBottom: 16 }}>
-                <h3 style={{ marginTop: 0, color: NAVY }}>DAS — Simples Nacional</h3>
-                <p style={{ margin: "0 0 12px", color: GRAY, fontSize: 13 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                  <h3 style={{ margin: 0, color: NAVY }}>DAS — Simples Nacional</h3>
+                  <button type="button" className="pac-btn pac-btn-ghost" onClick={buscarGuias} disabled={guiaBusy === "sync"} title="Puxa suas guias do Simples direto da Receita">
+                    {guiaBusy === "sync" ? "Buscando..." : "🔄 Buscar minhas guias"}
+                  </button>
+                </div>
+                <p style={{ margin: "8px 0 12px", color: GRAY, fontSize: 13 }}>
                   Atrasou? Clique <b>Gerar atualizada</b> que o sistema recalcula com Selic + mora.
                   <br /><i>1 recálculo grátis por guia · recálculos extras R$ {valorRecalc.toFixed(2).replace(".", ",")} cada.</i>
                 </p>
@@ -718,7 +735,7 @@ export default function PortalPage() {
                         );
                       })}
                       {guias.length === 0 ? (
-                        <tr><td colSpan={5} style={{ textAlign: "center", padding: 20, color: GRAY }}>Nenhuma guia DAS encontrada.</td></tr>
+                        <tr><td colSpan={5} style={{ textAlign: "center", padding: 20, color: GRAY }}>Nenhuma guia ainda — clique <b>🔄 Buscar minhas guias</b> acima pra puxar da Receita.</td></tr>
                       ) : null}
                     </tbody>
                   </table>

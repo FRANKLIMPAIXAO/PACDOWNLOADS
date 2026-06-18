@@ -313,6 +313,14 @@ export function portalBaixarCertidao(id: number) {
 export function portalGuias() {
   return portalFetch<PortalGuias>("/api/v1/portal/guias-das");
 }
+/** Cliente puxa as próprias guias DAS via Integra (self-service). Sem ano,
+ * busca o ano atual + o anterior. */
+export function portalSyncGuias(ano?: number) {
+  return portalFetch<{ anos: number[]; novas: number; atualizadas: number; pagas_detectadas: number; erros: number }>(
+    `/api/v1/portal/guias-das/sync${ano ? `?ano=${ano}` : ""}`,
+    { method: "POST" },
+  );
+}
 /** Recalcula a guia (DARF atualizada via Integra). 1º grátis, 2º+ R$ 5,00.
  * Sem `confirmar`, se for cobrar volta `cobranca_necessaria` sem chamar o Integra. */
 export function portalAtualizarGuia(id: number, confirmar = false) {
