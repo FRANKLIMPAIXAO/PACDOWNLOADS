@@ -6,6 +6,10 @@ import { useRouter } from "next/navigation";
 import { ApiError } from "../../../lib/api";
 import { portalLogin } from "../../../lib/portal";
 
+const NAVY = "#16294d";
+const ORANGE = "#ec8b1c";
+const GRAY = "#6b7488";
+
 export default function PortalLoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState("");
@@ -28,40 +32,42 @@ export default function PortalLoginPage() {
   }
 
   return (
-    <div style={{ minHeight: "100vh", display: "grid", placeItems: "center", padding: 24 }}>
-      <div className="card" style={{ width: "100%", maxWidth: 380 }}>
-        <div style={{ textAlign: "center", marginBottom: 20 }}>
-          <img src="/logo.svg" alt="PAC" style={{ height: 44, marginBottom: 8 }} />
-          <h2 style={{ margin: 0 }}>Portal do Cliente</h2>
-          <p className="muted" style={{ marginTop: 4 }}>Acesse as notas da sua empresa</p>
+    <div className="pac-login">
+      <div className="pac-login-card">
+        <div style={{ textAlign: "center", marginBottom: 22 }}>
+          <img src="/pac-logo.svg" alt="PAC Inteligência Tributária" style={{ height: 46, marginBottom: 14 }} />
+          <h2 style={{ margin: 0, color: NAVY, fontSize: 20 }}>Portal do Cliente</h2>
+          <p style={{ margin: "4px 0 0", color: GRAY, fontSize: 13 }}>Acesse as notas da sua empresa</p>
         </div>
-        <form onSubmit={handleSubmit} className="form-grid" style={{ gridTemplateColumns: "1fr", gap: 14 }}>
-          <label>
-            <span>E-mail</span>
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              autoComplete="username"
-              required
-            />
+        <form onSubmit={handleSubmit}>
+          <label>E-mail
+            <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="username" required />
           </label>
-          <label>
-            <span>Senha</span>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              autoComplete="current-password"
-              required
-            />
+          <label>Senha
+            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" required />
           </label>
-          {erro ? <p style={{ color: "rgb(248,113,113)", margin: 0 }}>{erro}</p> : null}
-          <button type="submit" className="btn-primary" disabled={busy}>
-            {busy ? "Entrando..." : "Entrar"}
-          </button>
+          {erro ? <p className="pac-login-erro">{erro}</p> : null}
+          <button type="submit" disabled={busy}>{busy ? "Entrando..." : "Entrar"}</button>
         </form>
       </div>
+
+      <style jsx>{`
+        .pac-login { min-height: 100vh; display: grid; place-items: center; padding: 24px; background: #f5f7fa;
+          font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif; }
+        .pac-login-card { width: 100%; max-width: 380px; background: #fff; border: 1px solid #e6eaf0;
+          border-radius: 14px; padding: 30px 28px; box-shadow: 0 10px 30px rgba(22,41,77,0.08); }
+        .pac-login form { display: grid; gap: 14px; }
+        .pac-login label { display: grid; gap: 6px; font-size: 13px; color: ${GRAY}; }
+        .pac-login input { appearance: none; border: 1px solid #d8dee8; border-radius: 9px; padding: 11px 13px;
+          font: inherit; font-size: 15px; background: #fff; color: #1b2333; }
+        .pac-login input:focus { outline: none; border-color: ${ORANGE}; box-shadow: 0 0 0 3px rgba(236,139,28,0.18); }
+        .pac-login button { appearance: none; border: none; background: ${ORANGE}; color: #fff; font: inherit;
+          font-size: 15px; font-weight: 500; padding: 12px; border-radius: 9px; cursor: pointer; margin-top: 4px; }
+        .pac-login button:hover:not(:disabled) { filter: brightness(1.05); }
+        .pac-login button:disabled { opacity: .6; cursor: not-allowed; }
+        .pac-login-erro { margin: 0; color: #a32d2d; font-size: 13px; background: #fdeaea; border: 1px solid #f3c2c2;
+          padding: 9px 12px; border-radius: 8px; }
+      `}</style>
     </div>
   );
 }

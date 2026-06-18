@@ -338,13 +338,8 @@ export default function PortalPage() {
   return (
     <div className="pac-portal">
       <aside className="pac-sidebar">
-        {/* Logo — trocar pelo arquivo oficial: <img src="/pac-logo-branco.svg" alt="PAC" style={{height:30}} /> */}
-        <div className="pac-logo" onClick={() => irPara("home")}>
-          <span className="pac-logo-dot" />
-          <div className="pac-logo-text">
-            <div className="pac-logo-name">pac</div>
-            <div className="pac-logo-sub">inteligência</div>
-          </div>
+        <div className="pac-logo" onClick={() => irPara("home")} title="Início">
+          <img src="/pac-logo-branco.svg" alt="PAC Inteligência Tributária" />
         </div>
 
         <nav className="pac-nav">
@@ -588,10 +583,8 @@ export default function PortalPage() {
 
         .pac-sidebar { width: 208px; flex-shrink: 0; background: ${NAVY}; color: #c4d0e4;
           display: flex; flex-direction: column; gap: 16px; padding: 16px 12px; }
-        .pac-logo { display: flex; align-items: center; gap: 9px; padding: 4px 6px; cursor: pointer; }
-        .pac-logo-dot { width: 22px; height: 22px; border-radius: 50%; background: ${ORANGE}; flex-shrink: 0; }
-        .pac-logo-name { color: #fff; font-size: 19px; font-weight: 500; line-height: 1; letter-spacing: -0.02em; }
-        .pac-logo-sub { color: #9fb0cc; font-size: 11px; letter-spacing: 0.04em; }
+        .pac-logo { display: flex; align-items: center; padding: 6px 6px 2px; cursor: pointer; }
+        .pac-logo img { height: 34px; display: block; }
         .pac-nav { display: flex; flex-direction: column; gap: 14px; }
         .pac-navgroup { display: flex; flex-direction: column; gap: 2px; }
         .pac-navgroup-label { color: #6f82a6; font-size: 11px; letter-spacing: 0.08em; padding: 0 8px 4px; text-transform: uppercase; }
@@ -664,11 +657,12 @@ export default function PortalPage() {
 
         @media (max-width: 820px) {
           .pac-sidebar { width: 56px; padding: 14px 6px; }
-          .pac-navlabel, .pac-navgroup-label, .pac-logo-text, .pac-user-name { display: none; }
+          .pac-navlabel, .pac-navgroup-label, .pac-user-name { display: none; }
           .pac-navitem { justify-content: center; padding: 10px 0; }
           .pac-navitem.active { box-shadow: inset 0 -2px 0 ${ORANGE}; }
           .pac-badge { position: absolute; top: 3px; right: 4px; padding: 0 5px; }
           .pac-logo { justify-content: center; padding: 4px 0; }
+          .pac-logo img { height: 24px; }
         }
       `}</style>
     </div>
