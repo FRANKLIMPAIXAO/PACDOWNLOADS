@@ -514,13 +514,33 @@ def portal_guias_das(
 @router.post("/guias-das/sync")
 def portal_sync_guias_das(
     ano: int | None = None,
+    confirmar: bool = False,
     cliente: Usuario = Depends(get_current_cliente),
     db: Session = Depends(get_db),
 ) -> dict:
     """Cliente puxa as PRÓPRIAS guias DAS do Simples via Integra (self-service
     estilo Jettax/Nibo) — sem depender do escritório sincronizar antes. Escopado
-    pela empresa do token. Sem `ano`, busca o ano atual + o anterior (pega
-    atrasadas). Cada ano num try próprio pra um erro não derrubar o outro."""
+    pela empresa do token. Sem `ano`, busca o ano atual + o anterior (atrasadas).
+
+    TRAVA: a 1ª busca de cada empresa é GRÁTIS; da 2ª em diante custa R$ 5,00
+    (devolve `cobranca_necessaria` sem chamar a Receita; front confirma e
+    re-chama com confirmar=true). SÓ cobra se a busca funcionar (não cobra em
+    falha de Integra/procuração) — e a grátis só é consumida no sucesso."""
+    buscas = int(db.scalar(
+        select(func.count(CobrancaPortal.id)).where(
+            CobrancaPortal.empresa_id == cliente.empresa_id,
+            CobrancaPortal.tipo == "buscar_das",
+        )
+    ) or 0)
+    cobrar = buscas >= 1
+    if cobrar and not confirmar:
+        return {
+            "ok": False,
+            "cobranca_necessaria": True,
+            "valor": float(VALOR_RECALCULO),
+            "mensagem": "A 1ª busca é grátis; esta nova busca na Receita tem custo de R$ 5,00. Deseja continuar?",
+        }
+
     ano_atual = datetime.now(timezone.utc).year
     anos = [ano] if ano else [ano_atual, ano_atual - 1]
     agg = {"novas": 0, "atualizadas": 0, "pagas_detectadas": 0, "erros": 0}
@@ -540,7 +560,28 @@ def portal_sync_guias_das(
             raise
         except Exception as exc:  # noqa: BLE001 — blinda 500 sem CORS
             raise HTTPException(status_code=502, detail=f"Falha ao buscar guias: {exc}")
-    return {"anos": anos, **agg}
+
+    # Se a Receita não respondeu em nenhum ano e nada veio: NÃO cobra (e não
+    # consome a grátis) — o cliente não paga por uma busca que falhou.
+    util = agg["novas"] or agg["atualizadas"] or agg["pagas_detectadas"]
+    if agg["erros"] >= len(anos) and not util:
+        return {
+            "ok": False,
+            "mensagem": "Não consegui buscar suas guias agora (Receita indisponível ou sem procuração). Tente mais tarde — sem cobrança.",
+            "anos": anos, **agg,
+        }
+
+    valor = VALOR_RECALCULO if cobrar else Decimal("0.00")
+    db.add(CobrancaPortal(
+        empresa_id=cliente.empresa_id,
+        guia_das_id=None,
+        competencia=None,
+        tipo="buscar_das",
+        valor=valor,
+        descricao="Busca de guias DAS na Receita" + (" (cobrado)" if cobrar else " (grátis)"),
+    ))
+    db.commit()
+    return {"ok": True, "cobrado": bool(cobrar), "valor": float(valor), "anos": anos, **agg}
 
 
 @router.post("/guias-das/{guia_id}/atualizar")

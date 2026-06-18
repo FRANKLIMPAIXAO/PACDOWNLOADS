@@ -231,11 +231,18 @@ export default function PortalPage() {
     finally { setGuiaBusy(null); }
   }
 
-  async function buscarGuias() {
+  async function buscarGuias(confirmar = false) {
     setGuiaBusy("sync"); setErro(null); setAviso(null);
     try {
-      const r = await portalSyncGuias();
-      setAviso(`Busca concluída — ${r.novas} nova(s), ${r.atualizadas} atualizada(s).`);
+      const r = await portalSyncGuias(undefined, confirmar);
+      if (r.cobranca_necessaria) {
+        const ok = typeof window !== "undefined"
+          && window.confirm(r.mensagem || `Esta busca tem custo de R$ ${(r.valor ?? valorRecalc).toFixed(2)}. Continuar?`);
+        if (ok) { await buscarGuias(true); }
+        return;
+      }
+      if (r.ok === false) { setErro(r.mensagem || "Não foi possível buscar as guias."); return; }
+      setAviso(r.mensagem || `Busca concluída — ${r.novas ?? 0} nova(s), ${r.atualizadas ?? 0} atualizada(s).`);
       carregarFiscal();
     } catch (err) {
       setErro(err instanceof ApiError ? err.message : "Falha ao buscar as guias.");
@@ -690,13 +697,13 @@ export default function PortalPage() {
               <div className="pac-card" style={{ marginBottom: 16 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
                   <h3 style={{ margin: 0, color: NAVY }}>DAS — Simples Nacional</h3>
-                  <button type="button" className="pac-btn pac-btn-ghost" onClick={buscarGuias} disabled={guiaBusy === "sync"} title="Puxa suas guias do Simples direto da Receita">
+                  <button type="button" className="pac-btn pac-btn-ghost" onClick={() => buscarGuias()} disabled={guiaBusy === "sync"} title="Puxa suas guias do Simples direto da Receita (1ª grátis · depois R$ 5,00)">
                     {guiaBusy === "sync" ? "Buscando..." : "🔄 Buscar minhas guias"}
                   </button>
                 </div>
                 <p style={{ margin: "8px 0 12px", color: GRAY, fontSize: 13 }}>
                   Atrasou? Clique <b>Gerar atualizada</b> que o sistema recalcula com Selic + mora.
-                  <br /><i>1 recálculo grátis por guia · recálculos extras R$ {valorRecalc.toFixed(2).replace(".", ",")} cada.</i>
+                  <br /><i>1ª busca grátis · 1 recálculo grátis por guia · extras R$ {valorRecalc.toFixed(2).replace(".", ",")} cada.</i>
                 </p>
                 <div style={{ overflowX: "auto" }}>
                   <table className="pac-table">
