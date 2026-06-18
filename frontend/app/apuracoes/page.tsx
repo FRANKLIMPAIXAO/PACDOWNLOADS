@@ -253,6 +253,12 @@ function ApuracoesContent() {
                   ✅ Valores batem. Pode transmitir com segurança.
                 </p>
               )}
+              <details style={{ marginTop: 10 }}>
+                <summary className="muted" style={{ fontSize: 12, cursor: "pointer" }}>Ver resposta da Receita (raw)</summary>
+                <pre style={{ fontSize: 11, maxHeight: 220, overflow: "auto", background: "var(--bg-1)", padding: 8, borderRadius: 6, marginTop: 6, whiteSpace: "pre-wrap" }}>
+                  {JSON.stringify(dryRun.raw, null, 2)}
+                </pre>
+              </details>
             </div>
             <button type="button" className="btn-ghost" onClick={() => setDryRun(null)}>✕</button>
           </div>
