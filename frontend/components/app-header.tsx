@@ -46,6 +46,7 @@ export function AppHeader() {
           <Link href="/parcelamentos-pgfn">PGFN</Link>
           <Link href="/dctfweb">DCTFWeb</Link>
           <Link href="/fgts">FGTS</Link>
+          <Link href="/cobrancas">💰 Cobranças</Link>
           {user?.is_admin ? <Link href="/usuarios">👥 Usuários</Link> : null}
         </nav>
         {user ? (
