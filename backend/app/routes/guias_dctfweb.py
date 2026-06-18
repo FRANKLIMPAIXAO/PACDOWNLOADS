@@ -1,11 +1,14 @@
 """Rotas REST de Guias DCTFWeb."""
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
 
 from app.database import get_db
 from app.providers.integra_contador import IntegraContadorError
@@ -68,6 +71,11 @@ def emitir_ativa(
         raise HTTPException(status_code=404, detail=str(exc))
     except IntegraContadorError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 — blinda contra 500 sem CORS
+        logger.exception("Erro inesperado ao emitir DCTFWeb ATIVA (empresa %s)", empresa_id)
+        raise HTTPException(status_code=502, detail=f"Falha ao emitir DCTFWeb: {exc}")
     return GuiaDctfwebRead.model_validate(g)
 
 
@@ -95,6 +103,11 @@ def emitir_andamento(
         raise HTTPException(status_code=404, detail=str(exc))
     except IntegraContadorError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 — blinda contra 500 sem CORS
+        logger.exception("Erro inesperado ao emitir DCTFWeb ANDAMENTO (empresa %s)", empresa_id)
+        raise HTTPException(status_code=502, detail=f"Falha ao emitir DCTFWeb: {exc}")
     return GuiaDctfwebRead.model_validate(g)
 
 
