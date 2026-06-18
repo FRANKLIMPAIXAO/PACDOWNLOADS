@@ -84,6 +84,21 @@ export type PortalDashboard = {
   a_manifestar: number;
 };
 
+export type DocEscritorio = {
+  id: number;
+  tipo: string; // guia | relatorio | comunicado | outro
+  titulo: string;
+  mensagem: string | null;
+  competencia: string | null;
+  vencimento: string | null;
+  valor: number | null;
+  nome_arquivo: string | null;
+  tem_arquivo: boolean;
+  enviado_em: string | null;
+  lido: boolean;
+};
+export type DocsEscritorio = { nao_lidos: number; documentos: DocEscritorio[] };
+
 // --- API ---
 export async function portalLogin(email: string, password: string): Promise<void> {
   const res = await portalFetch<{ access_token: string }>("/api/v1/portal/login", {
@@ -143,6 +158,33 @@ export function portalManifestarLote(limite = 20) {
     `/api/v1/portal/manifestar?limite=${limite}`,
     { method: "POST" },
   );
+}
+
+/** Documentos que o escritório entregou (guias/relatórios/comunicados via PAC TAREFAS). */
+export function portalDocumentosEscritorio() {
+  return portalFetch<DocsEscritorio>("/api/v1/portal/documentos-escritorio");
+}
+
+/** Baixa um documento entregue pelo escritório (marca como lido). */
+export async function portalBaixarDocEscritorio(id: number, nomeSugerido?: string): Promise<void> {
+  const token = getPortalToken();
+  const resp = await fetch(`${API_BASE_URL}/api/v1/portal/documentos-escritorio/${id}/download`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!resp.ok) {
+    let msg = `Erro ${resp.status}`;
+    try { const j = await resp.json(); if (j?.detail) msg = j.detail; } catch { /* ignore */ }
+    throw new ApiError(resp.status, null, msg);
+  }
+  const blob = await resp.blob();
+  const cd = resp.headers.get("Content-Disposition") || "";
+  const m = cd.match(/filename="?([^"]+)"?/);
+  const filename = m ? m[1] : (nomeSugerido || `documento-${id}`);
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  window.URL.revokeObjectURL(url);
 }
 
 /** Baixa em lote (ZIP) as notas do período, respeitando tipo/origem. */

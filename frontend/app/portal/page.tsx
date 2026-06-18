@@ -7,14 +7,18 @@ import { ApiError } from "../../lib/api";
 import {
   getPortalToken,
   portalBaixarArquivo,
+  portalBaixarDocEscritorio,
   portalBaixarZip,
   portalDashboard,
   portalDocumentos,
+  portalDocumentosEscritorio,
   portalLogout,
   portalManifestarDoc,
   portalManifestarLote,
   portalMe,
   portalResumo,
+  type DocEscritorio,
+  type DocsEscritorio,
   type PortalDashboard,
   type PortalDocumento,
   type PortalMe,
@@ -47,6 +51,15 @@ const AMBAR = "rgb(234,179,8)";
 
 const CINZA = "rgb(148,163,184)";
 const MAX_LINHAS = 50; // não despejar 500 linhas — dashboard em cima + tabela enxuta
+
+function tipoEscritorio(tipo: string): { label: string; cor: string } {
+  switch (tipo) {
+    case "guia": return { label: "Guia / imposto", cor: AMBAR };
+    case "relatorio": return { label: "Relatório", cor: AZUL };
+    case "comunicado": return { label: "Comunicado", cor: ROXO };
+    default: return { label: "Documento", cor: CINZA };
+  }
+}
 
 function diasDesde(iso: string | null): number {
   if (!iso) return 0;
@@ -107,6 +120,7 @@ export default function PortalNotasPage() {
   const [me, setMe] = useState<PortalMe | null>(null);
   const [resumo, setResumo] = useState<PortalResumo | null>(null);
   const [dash, setDash] = useState<PortalDashboard | null>(null);
+  const [escritorio, setEscritorio] = useState<DocsEscritorio | null>(null);
   const [docs, setDocs] = useState<PortalDocumento[]>([]);
   const [tipo, setTipo] = useState("");
   const [origem, setOrigem] = useState(""); // "" | "emitida" | "recebida"
@@ -119,10 +133,25 @@ export default function PortalNotasPage() {
   const [zipBusy, setZipBusy] = useState(false);
   const [manifBusy, setManifBusy] = useState<string | null>(null);
 
+  const carregarEscritorio = useCallback(() => {
+    portalDocumentosEscritorio().then(setEscritorio).catch(() => { /* seção é opcional */ });
+  }, []);
+
   useEffect(() => {
     if (!getPortalToken()) { router.replace("/portal/login"); return; }
     portalMe().then(setMe).catch(() => { portalLogout(); router.replace("/portal/login"); });
-  }, [router]);
+    carregarEscritorio();
+  }, [router, carregarEscritorio]);
+
+  async function baixarDocEscritorio(d: DocEscritorio) {
+    setBaixando(`esc-${d.id}`); setErro(null);
+    try {
+      await portalBaixarDocEscritorio(d.id, d.nome_arquivo || undefined);
+      carregarEscritorio(); // atualiza o "lido"
+    } catch (err) {
+      setErro(err instanceof ApiError ? err.message : "Falha ao baixar o documento.");
+    } finally { setBaixando(null); }
+  }
 
   const carregar = useCallback(async () => {
     setLoading(true); setErro(null);
@@ -274,6 +303,56 @@ export default function PortalNotasPage() {
           <div className="card">
             <h3 style={{ marginTop: 0 }}>🚚 Maiores fornecedores</h3>
             <Ranking items={dash.top_fornecedores} cor={ROXO} />
+          </div>
+        </div>
+      ) : null}
+
+      {/* Documentos do escritório (guias/relatórios/comunicados via PAC TAREFAS) */}
+      {escritorio && escritorio.documentos.length > 0 ? (
+        <div className="card" style={{ marginBottom: 16 }}>
+          <h3 style={{ marginTop: 0 }}>
+            📂 Documentos do escritório
+            {escritorio.nao_lidos > 0 ? (
+              <span style={{ marginLeft: 8, fontSize: 12, padding: "2px 10px", borderRadius: 10, background: AMBAR, color: "#1a1205", fontWeight: 500 }}>
+                {escritorio.nao_lidos} novo(s)
+              </span>
+            ) : null}
+          </h3>
+          <div style={{ overflowX: "auto" }}>
+            <table className="data-table" style={{ width: "100%" }}>
+              <thead>
+                <tr>
+                  <th>Tipo</th><th>Documento</th><th>Competência</th><th>Vencimento</th>
+                  <th style={{ textAlign: "right" }}>Valor</th><th style={{ textAlign: "center" }}>Ação</th>
+                </tr>
+              </thead>
+              <tbody>
+                {escritorio.documentos.map((d) => {
+                  const t = tipoEscritorio(d.tipo);
+                  return (
+                    <tr key={d.id}>
+                      <td><span style={{ fontSize: 12, padding: "2px 8px", borderRadius: 6, border: `1px solid ${t.cor}`, color: t.cor, whiteSpace: "nowrap" }}>{t.label}</span></td>
+                      <td>
+                        <span style={!d.lido ? { fontWeight: 500 } : undefined}>
+                          {!d.lido ? "🔵 " : ""}{d.titulo}
+                        </span>
+                        {d.mensagem ? <div className="muted" style={{ fontSize: 12 }}>{d.mensagem}</div> : null}
+                      </td>
+                      <td>{d.competencia || "—"}</td>
+                      <td>{d.vencimento ? dataBR(d.vencimento) : "—"}</td>
+                      <td style={{ textAlign: "right" }}>{d.valor != null ? brl(d.valor) : "—"}</td>
+                      <td style={{ textAlign: "center", whiteSpace: "nowrap" }}>
+                        {d.tem_arquivo ? (
+                          <button type="button" className="btn-ghost" onClick={() => baixarDocEscritorio(d)} disabled={baixando === `esc-${d.id}`}>
+                            {baixando === `esc-${d.id}` ? "..." : "⬇ Baixar"}
+                          </button>
+                        ) : <span className="muted">—</span>}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         </div>
       ) : null}

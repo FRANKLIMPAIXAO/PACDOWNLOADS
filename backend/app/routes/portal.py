@@ -20,6 +20,7 @@ from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.models.documento_escritorio import DocumentoEscritorio
 from app.models.documento_fiscal import DocumentoFiscal, TipoDocumento
 from app.models.empresa import Empresa
 from app.models.usuario import Usuario
@@ -302,3 +303,70 @@ def portal_manifestar_lote(
     """Manifesta em lote as recebidas em resumo da empresa do cliente."""
     from app.services.dfe_distribuicao_service import DfeDistribuicaoService
     return DfeDistribuicaoService(db).manifestar_recebidas(cliente.empresa_id, limite=limite)
+
+
+# ---------------------------------------------------------------------------
+# Documentos do ESCRITÓRIO (entregues pelo PAC TAREFAS) — guias, relatórios,
+# comunicados. Separados das notas fiscais.
+# ---------------------------------------------------------------------------
+@router.get("/documentos-escritorio")
+def portal_documentos_escritorio(
+    cliente: Usuario = Depends(get_current_cliente),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Lista os documentos que o escritório entregou pra esta empresa + nº de
+    não lidos (pro badge)."""
+    docs = list(db.scalars(
+        select(DocumentoEscritorio)
+        .where(DocumentoEscritorio.empresa_id == cliente.empresa_id)
+        .order_by(DocumentoEscritorio.enviado_em.desc())
+        .limit(300)
+    ).all())
+    nao_lidos = sum(1 for d in docs if d.lido_em is None)
+    return {
+        "nao_lidos": nao_lidos,
+        "documentos": [
+            {
+                "id": d.id,
+                "tipo": d.tipo,
+                "titulo": d.titulo,
+                "mensagem": d.mensagem,
+                "competencia": d.competencia,
+                "vencimento": d.vencimento.isoformat() if d.vencimento else None,
+                "valor": float(d.valor) if d.valor is not None else None,
+                "nome_arquivo": d.nome_arquivo,
+                "tem_arquivo": bool(d.arquivo_path),
+                "enviado_em": d.enviado_em.isoformat() if d.enviado_em else None,
+                "lido": d.lido_em is not None,
+            }
+            for d in docs
+        ],
+    }
+
+
+@router.get("/documentos-escritorio/{doc_id}/download")
+def portal_baixar_documento_escritorio(
+    doc_id: int,
+    cliente: Usuario = Depends(get_current_cliente),
+    db: Session = Depends(get_db),
+) -> FileResponse:
+    """Baixa o arquivo entregue pelo escritório — só se for da empresa do cliente.
+    Marca como lido na primeira abertura."""
+    from datetime import datetime, timezone
+    from pathlib import Path as _Path
+
+    doc = db.get(DocumentoEscritorio, doc_id)
+    if not doc or doc.empresa_id != cliente.empresa_id:
+        raise HTTPException(status_code=404, detail="Documento não encontrado.")
+    if not doc.arquivo_path or not _Path(doc.arquivo_path).exists():
+        raise HTTPException(status_code=404, detail="Este documento não tem arquivo anexado.")
+    if doc.lido_em is None:
+        doc.lido_em = datetime.now(timezone.utc)
+        db.commit()
+    nome = doc.nome_arquivo or f"documento_{doc.id}.pdf"
+    return FileResponse(
+        path=doc.arquivo_path,
+        filename=nome,
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{nome}"'},
+    )

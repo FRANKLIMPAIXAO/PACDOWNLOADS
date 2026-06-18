@@ -11,6 +11,7 @@ from app.database import Base, SessionLocal, engine
 from app.models.apuracao import Apuracao  # noqa: F401
 from app.models.certidao import Certidao  # noqa: F401
 from app.models.consulta_log import ConsultaLog  # noqa: F401
+from app.models.documento_escritorio import DocumentoEscritorio  # noqa: F401
 from app.models.documento_fiscal import DocumentoFiscal  # noqa: F401
 from app.models.empresa import Empresa  # noqa: F401
 from app.models.mensagem_ecac import MensagemEcac  # noqa: F401
@@ -18,7 +19,7 @@ from app.models.procuracao import Procuracao  # noqa: F401
 from app.models.receita_mensal import ReceitaMensal  # noqa: F401
 from app.models.situacao_fiscal import SituacaoFiscal  # noqa: F401
 from app.models.usuario import Usuario
-from app.routes import agenda, apuracoes, auth, certidoes, cte_distribuicao, dashboard, dfe_distribuicao, documentos, empresas, guias_das, guias_dctfweb, guias_fgts, integra, nfse_adn, parcelamentos_pgfn, parcelamentos_simples, portal, receitas_mensais, relatorios, robo, robo_sefaz, usuarios
+from app.routes import agenda, apuracoes, auth, certidoes, cte_distribuicao, dashboard, dfe_distribuicao, documentos, empresas, guias_das, guias_dctfweb, guias_fgts, integra, integracao, nfse_adn, parcelamentos_pgfn, parcelamentos_simples, portal, receitas_mensais, relatorios, robo, robo_sefaz, usuarios
 from app.services.auth_service import hash_password
 
 
@@ -28,7 +29,7 @@ settings = get_settings()
 # BUILD_COMMIT no build (commit fica "unknown"), este é o sinal confiável pra
 # saber, via GET /version, se o deploy pegou o código novo (cache stale é
 # recorrente). Formato livre: AAAA-MM-DD + resumo curto.
-APP_BUILD_TAG = "2026-06-17-danfse-nfse-pdf"
+APP_BUILD_TAG = "2026-06-18-integracao-pac-tarefas"
 
 
 @asynccontextmanager
@@ -144,6 +145,7 @@ app.include_router(dfe_distribuicao.router, prefix=settings.api_v1_prefix)
 app.include_router(dfe_distribuicao.router_cron, prefix=settings.api_v1_prefix)
 app.include_router(cte_distribuicao.router, prefix=settings.api_v1_prefix)
 app.include_router(portal.router, prefix=settings.api_v1_prefix)
+app.include_router(integracao.router, prefix=settings.api_v1_prefix)
 app.include_router(nfse_adn.router, prefix=settings.api_v1_prefix)
 app.include_router(robo.router, prefix=settings.api_v1_prefix)
 app.include_router(robo_sefaz.router, prefix=settings.api_v1_prefix)
