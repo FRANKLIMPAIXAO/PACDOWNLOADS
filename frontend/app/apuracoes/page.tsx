@@ -197,9 +197,9 @@ function ApuracoesContent() {
         <section
           className="panel"
           style={{
-            border: dryRun.divergencia && Math.abs(dryRun.divergencia) > 0.01
-              ? "1px solid rgba(245,158,11,0.4)"
-              : "1px solid rgba(34,197,94,0.4)",
+            border: dryRun.valor_devido_rfb !== null && dryRun.divergencia !== null && Math.abs(dryRun.divergencia) <= 0.01
+              ? "1px solid rgba(34,197,94,0.4)"
+              : "1px solid rgba(245,158,11,0.4)",
             marginBottom: 16,
           }}
         >
@@ -229,14 +229,20 @@ function ApuracoesContent() {
                   <div className="muted" style={{ fontSize: 11 }}>Divergência</div>
                   <div style={{
                     fontSize: 20, fontWeight: 600,
-                    color: dryRun.divergencia && Math.abs(dryRun.divergencia) > 0.01
-                      ? "rgb(245,158,11)" : "rgb(34,197,94)",
+                    color: dryRun.valor_devido_rfb !== null && dryRun.divergencia !== null && Math.abs(dryRun.divergencia) <= 0.01
+                      ? "rgb(34,197,94)" : "rgb(245,158,11)",
                   }}>
                     {dryRun.divergencia === null ? "—" : fmtBRL(dryRun.divergencia)}
                   </div>
                 </div>
               </div>
-              {dryRun.divergencia !== null && Math.abs(dryRun.divergencia) > 0.01 ? (
+              {dryRun.valor_devido_rfb === null || dryRun.divergencia === null ? (
+                <p className="toast toast-warn" style={{ marginTop: 10, fontSize: 13 }}>
+                  ⚠️ A RFB validou o payload (sem erro), mas NÃO retornou o valor apurado
+                  pra comparar. Não dá pra afirmar que bate — confira o valor do PAC
+                  manualmente antes de transmitir.
+                </p>
+              ) : Math.abs(dryRun.divergencia) > 0.01 ? (
                 <p className="toast toast-warn" style={{ marginTop: 10, fontSize: 13 }}>
                   ⚠️ Os valores divergem. Provável causa: receita monofásica/ST
                   ainda não está sendo segregada no payload (a RFB taxou PIS/COFINS
