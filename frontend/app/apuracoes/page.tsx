@@ -243,11 +243,19 @@ function ApuracoesContent() {
                   manualmente antes de transmitir.
                 </p>
               ) : Math.abs(dryRun.divergencia) > 0.01 ? (
-                <p className="toast toast-warn" style={{ marginTop: 10, fontSize: 13 }}>
-                  ⚠️ Os valores divergem. Provável causa: receita monofásica/ST
-                  ainda não está sendo segregada no payload (a RFB taxou PIS/COFINS
-                  sobre o monofásico). NÃO transmita até ajustar — revise manualmente.
-                </p>
+                Math.abs(dryRun.divergencia) / Math.abs(dryRun.valor_devido_rfb || 1) < 0.05 ? (
+                  <p className="toast toast-warn" style={{ marginTop: 10, fontSize: 13 }}>
+                    ⚠️ Pequena diferença ({fmtBRL(dryRun.divergencia)}). Provável causa:
+                    RBT12 (faturamento dos últimos 12 meses) incompleto ou arredondamento —
+                    confira o histórico de receita dessa empresa. NÃO é monofásico/ST.
+                  </p>
+                ) : (
+                  <p className="toast toast-warn" style={{ marginTop: 10, fontSize: 13 }}>
+                    ⚠️ Diferença grande. Provável causa: receita monofásica/ST não está
+                    sendo segregada no payload (a RFB taxou PIS/COFINS sobre o monofásico).
+                    NÃO transmita até ajustar — revise manualmente.
+                  </p>
+                )
               ) : (
                 <p className="toast toast-ok" style={{ marginTop: 10, fontSize: 13 }}>
                   ✅ Valores batem. Pode transmitir com segurança.
