@@ -28,6 +28,7 @@ from app.models.documento_escritorio import DocumentoEscritorio
 from app.models.documento_fiscal import DocumentoFiscal, TipoDocumento
 from app.models.empresa import Empresa
 from app.models.guia_das import GuiaDAS
+from app.models.guia_dctfweb import GuiaDctfweb
 from app.models.usuario import Usuario
 from app.providers.integra_contador import IntegraContadorError
 from app.services.guia_das_service import GuiaDASService
@@ -588,4 +589,57 @@ def portal_baixar_guia_pdf(
         path=str(p),
         media_type="application/pdf",
         filename=f"DAS_{guia.periodo_apuracao}.pdf",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Guias DCTFWeb (DARF de contribuições da folha) — emitidas pelo ESCRITÓRIO via
+# Integra (GERARGUIA31/313). Read-only no portal: o cliente vê e baixa o PDF.
+# ---------------------------------------------------------------------------
+@router.get("/guias-dctfweb")
+def portal_guias_dctfweb(
+    cliente: Usuario = Depends(get_current_cliente),
+    db: Session = Depends(get_db),
+) -> dict:
+    """DARFs DCTFWeb que o escritório já emitiu pra esta empresa."""
+    rows = list(db.scalars(
+        select(GuiaDctfweb)
+        .where(GuiaDctfweb.empresa_id == cliente.empresa_id)
+        .order_by(GuiaDctfweb.ano_pa.desc(), GuiaDctfweb.mes_pa.desc(), GuiaDctfweb.emitida_em.desc())
+        .limit(300)
+    ).all())
+    return {
+        "guias": [
+            {
+                "id": g.id,
+                "periodo": g.periodo_formatado,
+                "categoria": g.categoria,
+                "origem": g.origem,  # ativa | andamento
+                "emitida_em": g.emitida_em.isoformat() if g.emitida_em else None,
+                "tem_pdf": bool(g.pdf_path),
+            }
+            for g in rows
+        ],
+    }
+
+
+@router.get("/guias-dctfweb/{guia_id}/pdf")
+def portal_baixar_dctfweb(
+    guia_id: int,
+    cliente: Usuario = Depends(get_current_cliente),
+    db: Session = Depends(get_db),
+) -> FileResponse:
+    """Baixa o DARF DCTFWeb — só se for da empresa do cliente."""
+    g = db.get(GuiaDctfweb, guia_id)
+    if not g or g.empresa_id != cliente.empresa_id:
+        raise HTTPException(status_code=404, detail="Guia não encontrada.")
+    if not g.pdf_path:
+        raise HTTPException(status_code=404, detail="Guia sem PDF.")
+    p = Path(g.pdf_path)
+    if not p.exists():
+        raise HTTPException(status_code=404, detail="Arquivo PDF não encontrado.")
+    return FileResponse(
+        path=str(p),
+        media_type="application/pdf",
+        filename=f"DCTFWeb_{g.ano_pa}{g.mes_pa or ''}.pdf",
     )

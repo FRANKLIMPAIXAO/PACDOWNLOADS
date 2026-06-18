@@ -126,6 +126,15 @@ export type PortalGuiaDAS = {
 };
 export type PortalGuias = { guias: PortalGuiaDAS[]; valor_recalculo_extra: number };
 
+export type PortalDctfweb = {
+  id: number;
+  periodo: string;
+  categoria: string;
+  origem: string; // ativa | andamento
+  emitida_em: string | null;
+  tem_pdf: boolean;
+};
+
 export type RecalculoResp = {
   ok: boolean;
   cobranca_necessaria?: boolean;
@@ -312,6 +321,14 @@ export function portalAtualizarGuia(id: number, confirmar = false) {
 }
 export function portalBaixarGuia(id: number) {
   return portalDownloadBlob(`/api/v1/portal/guias-das/${id}/pdf`, `DAS-${id}.pdf`);
+}
+
+/** Guias DCTFWeb (DARF de contribuições da folha) emitidas pelo escritório. */
+export function portalDctfweb() {
+  return portalFetch<{ guias: PortalDctfweb[] }>("/api/v1/portal/guias-dctfweb");
+}
+export function portalBaixarDctfweb(id: number) {
+  return portalDownloadBlob(`/api/v1/portal/guias-dctfweb/${id}/pdf`, `DCTFWeb-${id}.pdf`);
 }
 
 /** Baixa XML ou PDF de um documento (blob fetch com o token do portal). */

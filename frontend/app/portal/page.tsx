@@ -9,11 +9,13 @@ import {
   portalAtualizarGuia,
   portalBaixarArquivo,
   portalBaixarCertidao,
+  portalBaixarDctfweb,
   portalBaixarDocEscritorio,
   portalBaixarGuia,
   portalBaixarZip,
   portalCertidoes,
   portalDashboard,
+  portalDctfweb,
   portalDocumentos,
   portalDocumentosEscritorio,
   portalGuias,
@@ -26,6 +28,7 @@ import {
   type DocsEscritorio,
   type PortalCertidao,
   type PortalDashboard,
+  type PortalDctfweb,
   type PortalDocumento,
   type PortalGuiaDAS,
   type PortalMe,
@@ -169,6 +172,7 @@ export default function PortalPage() {
   const [escritorio, setEscritorio] = useState<DocsEscritorio | null>(null);
   const [certidoes, setCertidoes] = useState<PortalCertidao[] | null>(null);
   const [guias, setGuias] = useState<PortalGuiaDAS[]>([]);
+  const [dctfweb, setDctfweb] = useState<PortalDctfweb[]>([]);
   const [valorRecalc, setValorRecalc] = useState(5);
   const [guiaBusy, setGuiaBusy] = useState<string | null>(null);
   const [docs, setDocs] = useState<PortalDocumento[]>([]);
@@ -190,6 +194,7 @@ export default function PortalPage() {
   const carregarFiscal = useCallback(() => {
     portalCertidoes().then((r) => setCertidoes(r.certidoes)).catch(() => setCertidoes([]));
     portalGuias().then((r) => { setGuias(r.guias); setValorRecalc(r.valor_recalculo_extra); }).catch(() => { /* opcional */ });
+    portalDctfweb().then((r) => setDctfweb(r.guias)).catch(() => { /* opcional */ });
   }, []);
 
   useEffect(() => {
@@ -228,6 +233,13 @@ export default function PortalPage() {
     try { await portalBaixarCertidao(c.id); }
     catch (err) { setErro(err instanceof ApiError ? err.message : "Falha ao baixar a certidão."); }
     finally { setBaixando(null); }
+  }
+
+  async function baixarDctfweb(d: PortalDctfweb) {
+    setGuiaBusy(`dctf-${d.id}`); setErro(null);
+    try { await portalBaixarDctfweb(d.id); }
+    catch (err) { setErro(err instanceof ApiError ? err.message : "Falha ao baixar o DARF DCTFWeb."); }
+    finally { setGuiaBusy(null); }
   }
 
   async function baixarDocEscritorio(d: DocEscritorio) {
@@ -660,10 +672,11 @@ export default function PortalPage() {
           {/* ===================== GUIAS / DAS ===================== */}
           {view === "guias" ? (
             <>
-              {tituloSecao("receipt", "Guias / impostos (DAS)")}
-              <div className="pac-card">
+              {tituloSecao("receipt", "Guias / impostos")}
+              <div className="pac-card" style={{ marginBottom: 16 }}>
+                <h3 style={{ marginTop: 0, color: NAVY }}>DAS — Simples Nacional</h3>
                 <p style={{ margin: "0 0 12px", color: GRAY, fontSize: 13 }}>
-                  Suas guias do Simples Nacional. Atrasou? Clique <b>Gerar atualizada</b> que o sistema recalcula com Selic + mora.
+                  Atrasou? Clique <b>Gerar atualizada</b> que o sistema recalcula com Selic + mora.
                   <br /><i>1 recálculo grátis por guia · recálculos extras R$ {valorRecalc.toFixed(2).replace(".", ",")} cada.</i>
                 </p>
                 <div style={{ overflowX: "auto" }}>
@@ -708,6 +721,43 @@ export default function PortalPage() {
                     </tbody>
                   </table>
                 </div>
+              </div>
+
+              <div className="pac-card">
+                <h3 style={{ marginTop: 0, color: NAVY }}>DCTFWeb — contribuições (folha)</h3>
+                <p style={{ margin: "0 0 12px", color: GRAY, fontSize: 13 }}>
+                  DARFs de contribuições previdenciárias e retenções, emitidos pelo escritório. Baixe o PDF pra pagar.
+                </p>
+                {dctfweb.length === 0 ? (
+                  <p style={{ margin: 0, color: GRAY, fontSize: 13 }}>Nenhum DARF DCTFWeb disponível ainda.</p>
+                ) : (
+                  <div style={{ overflowX: "auto" }}>
+                    <table className="pac-table">
+                      <thead>
+                        <tr>
+                          <th>Período</th><th>Tipo</th><th>Emitida em</th>
+                          <th style={{ textAlign: "center" }}>Ação</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {dctfweb.map((d) => (
+                          <tr key={d.id}>
+                            <td>{d.periodo}</td>
+                            <td>{d.origem === "andamento" ? "Em andamento" : "Mensal"}{d.categoria ? <span style={{ color: GRAY, fontSize: 12 }}> · cat. {d.categoria}</span> : null}</td>
+                            <td>{dataBR(d.emitida_em)}</td>
+                            <td style={{ textAlign: "center" }}>
+                              {d.tem_pdf ? (
+                                <button type="button" className="pac-btn pac-btn-ghost" onClick={() => baixarDctfweb(d)} disabled={guiaBusy === `dctf-${d.id}`}>
+                                  {guiaBusy === `dctf-${d.id}` ? "..." : "⬇ PDF"}
+                                </button>
+                              ) : <span style={{ color: GRAY }}>—</span>}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
             </>
           ) : null}
