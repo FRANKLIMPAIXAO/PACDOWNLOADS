@@ -99,6 +99,45 @@ export type DocEscritorio = {
 };
 export type DocsEscritorio = { nao_lidos: number; documentos: DocEscritorio[] };
 
+export type PortalCertidao = {
+  id: number;
+  tipo: string;
+  tipo_label: string;
+  numero: string | null;
+  data_emissao: string | null;
+  data_validade: string | null;
+  status: string; // VALIDA | A_VENCER | VENCIDA | DESCONHECIDO
+  dias_para_vencer: number | null;
+  tem_pdf: boolean;
+};
+
+export type PortalGuiaDAS = {
+  id: number;
+  competencia: string;
+  periodo_apuracao: string;
+  valor_principal: number;
+  valor_atualizado: number | null;
+  data_vencimento: string | null;
+  situacao: string; // em_aberto | paga | atrasada | parcialmente_paga
+  dias_atraso: number;
+  tem_pdf: boolean;
+  recalculos: number;
+  pode_recalcular: boolean;
+};
+export type PortalGuias = { guias: PortalGuiaDAS[]; valor_recalculo_extra: number };
+
+export type RecalculoResp = {
+  ok: boolean;
+  cobranca_necessaria?: boolean;
+  valor?: number;
+  recalculos_feitos?: number;
+  cobrado?: boolean;
+  situacao?: string;
+  valor_atualizado?: number | null;
+  data_vencimento?: string | null;
+  mensagem?: string;
+};
+
 // --- API ---
 export async function portalLogin(email: string, password: string): Promise<void> {
   const res = await portalFetch<{ access_token: string }>("/api/v1/portal/login", {
@@ -227,6 +266,52 @@ export function portalResumo(params: { data_inicio?: string; data_fim?: string }
   if (params.data_fim) q.set("data_fim", params.data_fim);
   const qs = q.toString();
   return portalFetch<PortalResumo>(`/api/v1/portal/documentos/resumo${qs ? `?${qs}` : ""}`);
+}
+
+/** Baixa um arquivo do portal por path (blob fetch com o token), salvando-o. */
+async function portalDownloadBlob(path: string, nomeFallback: string): Promise<void> {
+  const token = getPortalToken();
+  const resp = await fetch(`${API_BASE_URL}${path}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!resp.ok) {
+    let msg = `Erro ${resp.status}`;
+    try { const j = await resp.json(); if (j?.detail) msg = j.detail; } catch { /* ignore */ }
+    throw new ApiError(resp.status, null, msg);
+  }
+  const blob = await resp.blob();
+  const cd = resp.headers.get("Content-Disposition") || "";
+  const m = cd.match(/filename="?([^"]+)"?/);
+  const filename = m ? m[1] : nomeFallback;
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  window.URL.revokeObjectURL(url);
+}
+
+/** Certidões (CNDs) da empresa do cliente — a mais recente de cada tipo. */
+export function portalCertidoes() {
+  return portalFetch<{ certidoes: PortalCertidao[] }>("/api/v1/portal/certidoes");
+}
+export function portalBaixarCertidao(id: number) {
+  return portalDownloadBlob(`/api/v1/portal/certidoes/${id}/pdf`, `certidao-${id}.pdf`);
+}
+
+/** Guias DAS (Simples) da empresa do cliente. */
+export function portalGuias() {
+  return portalFetch<PortalGuias>("/api/v1/portal/guias-das");
+}
+/** Recalcula a guia (DARF atualizada via Integra). 1º grátis, 2º+ R$ 5,00.
+ * Sem `confirmar`, se for cobrar volta `cobranca_necessaria` sem chamar o Integra. */
+export function portalAtualizarGuia(id: number, confirmar = false) {
+  return portalFetch<RecalculoResp>(
+    `/api/v1/portal/guias-das/${id}/atualizar?confirmar=${confirmar}`,
+    { method: "POST" },
+  );
+}
+export function portalBaixarGuia(id: number) {
+  return portalDownloadBlob(`/api/v1/portal/guias-das/${id}/pdf`, `DAS-${id}.pdf`);
 }
 
 /** Baixa XML ou PDF de um documento (blob fetch com o token do portal). */

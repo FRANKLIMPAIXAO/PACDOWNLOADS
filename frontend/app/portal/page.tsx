@@ -6,12 +6,17 @@ import { useRouter } from "next/navigation";
 import { ApiError } from "../../lib/api";
 import {
   getPortalToken,
+  portalAtualizarGuia,
   portalBaixarArquivo,
+  portalBaixarCertidao,
   portalBaixarDocEscritorio,
+  portalBaixarGuia,
   portalBaixarZip,
+  portalCertidoes,
   portalDashboard,
   portalDocumentos,
   portalDocumentosEscritorio,
+  portalGuias,
   portalLogout,
   portalManifestarDoc,
   portalManifestarLote,
@@ -19,8 +24,10 @@ import {
   portalResumo,
   type DocEscritorio,
   type DocsEscritorio,
+  type PortalCertidao,
   type PortalDashboard,
   type PortalDocumento,
+  type PortalGuiaDAS,
   type PortalMe,
   type PortalResumo,
   type RankItem,
@@ -34,6 +41,7 @@ const ORANGE_TX = "#b96a0c"; // laranja legível sobre branco
 const GREEN = "#1d9e75";
 const BLUE = "#2b6cb0";
 const GRAY = "#6b7488";
+const RED = "#c0392b";
 
 const MAX_LINHAS = 50; // tabela enxuta dentro de "Minhas notas"
 
@@ -99,6 +107,8 @@ const ICONS: Record<string, React.ReactNode> = {
   bell: <><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" /><path d="M13.7 21a2 2 0 0 1-3.4 0" /></>,
   users: <><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" /></>,
   truck: <><path d="M1 3h15v13H1zM16 8h4l3 3v5h-7z" /><circle cx="5.5" cy="18.5" r="2" /><circle cx="18.5" cy="18.5" r="2" /></>,
+  receipt: <><path d="M6 2v20l2-1.5L10 22l2-1.5L14 22l2-1.5L18 22V2l-2 1.5L14 2l-2 1.5L10 2 8 3.5z" /><path d="M9 8h6M9 12h6" /></>,
+  shield: <><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z" /><path d="M9 12l2 2 4-4" /></>,
 };
 function Icon({ name, size = 18 }: { name: string; size?: number }) {
   return (
@@ -108,6 +118,23 @@ function Icon({ name, size = 18 }: { name: string; size?: number }) {
 
 function pill(label: string, cor: string) {
   return <span style={{ fontSize: 12, padding: "2px 8px", borderRadius: 6, border: `1px solid ${cor}`, color: cor, whiteSpace: "nowrap" }}>{label}</span>;
+}
+
+function situacaoGuia(s: string): { label: string; cor: string } {
+  switch (s) {
+    case "paga": return { label: "Paga", cor: GREEN };
+    case "atrasada": return { label: "Atrasada", cor: RED };
+    case "parcialmente_paga": return { label: "Parcial", cor: ORANGE_TX };
+    default: return { label: "Em aberto", cor: BLUE };
+  }
+}
+function statusCnd(s: string): { label: string; cor: string } {
+  switch (s) {
+    case "VALIDA": return { label: "Válida", cor: GREEN };
+    case "A_VENCER": return { label: "A vencer", cor: ORANGE_TX };
+    case "VENCIDA": return { label: "Vencida", cor: RED };
+    default: return { label: "—", cor: GRAY };
+  }
 }
 
 /** Ranking horizontal (clientes / fornecedores). */
@@ -131,7 +158,7 @@ function Ranking({ items, cor }: { items: RankItem[]; cor: string }) {
   );
 }
 
-type View = "home" | "notas" | "documentos" | "indicadores" | "manifestar";
+type View = "home" | "notas" | "documentos" | "indicadores" | "manifestar" | "guias" | "certidoes";
 
 export default function PortalPage() {
   const router = useRouter();
@@ -140,6 +167,10 @@ export default function PortalPage() {
   const [resumo, setResumo] = useState<PortalResumo | null>(null);
   const [dash, setDash] = useState<PortalDashboard | null>(null);
   const [escritorio, setEscritorio] = useState<DocsEscritorio | null>(null);
+  const [certidoes, setCertidoes] = useState<PortalCertidao[] | null>(null);
+  const [guias, setGuias] = useState<PortalGuiaDAS[]>([]);
+  const [valorRecalc, setValorRecalc] = useState(5);
+  const [guiaBusy, setGuiaBusy] = useState<string | null>(null);
   const [docs, setDocs] = useState<PortalDocumento[]>([]);
   const [tipo, setTipo] = useState("");
   const [origem, setOrigem] = useState(""); // "" | "emitida" | "recebida"
@@ -156,11 +187,48 @@ export default function PortalPage() {
     portalDocumentosEscritorio().then(setEscritorio).catch(() => { /* seção é opcional */ });
   }, []);
 
+  const carregarFiscal = useCallback(() => {
+    portalCertidoes().then((r) => setCertidoes(r.certidoes)).catch(() => setCertidoes([]));
+    portalGuias().then((r) => { setGuias(r.guias); setValorRecalc(r.valor_recalculo_extra); }).catch(() => { /* opcional */ });
+  }, []);
+
   useEffect(() => {
     if (!getPortalToken()) { router.replace("/portal/login"); return; }
     portalMe().then(setMe).catch(() => { portalLogout(); router.replace("/portal/login"); });
     carregarEscritorio();
-  }, [router, carregarEscritorio]);
+    carregarFiscal();
+  }, [router, carregarEscritorio, carregarFiscal]);
+
+  async function recalcularGuia(g: PortalGuiaDAS, confirmar = false) {
+    setGuiaBusy(`recalc-${g.id}`); setErro(null); setAviso(null);
+    try {
+      const r = await portalAtualizarGuia(g.id, confirmar);
+      if (r.cobranca_necessaria) {
+        const ok = typeof window !== "undefined"
+          && window.confirm(r.mensagem || `Este recálculo tem custo de R$ ${(r.valor ?? valorRecalc).toFixed(2)}. Deseja continuar?`);
+        if (ok) { await recalcularGuia(g, true); }
+        return;
+      }
+      setAviso(r.mensagem || "Guia atualizada gerada!");
+      carregarFiscal();
+    } catch (err) {
+      setErro(err instanceof ApiError ? err.message : "Falha ao recalcular a guia.");
+    } finally { setGuiaBusy(null); }
+  }
+
+  async function baixarGuia(g: PortalGuiaDAS) {
+    setGuiaBusy(`pdf-${g.id}`); setErro(null);
+    try { await portalBaixarGuia(g.id); }
+    catch (err) { setErro(err instanceof ApiError ? err.message : "Falha ao baixar o PDF da guia."); }
+    finally { setGuiaBusy(null); }
+  }
+
+  async function baixarCertidao(c: PortalCertidao) {
+    setBaixando(`cnd-${c.id}`); setErro(null);
+    try { await portalBaixarCertidao(c.id); }
+    catch (err) { setErro(err instanceof ApiError ? err.message : "Falha ao baixar a certidão."); }
+    finally { setBaixando(null); }
+  }
 
   async function baixarDocEscritorio(d: DocEscritorio) {
     setBaixando(`esc-${d.id}`); setErro(null);
@@ -249,6 +317,10 @@ export default function PortalPage() {
       { id: "home" as View, label: "Início", icon: "home" },
       { id: "notas" as View, label: "Minhas notas", icon: "file" },
       { id: "indicadores" as View, label: "Faturamento", icon: "chart" },
+    ] },
+    { grupo: "Impostos", itens: [
+      { id: "guias" as View, label: "Guias / DAS", icon: "receipt" },
+      { id: "certidoes" as View, label: "Certidões", icon: "shield" },
     ] },
     { grupo: "Documentos", itens: [
       { id: "documentos" as View, label: "Do escritório", icon: "folder", badge: escritorio?.nao_lidos || 0 },
@@ -431,6 +503,16 @@ export default function PortalPage() {
                   <div className="pac-atalho-tit">Manifestações{aManifestar > 0 ? <span className="pac-tag">{aManifestar}</span> : null}</div>
                   <div className="pac-atalho-sub">Liberar o XML das compras</div>
                 </button>
+                <button type="button" className="pac-atalho" onClick={() => irPara("guias")}>
+                  <span style={{ color: ORANGE }}><Icon name="receipt" size={22} /></span>
+                  <div className="pac-atalho-tit">Guias / impostos</div>
+                  <div className="pac-atalho-sub">DAS do Simples · gerar atualizada</div>
+                </button>
+                <button type="button" className="pac-atalho" onClick={() => irPara("certidoes")}>
+                  <span style={{ color: GREEN }}><Icon name="shield" size={22} /></span>
+                  <div className="pac-atalho-tit">Certidões</div>
+                  <div className="pac-atalho-sub">CNDs · baixar PDF</div>
+                </button>
               </div>
             </>
           ) : null}
@@ -571,6 +653,106 @@ export default function PortalPage() {
                   Prazos: Ciência até 10 dias após a emissão · Confirmação até 90 dias. Notas com mais de 90 dias ficam fora do prazo.
                 </p>
                 {tabelaNotas(manifestaveis)}
+              </div>
+            </>
+          ) : null}
+
+          {/* ===================== GUIAS / DAS ===================== */}
+          {view === "guias" ? (
+            <>
+              {tituloSecao("receipt", "Guias / impostos (DAS)")}
+              <div className="pac-card">
+                <p style={{ margin: "0 0 12px", color: GRAY, fontSize: 13 }}>
+                  Suas guias do Simples Nacional. Atrasou? Clique <b>Gerar atualizada</b> que o sistema recalcula com Selic + mora.
+                  <br /><i>1 recálculo grátis por guia · recálculos extras R$ {valorRecalc.toFixed(2).replace(".", ",")} cada.</i>
+                </p>
+                <div style={{ overflowX: "auto" }}>
+                  <table className="pac-table">
+                    <thead>
+                      <tr>
+                        <th>Competência</th><th>Vencimento</th>
+                        <th style={{ textAlign: "right" }}>Valor</th>
+                        <th style={{ textAlign: "center" }}>Situação</th>
+                        <th style={{ textAlign: "center" }}>Ações</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {guias.map((g) => {
+                        const s = situacaoGuia(g.situacao);
+                        const valor = g.valor_atualizado ?? g.valor_principal;
+                        return (
+                          <tr key={g.id}>
+                            <td>{g.competencia}</td>
+                            <td>{dataBR(g.data_vencimento)}{g.dias_atraso > 0 ? <span style={{ color: RED, fontSize: 12 }}> · {g.dias_atraso}d atraso</span> : null}</td>
+                            <td style={{ textAlign: "right" }}>{brl(valor)}{g.valor_atualizado != null ? <div style={{ fontSize: 11, color: GRAY }}>atualizado</div> : null}</td>
+                            <td style={{ textAlign: "center" }}>{pill(s.label, s.cor)}</td>
+                            <td style={{ textAlign: "center", whiteSpace: "nowrap" }}>
+                              {g.pode_recalcular ? (
+                                <button type="button" className="pac-btn pac-btn-primary" onClick={() => recalcularGuia(g)} disabled={guiaBusy === `recalc-${g.id}`}
+                                  title={g.recalculos > 0 ? `Recálculo extra — custa R$ ${valorRecalc.toFixed(2)}` : "1º recálculo é grátis"}>
+                                  {guiaBusy === `recalc-${g.id}` ? "..." : (g.tem_pdf ? "↻ Atualizar" : "Gerar atualizada")}
+                                </button>
+                              ) : null}
+                              {g.tem_pdf ? (
+                                <button type="button" className="pac-btn pac-btn-ghost" onClick={() => baixarGuia(g)} disabled={guiaBusy === `pdf-${g.id}`} style={{ marginLeft: 6 }}>
+                                  {guiaBusy === `pdf-${g.id}` ? "..." : "⬇ PDF"}
+                                </button>
+                              ) : null}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      {guias.length === 0 ? (
+                        <tr><td colSpan={5} style={{ textAlign: "center", padding: 20, color: GRAY }}>Nenhuma guia DAS encontrada.</td></tr>
+                      ) : null}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </>
+          ) : null}
+
+          {/* ===================== CERTIDÕES / CNDs ===================== */}
+          {view === "certidoes" ? (
+            <>
+              {tituloSecao("shield", "Certidões (CNDs)")}
+              <div className="pac-card">
+                {!certidoes ? (
+                  <p style={{ margin: 0, color: GRAY }}>Carregando...</p>
+                ) : certidoes.length === 0 ? (
+                  <p style={{ margin: 0, color: GRAY }}>Nenhuma certidão disponível ainda. O escritório emite e elas aparecem aqui.</p>
+                ) : (
+                  <div style={{ overflowX: "auto" }}>
+                    <table className="pac-table">
+                      <thead>
+                        <tr>
+                          <th>Certidão</th><th>Número</th><th>Validade</th>
+                          <th style={{ textAlign: "center" }}>Situação</th><th style={{ textAlign: "center" }}>Ação</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {certidoes.map((c) => {
+                          const st = statusCnd(c.status);
+                          return (
+                            <tr key={c.id}>
+                              <td>{c.tipo_label}</td>
+                              <td>{c.numero || "—"}</td>
+                              <td>{dataBR(c.data_validade)}{c.dias_para_vencer != null && c.status === "A_VENCER" ? <span style={{ color: ORANGE_TX, fontSize: 12 }}> · {c.dias_para_vencer}d</span> : null}</td>
+                              <td style={{ textAlign: "center" }}>{pill(st.label, st.cor)}</td>
+                              <td style={{ textAlign: "center" }}>
+                                {c.tem_pdf ? (
+                                  <button type="button" className="pac-btn pac-btn-ghost" onClick={() => baixarCertidao(c)} disabled={baixando === `cnd-${c.id}`}>
+                                    {baixando === `cnd-${c.id}` ? "..." : "⬇ Baixar"}
+                                  </button>
+                                ) : <span style={{ color: GRAY }}>—</span>}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
             </>
           ) : null}

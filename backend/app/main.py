@@ -10,6 +10,7 @@ from app.database import Base, SessionLocal, engine
 # registrados na metadata.
 from app.models.apuracao import Apuracao  # noqa: F401
 from app.models.certidao import Certidao  # noqa: F401
+from app.models.cobranca_portal import CobrancaPortal  # noqa: F401
 from app.models.consulta_log import ConsultaLog  # noqa: F401
 from app.models.documento_escritorio import DocumentoEscritorio  # noqa: F401
 from app.models.documento_fiscal import DocumentoFiscal  # noqa: F401
@@ -29,7 +30,7 @@ settings = get_settings()
 # BUILD_COMMIT no build (commit fica "unknown"), este é o sinal confiável pra
 # saber, via GET /version, se o deploy pegou o código novo (cache stale é
 # recorrente). Formato livre: AAAA-MM-DD + resumo curto.
-APP_BUILD_TAG = "2026-06-18-integracao-pac-tarefas"
+APP_BUILD_TAG = "2026-06-18-portal-cnds-guias-recalculo"
 
 
 @asynccontextmanager

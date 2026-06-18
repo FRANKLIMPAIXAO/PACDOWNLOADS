@@ -12,6 +12,8 @@ posse do documento.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from decimal import Decimal
+from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -20,10 +22,15 @@ from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.models.certidao import Certidao, TipoCertidao
+from app.models.cobranca_portal import CobrancaPortal
 from app.models.documento_escritorio import DocumentoEscritorio
 from app.models.documento_fiscal import DocumentoFiscal, TipoDocumento
 from app.models.empresa import Empresa
+from app.models.guia_das import GuiaDAS
 from app.models.usuario import Usuario
+from app.providers.integra_contador import IntegraContadorError
+from app.services.guia_das_service import GuiaDASService
 from app.routes.documentos import (
     baixar_pdf_individual,
     baixar_xml_individual,
@@ -369,4 +376,216 @@ def portal_baixar_documento_escritorio(
         filename=nome,
         media_type="application/octet-stream",
         headers={"Content-Disposition": f'attachment; filename="{nome}"'},
+    )
+
+
+# ---------------------------------------------------------------------------
+# CNDs / Certidões — o cliente VÊ e BAIXA as certidões da empresa dele.
+# Esconde a FEDERAL (SITFIS), que é controle interno do escritório.
+# ---------------------------------------------------------------------------
+_LABEL_CERT = {
+    TipoCertidao.FEDERAL_OFICIAL: "Federal (RFB/PGFN)",
+    TipoCertidao.FGTS: "FGTS (CRF)",
+    TipoCertidao.TRABALHISTA: "Trabalhista (CNDT)",
+    TipoCertidao.ESTADUAL: "Estadual",
+    TipoCertidao.MUNICIPAL: "Municipal",
+}
+
+
+@router.get("/certidoes")
+def portal_certidoes(
+    cliente: Usuario = Depends(get_current_cliente),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Certidões da empresa do cliente (a mais recente de cada tipo). Esconde a
+    FEDERAL interna (SITFIS, controle do escritório). Read-only, sem custo."""
+    certs = list(db.scalars(
+        select(Certidao)
+        .where(
+            Certidao.empresa_id == cliente.empresa_id,
+            Certidao.tipo != TipoCertidao.FEDERAL,
+        )
+        .order_by(Certidao.tipo, Certidao.data_validade.desc(), Certidao.id.desc())
+    ).all())
+    # a query já ordena por tipo + validade desc → a 1ª de cada tipo é a vigente
+    vistos: set = set()
+    out = []
+    for c in certs:
+        if c.tipo in vistos:
+            continue
+        vistos.add(c.tipo)
+        out.append({
+            "id": c.id,
+            "tipo": c.tipo.value,
+            "tipo_label": _LABEL_CERT.get(c.tipo, c.tipo.value),
+            "numero": c.numero,
+            "data_emissao": c.data_emissao.isoformat() if c.data_emissao else None,
+            "data_validade": c.data_validade.isoformat() if c.data_validade else None,
+            "status": c.status(),
+            "dias_para_vencer": c.dias_para_vencer,
+            "tem_pdf": bool(c.pdf_path),
+        })
+    return {"certidoes": out}
+
+
+@router.get("/certidoes/{certidao_id}/pdf")
+def portal_baixar_certidao(
+    certidao_id: int,
+    cliente: Usuario = Depends(get_current_cliente),
+    db: Session = Depends(get_db),
+) -> FileResponse:
+    """Baixa o PDF de uma certidão — só se for da empresa do cliente e não for a
+    FEDERAL interna. 404 (não 403) pra não revelar certidões de outras empresas."""
+    c = db.get(Certidao, certidao_id)
+    if not c or c.empresa_id != cliente.empresa_id or c.tipo == TipoCertidao.FEDERAL:
+        raise HTTPException(status_code=404, detail="Certidão não encontrada.")
+    if not c.pdf_path:
+        raise HTTPException(status_code=404, detail="Esta certidão ainda não tem PDF.")
+    p = Path(c.pdf_path)
+    if not p.exists():
+        raise HTTPException(status_code=404, detail="Arquivo PDF não encontrado.")
+    return FileResponse(path=str(p), filename=p.name, media_type="application/pdf")
+
+
+# ---------------------------------------------------------------------------
+# Guias DAS (Simples) — o cliente VÊ as guias, RECALCULA (Integra) e BAIXA.
+# Trava: 1 recálculo GRÁTIS por guia; do 2º em diante R$ 5,00 (avisa antes).
+# ---------------------------------------------------------------------------
+VALOR_RECALCULO = Decimal("5.00")
+
+
+def _guia_do_cliente(guia_id: int, cliente: Usuario, db: Session) -> GuiaDAS:
+    guia = db.get(GuiaDAS, guia_id)
+    if not guia or guia.empresa_id != cliente.empresa_id:
+        raise HTTPException(status_code=404, detail="Guia não encontrada.")
+    return guia
+
+
+def _recalculos_feitos(guia_id: int, empresa_id: int, db: Session) -> int:
+    return int(db.scalar(
+        select(func.count(CobrancaPortal.id)).where(
+            CobrancaPortal.empresa_id == empresa_id,
+            CobrancaPortal.guia_das_id == guia_id,
+            CobrancaPortal.tipo == "recalculo_das",
+        )
+    ) or 0)
+
+
+@router.get("/guias-das")
+def portal_guias_das(
+    cliente: Usuario = Depends(get_current_cliente),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Guias DAS da empresa do cliente + nº de recálculos já feitos em cada uma
+    (pra a UI saber se o próximo é grátis ou cobrado)."""
+    guias = GuiaDASService(db).listar_empresa(cliente.empresa_id)
+    counts = dict(db.execute(
+        select(CobrancaPortal.guia_das_id, func.count(CobrancaPortal.id))
+        .where(
+            CobrancaPortal.empresa_id == cliente.empresa_id,
+            CobrancaPortal.tipo == "recalculo_das",
+            CobrancaPortal.guia_das_id.isnot(None),
+        )
+        .group_by(CobrancaPortal.guia_das_id)
+    ).all())
+    out = []
+    for g in guias:
+        venc = g.data_vencimento_atualizada or g.data_vencimento_original
+        out.append({
+            "id": g.id,
+            "competencia": g.competencia_formatada,
+            "periodo_apuracao": g.periodo_apuracao,
+            "valor_principal": float(g.valor_principal or 0),
+            "valor_atualizado": float(g.valor_atualizado) if g.valor_atualizado is not None else None,
+            "data_vencimento": venc.isoformat() if venc else None,
+            "situacao": g.situacao,
+            "dias_atraso": g.dias_atraso,
+            "tem_pdf": bool(g.pdf_path),
+            "recalculos": int(counts.get(g.id, 0)),
+            "pode_recalcular": g.situacao != "paga",
+        })
+    return {"guias": out, "valor_recalculo_extra": float(VALOR_RECALCULO)}
+
+
+@router.post("/guias-das/{guia_id}/atualizar")
+def portal_atualizar_guia(
+    guia_id: int,
+    confirmar: bool = False,
+    cliente: Usuario = Depends(get_current_cliente),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Recalcula a guia (DARF com Selic+mora via Integra) e libera o PDF.
+
+    TRAVA: o 1º recálculo de cada guia é GRÁTIS; do 2º em diante custa R$ 5,00.
+    Quando vai cobrar, devolve `cobranca_necessaria=true` SEM chamar o Integra —
+    o front mostra o aviso e re-chama com `confirmar=true`. A cobrança só é
+    registrada (livro `cobrancas_portal`) DEPOIS do recálculo dar certo."""
+    guia = _guia_do_cliente(guia_id, cliente, db)
+    if guia.situacao == "paga":
+        raise HTTPException(status_code=400, detail="Esta guia já está paga — não precisa recalcular.")
+
+    feitos = _recalculos_feitos(guia.id, cliente.empresa_id, db)
+    cobrar = feitos >= 1
+    if cobrar and not confirmar:
+        return {
+            "ok": False,
+            "cobranca_necessaria": True,
+            "valor": float(VALOR_RECALCULO),
+            "recalculos_feitos": feitos,
+            "mensagem": (
+                f"Você já gerou esta guia {feitos}x. O 1º recálculo é grátis; "
+                f"este novo tem custo de R$ 5,00. Deseja gerar mesmo assim?"
+            ),
+        }
+
+    try:
+        guia = GuiaDASService(db).emitir_guia_atualizada(guia.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except IntegraContadorError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+    valor = VALOR_RECALCULO if cobrar else Decimal("0.00")
+    db.add(CobrancaPortal(
+        empresa_id=cliente.empresa_id,
+        guia_das_id=guia.id,
+        competencia=guia.periodo_apuracao,
+        tipo="recalculo_das",
+        valor=valor,
+        descricao=f"Recálculo DAS {guia.competencia_formatada}" + (" (cobrado)" if cobrar else " (grátis)"),
+    ))
+    db.commit()
+
+    venc = guia.data_vencimento_atualizada or guia.data_vencimento_original
+    return {
+        "ok": True,
+        "cobrado": bool(cobrar),
+        "valor": float(valor),
+        "situacao": guia.situacao,
+        "valor_atualizado": float(guia.valor_atualizado) if guia.valor_atualizado is not None else None,
+        "data_vencimento": venc.isoformat() if venc else None,
+        "mensagem": (
+            "Guia atualizada gerada! Já pode baixar o PDF."
+            + (" Foi cobrado R$ 5,00 (recálculo extra)." if cobrar else " (1º recálculo — grátis).")
+        ),
+    }
+
+
+@router.get("/guias-das/{guia_id}/pdf")
+def portal_baixar_guia_pdf(
+    guia_id: int,
+    cliente: Usuario = Depends(get_current_cliente),
+    db: Session = Depends(get_db),
+) -> FileResponse:
+    """Baixa o PDF da guia DAS — só se for da empresa do cliente."""
+    guia = _guia_do_cliente(guia_id, cliente, db)
+    if not guia.pdf_path:
+        raise HTTPException(status_code=404, detail="Guia ainda sem PDF — gere a guia atualizada primeiro.")
+    p = Path(guia.pdf_path)
+    if not p.exists():
+        raise HTTPException(status_code=404, detail="Arquivo PDF não encontrado.")
+    return FileResponse(
+        path=str(p),
+        media_type="application/pdf",
+        filename=f"DAS_{guia.periodo_apuracao}.pdf",
     )
