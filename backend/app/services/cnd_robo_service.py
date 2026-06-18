@@ -57,6 +57,56 @@ logger = logging.getLogger(__name__)
 _settings = get_settings()
 
 
+def _analisar_sitfis_pdf(pdf_path: str | None) -> tuple[bool | None, list[str]]:
+    """Lê o PDF do SITFIS e detecta pendências no 'Diagnóstico Fiscal'.
+
+    Retorna (regular, pendencias):
+      - regular=True  → sem pendências (situação regular / apta a negativa);
+      - regular=False → há pendências (omissão de DEFIS/DCTFWeb, débito, etc.);
+      - regular=None  → não deu pra avaliar (PDF ilegível ou formato diferente) —
+        o portal trata como "verificar", NUNCA como válida.
+
+    Conservador de propósito: na dúvida devolve None (não afirma regularidade).
+    """
+    if not pdf_path:
+        return None, []
+    try:
+        import pdfplumber
+    except Exception:  # noqa: BLE001
+        logger.warning("pdfplumber indisponível — SITFIS não analisado")
+        return None, []
+    try:
+        partes: list[str] = []
+        with pdfplumber.open(pdf_path) as pdf:
+            for page in pdf.pages:
+                partes.append(page.extract_text() or "")
+        texto = "\n".join(partes)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Falha ao ler SITFIS %s: %s", pdf_path, exc)
+        return None, []
+
+    if not texto.strip() or "diagn" not in texto.lower():
+        # Sem texto extraível ou sem a seção de Diagnóstico → não dá pra afirmar.
+        return None, []
+
+    pendencias: list[str] = []
+    vistos: set[str] = set()
+    for raw in texto.splitlines():
+        linha = raw.strip()
+        if not linha or not linha.lower().startswith("pend"):  # "Pendência - ..."
+            continue
+        item = linha.split("-", 1)[1].strip() if "-" in linha else linha
+        item = item.strip("*•– ").strip()
+        if item and item.lower() not in {"pendência", "pendencia"} and item not in vistos:
+            vistos.add(item)
+            pendencias.append(item[:160])
+
+    if pendencias:
+        return False, pendencias[:20]
+    # Diagnóstico presente e nenhuma linha "Pendência -" → regular.
+    return True, []
+
+
 # Tipos onde renovacao automatica esta disponivel (cards do CndCard)
 TIPOS_AUTOMATIZAVEIS: tuple[str, ...] = (
     "FEDERAL", "FEDERAL_OFICIAL", "TRABALHISTA", "FGTS",
@@ -154,14 +204,22 @@ class CndRoboService:
         hoje = date.today()
         validade = hoje + timedelta(days=VALIDADES_DIAS[tipo_alvo])
 
+        # Lê o Diagnóstico Fiscal do SITFIS pra saber se há pendências. Esse
+        # marcador (SITUACAO_FISCAL=...) é o que o portal usa pra NÃO mostrar
+        # "Válida" pra empresa irregular. SITFIS ≠ certidão negativa.
+        regular, pendencias = _analisar_sitfis_pdf(situacao.pdf_path)
+        sit_tag = "REGULAR" if regular is True else ("COM_PENDENCIAS" if regular is False else "DESCONHECIDA")
+        marcador = f"SITUACAO_FISCAL={sit_tag}. "
+        if pendencias:
+            marcador += "Pendências: " + "; ".join(pendencias) + ". "
+
         if tipo_alvo == "FEDERAL_OFICIAL":
-            obs = (
-                "CND Conjunta RFB+PGFN extraida do SITFIS via Integra Contador. "
-                f"Protocolo: {situacao.protocolo}. "
-                "Validade 180d. Apta para licitacoes, bancos e contratos publicos."
+            obs = marcador + (
+                "Extraido do SITFIS via Integra Contador. "
+                f"Protocolo: {situacao.protocolo}. Validade 180d."
             )
         else:
-            obs = (
+            obs = marcador + (
                 "Relatorio SITFIS via Integra Contador (uso interno). "
                 f"Protocolo: {situacao.protocolo}. Validade 60d."
             )

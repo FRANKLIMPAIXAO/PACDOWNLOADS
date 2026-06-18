@@ -11,6 +11,7 @@ posse do documento.
 """
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -393,6 +394,26 @@ _LABEL_CERT = {
 }
 
 
+def _regularidade_cert(obs: str | None) -> tuple[bool | None, list[str]]:
+    """Deriva (regular, pendencias) da observação da certidão — SEM mexer no
+    schema. Marcador do SITFIS: SITUACAO_FISCAL=REGULAR|COM_PENDENCIAS|
+    DESCONHECIDA (+ 'Pendências: a; b.'). Também reconhece o 'irregular' do
+    Infosimples. `None` = não dá pra afirmar (certidão antiga) → o portal NÃO
+    mostra "Válida", mostra "Verificar"."""
+    if not obs:
+        return None, []
+    ol = obs.lower()
+    pend: list[str] = []
+    m = re.search(r"pend[eê]ncias:\s*(.+?)\.\s", obs + " ", re.IGNORECASE)
+    if m:
+        pend = [p.strip() for p in m.group(1).split(";") if p.strip()][:20]
+    if "situacao_fiscal=regular" in ol or "situação: regular" in ol or "situacao: regular" in ol:
+        return True, pend
+    if "situacao_fiscal=com_pendencias" in ol or "irregular" in ol or "⚠" in obs:
+        return False, pend
+    return None, pend
+
+
 @router.get("/certidoes")
 def portal_certidoes(
     cliente: Usuario = Depends(get_current_cliente),
@@ -415,6 +436,7 @@ def portal_certidoes(
         if c.tipo in vistos:
             continue
         vistos.add(c.tipo)
+        regular, pendencias = _regularidade_cert(c.observacoes)
         out.append({
             "id": c.id,
             "tipo": c.tipo.value,
@@ -425,6 +447,8 @@ def portal_certidoes(
             "status": c.status(),
             "dias_para_vencer": c.dias_para_vencer,
             "tem_pdf": bool(c.pdf_path),
+            "regular": regular,           # True/False/None (None = não verificado)
+            "pendencias": pendencias,     # lista de pendências (se houver)
         })
     return {"certidoes": out}
 

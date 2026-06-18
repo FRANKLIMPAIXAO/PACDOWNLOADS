@@ -131,13 +131,15 @@ function situacaoGuia(s: string): { label: string; cor: string } {
     default: return { label: "Em aberto", cor: BLUE };
   }
 }
-function statusCnd(s: string): { label: string; cor: string } {
-  switch (s) {
-    case "VALIDA": return { label: "Válida", cor: GREEN };
-    case "A_VENCER": return { label: "A vencer", cor: ORANGE_TX };
-    case "VENCIDA": return { label: "Vencida", cor: RED };
-    default: return { label: "—", cor: GRAY };
-  }
+function statusCnd(c: PortalCertidao): { label: string; cor: string } {
+  // Regularidade tem PRIORIDADE sobre a data: uma SITFIS dentro da validade mas
+  // com pendência NÃO é "válida". `regular === null` = não verificado → "Verificar".
+  if (c.status === "VENCIDA") return { label: "Vencida", cor: RED };
+  if (c.regular === false) return { label: "Com pendências", cor: RED };
+  if (c.regular === null) return { label: "Verificar", cor: GRAY };
+  if (c.status === "A_VENCER") return { label: "A vencer", cor: ORANGE_TX };
+  if (c.status === "VALIDA") return { label: "Regular", cor: GREEN };
+  return { label: "—", cor: GRAY };
 }
 
 /** Ranking horizontal (clientes / fornecedores). */
@@ -782,10 +784,15 @@ export default function PortalPage() {
                       </thead>
                       <tbody>
                         {certidoes.map((c) => {
-                          const st = statusCnd(c.status);
+                          const st = statusCnd(c);
                           return (
                             <tr key={c.id}>
-                              <td>{c.tipo_label}</td>
+                              <td>
+                                {c.tipo_label}
+                                {c.pendencias && c.pendencias.length > 0 ? (
+                                  <div style={{ fontSize: 12, color: RED, marginTop: 2 }}>⚠ {c.pendencias.join(" · ")}</div>
+                                ) : null}
+                              </td>
                               <td>{c.numero || "—"}</td>
                               <td>{dataBR(c.data_validade)}{c.dias_para_vencer != null && c.status === "A_VENCER" ? <span style={{ color: ORANGE_TX, fontSize: 12 }}> · {c.dias_para_vencer}d</span> : null}</td>
                               <td style={{ textAlign: "center" }}>{pill(st.label, st.cor)}</td>
