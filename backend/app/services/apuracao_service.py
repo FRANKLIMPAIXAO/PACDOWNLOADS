@@ -176,9 +176,16 @@ class ApuracaoService:
             raise HTTPException(status_code=502, detail=f"Integra Contador: {exc}")
 
         dados = parse_dados(payload)
-        # Valor devido apurado pela RFB
+        # Valor devido apurado pela RFB. A Serpro NÃO devolve um total — devolve
+        # o DAS POR TRIBUTO em `valoresDevidos` (1001 IRPJ, 1002 CSLL, 1004
+        # COFINS, 1005 PIS, 1006 CPP, 1007 ICMS, 1008 ISS...). Soma pra ter o
+        # total e poder comparar com o PAC.
         valor_rfb = dados.get("valorDevido")
         valores_rfb = dados.get("valoresDevidos") or []
+        if valor_rfb is None and valores_rfb:
+            valor_rfb = round(
+                sum(float(v.get("valor") or 0) for v in valores_rfb), 2,
+            )
         valor_pac = float(apur.valor_devido) if apur.valor_devido else None
         divergencia = None
         if valor_rfb is not None and valor_pac is not None:
