@@ -25,6 +25,8 @@ export type Certidao = {
   updated_at: string;
   status: StatusCertidao;
   dias_para_vencer: number | null;
+  situacao_fiscal: string | null; // regular | pendencias | verificar | null
+  pendencias: string[];
 };
 
 export type CndDashboardLinha = {
@@ -187,4 +189,21 @@ export function statusLabel(status: StatusCertidao): string {
   if (status === "A_VENCER") return "A vencer";
   if (status === "VENCIDA") return "Vencida";
   return "—";
+}
+
+type CertEfetiva = { status: StatusCertidao; situacao_fiscal?: string | null };
+
+/** Status EFETIVO: a regularidade (pendência) tem prioridade sobre a data.
+ * `verificar` = SITFIS que não deu pra ler o diagnóstico → não afirmar válida. */
+export function efetivoLabel(c: CertEfetiva): string {
+  if (c.status === "VENCIDA") return "Vencida";
+  if (c.situacao_fiscal === "pendencias") return "Com pendências";
+  if (c.situacao_fiscal === "verificar") return "Verificar";
+  return statusLabel(c.status);
+}
+export function efetivoPillClass(c: CertEfetiva): string {
+  if (c.status === "VENCIDA") return "pill pill-err";
+  if (c.situacao_fiscal === "pendencias") return "pill pill-err";
+  if (c.situacao_fiscal === "verificar") return "pill pill-muted";
+  return statusPillClass(c.status);
 }

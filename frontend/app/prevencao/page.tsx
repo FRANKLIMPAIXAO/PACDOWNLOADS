@@ -12,9 +12,9 @@ import {
   TIPOS_CND,
   TipoCertidao,
   dashboardCnds,
+  efetivoLabel,
+  efetivoPillClass,
   renovarVencendo,
-  statusLabel,
-  statusPillClass,
 } from "../../lib/cnds";
 import { Empresa, listarEmpresas } from "../../lib/empresas";
 import {
@@ -117,17 +117,19 @@ function PrevencaoContent() {
     let cndsValidas = 0;
     let cndsAVencer = 0;
     let cndsVencidas = 0;
+    let cndsPendencia = 0;
     for (const c of cnds) {
       for (const tipo of TIPOS_CND) {
         const cert = c[tipo.tipo.toLowerCase() as keyof CndDashboardLinha] as
-          | { status: StatusCertidao } | null;
+          | { status: StatusCertidao; situacao_fiscal?: string | null } | null;
         if (!cert) continue;
-        if (cert.status === "VALIDA") cndsValidas++;
+        if (cert.situacao_fiscal === "pendencias") cndsPendencia++;
+        else if (cert.status === "VALIDA" && cert.situacao_fiscal !== "verificar") cndsValidas++;
         else if (cert.status === "A_VENCER") cndsAVencer++;
         else if (cert.status === "VENCIDA") cndsVencidas++;
       }
     }
-    return { empresas, procAtivas, naoLidas, optantesDte, cndsValidas, cndsAVencer, cndsVencidas };
+    return { empresas, procAtivas, naoLidas, optantesDte, cndsValidas, cndsAVencer, cndsVencidas, cndsPendencia };
   }, [linhas, cnds]);
 
   if (error) {
@@ -208,13 +210,14 @@ function PrevencaoContent() {
     </Link>,
     ...tiposTabela.map((t) => {
       const cert = c[t.tipo.toLowerCase() as keyof CndDashboardLinha] as
-        | { status: StatusCertidao; data_validade: string; dias_para_vencer: number | null } | null;
+        | { status: StatusCertidao; situacao_fiscal?: string | null; pendencias?: string[]; data_validade: string } | null;
       if (!cert) {
         return <span key={`${c.empresa_id}-${t.tipo}`} className="pill pill-muted">—</span>;
       }
+      const pend = cert.pendencias && cert.pendencias.length ? ` · ${cert.pendencias.join(" · ")}` : "";
       return (
-        <span key={`${c.empresa_id}-${t.tipo}`} className={statusPillClass(cert.status)} title={`${t.fonte} · validade ${cert.data_validade}`}>
-          {statusLabel(cert.status)}
+        <span key={`${c.empresa_id}-${t.tipo}`} className={efetivoPillClass(cert)} title={`${t.fonte} · validade ${cert.data_validade}${pend}`}>
+          {efetivoLabel(cert)}
         </span>
       );
     }),
@@ -262,9 +265,9 @@ function PrevencaoContent() {
             <p>caixa postal eCAC</p>
           </article>
           <article className="metric metric--rose">
-            <span>CNDs vencidas</span>
-            <strong>{totais.cndsVencidas}</strong>
-            <p>{totais.cndsAVencer} a vencer · {totais.cndsValidas} validas</p>
+            <span>CNDs com pendência</span>
+            <strong>{totais.cndsPendencia}</strong>
+            <p>{totais.cndsVencidas} vencidas · {totais.cndsAVencer} a vencer · {totais.cndsValidas} válidas</p>
           </article>
         </section>
       ) : null}

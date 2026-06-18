@@ -133,12 +133,12 @@ function situacaoGuia(s: string): { label: string; cor: string } {
 }
 function statusCnd(c: PortalCertidao): { label: string; cor: string } {
   // Regularidade tem PRIORIDADE sobre a data: uma SITFIS dentro da validade mas
-  // com pendência NÃO é "válida". `regular === null` = não verificado → "Verificar".
+  // com pendência NÃO é "válida". `verificar` = SITFIS que não deu pra ler.
   if (c.status === "VENCIDA") return { label: "Vencida", cor: RED };
-  if (c.regular === false) return { label: "Com pendências", cor: RED };
-  if (c.regular === null) return { label: "Verificar", cor: GRAY };
+  if (c.situacao_fiscal === "pendencias") return { label: "Com pendências", cor: RED };
+  if (c.situacao_fiscal === "verificar") return { label: "Verificar", cor: GRAY };
   if (c.status === "A_VENCER") return { label: "A vencer", cor: ORANGE_TX };
-  if (c.status === "VALIDA") return { label: "Regular", cor: GREEN };
+  if (c.status === "VALIDA") return { label: c.situacao_fiscal === "regular" ? "Regular" : "Válida", cor: GREEN };
   return { label: "—", cor: GRAY };
 }
 

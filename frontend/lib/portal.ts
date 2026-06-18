@@ -109,7 +109,7 @@ export type PortalCertidao = {
   status: string; // VALIDA | A_VENCER | VENCIDA | DESCONHECIDO
   dias_para_vencer: number | null;
   tem_pdf: boolean;
-  regular: boolean | null; // true=sem pendência · false=com pendência · null=não verificado
+  situacao_fiscal: string | null; // regular | pendencias | verificar | null
   pendencias: string[];
 };
 

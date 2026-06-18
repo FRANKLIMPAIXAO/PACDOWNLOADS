@@ -39,6 +39,9 @@ class CertidaoRead(BaseModel):
     updated_at: datetime
     status: str
     dias_para_vencer: int | None = None
+    # regular | pendencias | verificar | None (None = sem marcador → vale a data)
+    situacao_fiscal: str | None = None
+    pendencias: list[str] = []
 
 
 class CndDashboardResposta(BaseModel):

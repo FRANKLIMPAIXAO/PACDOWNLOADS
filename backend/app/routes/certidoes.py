@@ -27,6 +27,7 @@ _settings = get_settings()
 
 
 def _certidao_to_read(c: Certidao) -> CertidaoRead:
+    situacao_fiscal, pendencias = c.regularidade()
     return CertidaoRead(
         id=c.id,
         empresa_id=c.empresa_id,
@@ -40,6 +41,17 @@ def _certidao_to_read(c: Certidao) -> CertidaoRead:
         updated_at=c.updated_at,
         status=c.status(),
         dias_para_vencer=c.dias_para_vencer,
+        situacao_fiscal=situacao_fiscal,
+        pendencias=pendencias,
+    )
+
+
+def _cert_ok(cr: CertidaoRead | None) -> bool:
+    """Certidão conta como OK no score só se está válida pela DATA e SEM
+    pendência/verificação (uma SITFIS irregular ou não-lida não pontua)."""
+    return bool(
+        cr and cr.status == "VALIDA"
+        and cr.situacao_fiscal not in ("pendencias", "verificar")
     )
 
 
@@ -69,16 +81,14 @@ def cnd_dashboard(db: Session = Depends(get_db)) -> list[CndDashboardResposta]:
             if cert:
                 slot[tipo] = _certidao_to_read(cert)
         # Score considera 5 tipos basicos (FEDERAL conta uma so vez — usa SITFIS
-        # OU CND oficial, o que estiver valido). FEDERAL_OFICIAL nao soma extra.
-        federal_ok = (
-            (slot["FEDERAL"] and slot["FEDERAL"].status == "VALIDA")
-            or (slot["FEDERAL_OFICIAL"] and slot["FEDERAL_OFICIAL"].status == "VALIDA")
-        )
+        # OU CND oficial, o que estiver valido E regular). FEDERAL_OFICIAL nao
+        # soma extra. CND com pendencia/nao-verificada NAO pontua.
+        federal_ok = _cert_ok(slot["FEDERAL"]) or _cert_ok(slot["FEDERAL_OFICIAL"])
         validos = (
             (1 if federal_ok else 0)
             + sum(
                 1 for k in ("FGTS", "TRABALHISTA", "ESTADUAL", "MUNICIPAL")
-                if slot[k] is not None and slot[k].status == "VALIDA"
+                if _cert_ok(slot[k])
             )
         )
         resultado.append(

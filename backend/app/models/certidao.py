@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import date, datetime
 from enum import Enum
 
@@ -81,3 +82,34 @@ class Certidao(Base):
         if not self.data_validade:
             return None
         return (self.data_validade - date.today()).days
+
+    def regularidade(self) -> tuple[str | None, list[str]]:
+        """(situacao_fiscal, pendencias) derivado de `observacoes` — sem coluna nova.
+
+        situacao_fiscal:
+          - "regular"    → sem pendências (apta a negativa);
+          - "pendencias" → há pendências (omissão DEFIS/DCTFWeb, débito...);
+          - "verificar"  → era um SITFIS mas não deu pra ler o diagnóstico
+            (marcador DESCONHECIDA) — NÃO afirmar "válida";
+          - None         → sem marcador (CND manual/Infosimples comum) → a
+            validade pela DATA é a referência (comportamento antigo).
+
+        Marcador gravado na emissão do SITFIS:
+        `SITUACAO_FISCAL=REGULAR|COM_PENDENCIAS|DESCONHECIDA` (+ "Pendências: a; b.").
+        Também reconhece "Situação: regular/irregular" do Infosimples.
+        """
+        obs = self.observacoes
+        if not obs:
+            return None, []
+        ol = obs.lower()
+        pend: list[str] = []
+        m = re.search(r"pend[eê]ncias:\s*(.+?)\.\s", obs + " ", re.IGNORECASE)
+        if m:
+            pend = [p.strip() for p in m.group(1).split(";") if p.strip()][:20]
+        if "situacao_fiscal=regular" in ol or "situação: regular" in ol or "situacao: regular" in ol:
+            return "regular", pend
+        if "situacao_fiscal=com_pendencias" in ol or "irregular" in ol or "⚠" in obs:
+            return "pendencias", pend
+        if "situacao_fiscal=desconhecida" in ol:
+            return "verificar", pend
+        return None, pend
