@@ -113,6 +113,55 @@ class ApuracaoService:
             interna = float(apur.receita_bruta)
         return interna, externa
 
+    def _receitas_atividade_segregadas(self, apur: Apuracao) -> list[dict]:
+        """Monta receitasAtividade[] segregando a receita por QUALIFICAÇÃO
+        tributária, pra RFB não taxar PIS/COFINS no monofásico nem ICMS no ST.
+
+        Códigos de domínio Serpro: 8=Substituição Tributária, 9=Tributação
+        Monofásica. Tributos: 1004 COFINS, 1005 PIS, 1007 ICMS.
+
+        ⚠️ O NOME do campo da qualificação (`codigoQualificacao`) é HIPÓTESE — o
+        dry-run valida. Se a RFB rejeitar nomeando outro campo, trocar só em
+        `_qualif`. Empresa SEM monofásico/ST → só o bucket NORMAL (qualif []),
+        idêntico ao comportamento antigo (sem regressão)."""
+        COD_COFINS, COD_PIS, COD_ICMS = 1004, 1005, 1007
+        QUAL_ST, QUAL_MONOFASICO = 8, 9
+
+        def _qualif(cod_tributo: int, qualificacao: int) -> dict:
+            return {"codTributo": cod_tributo, "codigoQualificacao": qualificacao}
+
+        buckets: dict[str, float] = {}
+        for r in (apur.receitas_segregadas or []):
+            nat = (r.get("natureza") or "").upper()
+            if nat == "EXPORTACAO":
+                continue  # vai em receitaPaCompetenciaExterno, não aqui
+            buckets[nat] = buckets.get(nat, 0.0) + float(r.get("valor") or 0)
+
+        itens: list[dict] = []
+
+        def _add(valor: float, quals: list[dict]) -> None:
+            if valor and valor > 0.005:
+                itens.append({
+                    "valor": round(valor, 2),
+                    "codigoOutroMunicipio": None,
+                    "outraUf": None,
+                    "qualificacoesTributarias": quals,
+                    "isencoes": [],
+                    "reducoes": [],
+                    "exigibilidadesSuspensas": None,
+                })
+
+        _add(buckets.get("NORMAL", 0.0) + buckets.get("SERVICO", 0.0), [])
+        _add(buckets.get("ST", 0.0), [_qualif(COD_ICMS, QUAL_ST)])
+        _add(buckets.get("MONOFASICO", 0.0), [
+            _qualif(COD_COFINS, QUAL_MONOFASICO), _qualif(COD_PIS, QUAL_MONOFASICO),
+        ])
+        _add(buckets.get("MONOFASICO_ST", 0.0), [
+            _qualif(COD_COFINS, QUAL_MONOFASICO), _qualif(COD_PIS, QUAL_MONOFASICO),
+            _qualif(COD_ICMS, QUAL_ST),
+        ])
+        return itens
+
     def _receitas_brutas_anteriores(self, empresa_id: int, ano_mes: str) -> list[dict]:
         """Monta receitasBrutasAnteriores[] do payload PGDAS-D a partir da
         tabela ReceitaMensal (faturamento dos 12 meses anteriores)."""
@@ -168,6 +217,7 @@ class ApuracaoService:
                 receita_externa=externa,
                 receitas_brutas_anteriores=receitas_anteriores,
                 indicador_transmissao=not dry_run,
+                receitas_atividade=self._receitas_atividade_segregadas(apur),
             )
         except IntegraContadorError as exc:
             if not dry_run:

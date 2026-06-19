@@ -310,31 +310,29 @@ class IntegraContadorProvider:
         indicador_transmissao: bool = False,
         valor_fixo_icms: float | None = None,
         valor_fixo_iss: float | None = None,
+        receitas_atividade: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Constrói o objeto `dados` do TRANSDECLARACAO11 conforme spec Serpro.
 
-        Versão CONSERVADORA: 1 estabelecimento (matriz) + 1 atividade com a
-        receita interna total, qualificacoesTributarias=[] (tributação normal).
-
-        ⚠️ LIMITAÇÃO CONHECIDA: monofásico/ST precisam de qualificacoesTributarias
-        específicas (estrutura ainda [INFERIDO] — ver docs/SPEC-TRANSDECLARACAO11).
-        Sem elas, a RFB taxa PIS/COFINS sobre receita monofásica (imposto a maior).
-        POR ISSO o fluxo OBRIGATÓRIO é dry-run primeiro (indicador_transmissao=False)
-        e comparar o valor da RFB com o calculator do PAC antes de transmitir real.
+        `receitas_atividade`: lista PRONTA de receitasAtividade já segregada por
+        qualificação tributária (monofásico cód 9 / ST cód 8). Quando None/vazia,
+        cai no bucket ÚNICO com a receita interna total e qualificacoesTributarias=[]
+        (tributação normal) — comportamento antigo, sem regressão.
 
         `indicador_transmissao=False` → dry-run (calcula sem entregar).
         """
         cnpj = (contribuinte_cnpj or "").replace(".", "").replace("/", "").replace("-", "")
         pa = int(ano_mes)
-        receitas_atividade = [{
-            "valor": round(receita_interna, 2),
-            "codigoOutroMunicipio": None,
-            "outraUf": None,
-            "qualificacoesTributarias": [],  # TODO monofásico/ST após dados_de_dominio
-            "isencoes": [],
-            "reducoes": [],
-            "exigibilidadesSuspensas": None,
-        }]
+        if not receitas_atividade:
+            receitas_atividade = [{
+                "valor": round(receita_interna, 2),
+                "codigoOutroMunicipio": None,
+                "outraUf": None,
+                "qualificacoesTributarias": [],
+                "isencoes": [],
+                "reducoes": [],
+                "exigibilidadesSuspensas": None,
+            }]
         declaracao: dict[str, Any] = {
             "tipoDeclaracao": 1,  # Original
             "receitaPaCompetenciaInterno": round(receita_interna, 2),
@@ -375,6 +373,7 @@ class IntegraContadorProvider:
         receitas_brutas_anteriores: list[dict[str, Any]] | None = None,
         indicador_transmissao: bool = False,  # DEFAULT = dry-run (seguro!)
         receitas: list[dict[str, Any]] | None = None,  # compat legado (ignorado)
+        receitas_atividade: list[dict[str, Any]] | None = None,  # segregação monofásico/ST
     ) -> dict[str, Any]:
         """TRANSDECLARACAO11 - transmite (ou valida via dry-run) declaração PGDAS-D.
 
@@ -419,6 +418,7 @@ class IntegraContadorProvider:
             folhas_salario=folhas_salario,
             receitas_brutas_anteriores=receitas_brutas_anteriores,
             indicador_transmissao=indicador_transmissao,
+            receitas_atividade=receitas_atividade,
         )
         return self._executar(
             PATH_DECLARAR,
