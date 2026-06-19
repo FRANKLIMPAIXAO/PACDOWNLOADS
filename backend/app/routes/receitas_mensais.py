@@ -47,3 +47,17 @@ def puxar_da_receita(
     (CONSDECLARACAO13 + CONSDECREC15). Best-effort — revise a grade depois.
     """
     return ReceitaMensalService(db).puxar_da_receita(empresa_id, competencia)
+
+
+@router.post("/corrigir-exportacao-dobrada")
+def corrigir_exportacao_dobrada(empresa_id: int, db: Session = Depends(get_db)) -> dict:
+    """Conserta o RBT12 DOBRADO (valor_externo = valor_interno) que o 'Puxar da
+    Receita' gravou com o parser antigo. Zera o externo das linhas puxadas
+    (origem='receita') em que externo == interno.
+
+    Passe **empresa_id=0** pra rodar na CARTEIRA INTEIRA (conserta todas de uma vez).
+    Retorna {linhas_corrigidas, empresas_afetadas}.
+    """
+    return ReceitaMensalService(db).corrigir_exportacao_dobrada(
+        empresa_id if empresa_id and empresa_id > 0 else None,
+    )

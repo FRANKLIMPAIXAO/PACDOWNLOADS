@@ -111,22 +111,70 @@ def _valor_proximo(texto: str, palavras: tuple[str, ...], janela: int = 160) -> 
     return _brl_para_float(m.group(1)) if m else 0.0
 
 
-def _extrair_receitas_pdf(texto: str) -> tuple[float, float]:
-    """Extrai (receita_interna, receita_externa) do texto da PGDAS-D.
+def _valores_apos(
+    texto: str, palavras: tuple[str, ...], n: int = 3, janela: int = 240,
+) -> list[float]:
+    """Acha a 1ª ocorrência (mais à esquerda) de qualquer `palavra` e devolve os
+    primeiros `n` valores BRL que aparecem logo depois, EM ORDEM."""
+    low = texto.lower()
+    melhor_pos = -1
+    achou_p = ""
+    for p in palavras:
+        pos = low.find(p)
+        if pos != -1 and (melhor_pos == -1 or pos < melhor_pos):
+            melhor_pos = pos
+            achou_p = p
+    if melhor_pos == -1:
+        return []
+    ini = melhor_pos + len(achou_p)
+    trecho = texto[ini: ini + janela]
+    return [_brl_para_float(m.group(1)) for m in _BRL_RE.finditer(trecho)][:n]
 
-    Best-effort: tenta rótulos comuns do recibo/declaração. A 1ª rodada serve
-    de calibração — o texto cru vai no debug pra ajustar os rótulos exatos.
-    """
+
+def _extrair_receitas_pdf(texto: str) -> tuple[float, float]:
+    """Extrai (receita_interna, receita_externa) do recibo/declaração PGDAS-D.
+
+    O recibo traz a linha da RPA (receita do PERÍODO, regime de competência) com
+    3 valores em ordem: Mercado Interno | Mercado Externo | Total. Lê os 3 da
+    MESMA linha e deriva externo = total − interno.
+
+    ⚠️ BUG corrigido (19/06): o parser antigo procurava o rótulo "Mercado Externo"
+    (que no recibo é só o CABEÇALHO da coluna) e pegava o 1º número depois — que é
+    o do INTERNO (a linha de dados começa no interno). Resultado: externo=interno →
+    RBT12 DOBRADO (METHA BIKE: 2,35M em vez de 1,18M → Faixa 5 em vez de 4 → DAS a
+    maior). Derivar externo do total elimina a recaptura."""
     if not texto:
         return 0.0, 0.0
+
+    # Linha da receita do PERÍODO (RPA), NÃO a do RBT12 (acumulado 12 meses).
+    nums = _valores_apos(texto, (
+        "regime de competência", "regime de competencia",
+        "receita bruta do período de apuração", "receita bruta do periodo de apuracao",
+        "receita bruta do pa", "(rpa)",
+    ), n=3, janela=240)
+
+    if len(nums) >= 3:
+        interno, total = nums[0], nums[2]
+        externo = round(total - interno, 2)  # total = interno + externo (consistente)
+        return interno, (externo if externo > 0 else 0.0)
+    if len(nums) == 2:
+        interno, segundo = nums[0], nums[1]
+        # 2 números iguais = o 2º é recaptura do interno → externo 0.
+        return interno, (0.0 if abs(segundo - interno) < 0.01 else segundo)
+    if len(nums) == 1:
+        return nums[0], 0.0
+
+    # Fallback (layout fora do padrão): rótulos diretos, com trava anti-dobra.
     interno = _valor_proximo(texto, (
-        "mercado interno", "receita bruta do pa", "receita bruta interna",
+        "mercado interno", "receita bruta interna",
         "receita bruta de mercado interno", "rpa",
     ))
     externo = _valor_proximo(texto, (
-        "mercado externo", "receita bruta externa", "exportação", "exportacao",
-        "receita bruta de mercado externo",
+        "receita bruta externa", "receita bruta de mercado externo",
+        "exportação", "exportacao",
     ))
+    if abs(externo - interno) < 0.01 and interno > 0:
+        externo = 0.0  # externo recapturou o interno
     return interno, externo
 
 
@@ -318,6 +366,30 @@ class ReceitaMensalService:
                 "ficou em branco antes de calcular o DAS."
             ) if encontrados < len(meses) else None,
         }
+
+    def corrigir_exportacao_dobrada(self, empresa_id: int | None = None) -> dict:
+        """Conserta as linhas em que o 'Puxar da Receita' (parser antigo) gravou
+        valor_externo = valor_interno, DOBRANDO o RBT12. Zera o valor_externo onde
+        origem='receita' e externo == interno > 0.
+
+        Seguro/idempotente: um exportador real não tem externo EXATAMENTE igual ao
+        interno; e só mexe nas linhas puxadas da Receita (origem='receita'), nunca
+        nas manuais. `empresa_id=None` → roda na carteira inteira."""
+        stmt = select(ReceitaMensal).where(ReceitaMensal.origem == "receita")
+        if empresa_id is not None:
+            stmt = stmt.where(ReceitaMensal.empresa_id == empresa_id)
+        corrigidas = 0
+        empresas: set[int] = set()
+        for r in self.db.scalars(stmt).all():
+            vi = r.valor_interno or Decimal(0)
+            ve = r.valor_externo or Decimal(0)
+            if ve > 0 and abs(ve - vi) < Decimal("0.01"):
+                r.valor_externo = Decimal(0)
+                corrigidas += 1
+                empresas.add(r.empresa_id)
+        if corrigidas:
+            self.db.commit()
+        return {"linhas_corrigidas": corrigidas, "empresas_afetadas": len(empresas)}
 
     def _upsert(self, empresa_id: int, ano_mes: str, interno: float, externo: float, origem: str):
         existente = self.db.scalar(
