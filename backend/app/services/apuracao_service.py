@@ -113,25 +113,38 @@ class ApuracaoService:
             interna = float(apur.receita_bruta)
         return interna, externa
 
-    def _receitas_atividade_segregadas(self, apur: Apuracao) -> list[dict]:
-        """Monta receitasAtividade[] segregando a receita por QUALIFICAÇÃO
-        tributária, pra RFB não taxar PIS/COFINS no monofásico nem ICMS no ST.
+    def _atividades_segregadas(self, apur: Apuracao) -> list[dict]:
+        """Monta atividades[] do PGDAS-D segregando por ATIVIDADE e QUALIFICAÇÃO.
 
-        Códigos de domínio Serpro: 8=Substituição Tributária, 9=Tributação
-        Monofásica. Tributos: 1004 COFINS, 1005 PIS, 1007 ICMS.
+        A RFB recusa ST/monofásico no idAtividade=1 (erro MSG_ISN_032), porque a
+        qualificação depende da atividade (tabela de domínio Serpro):
+          - idAtividade 1 = revenda de mercadorias SEM ST/monofásico;
+          - idAtividade 2 = revenda de mercadorias COM ST/monofásico (aqui as
+            qualificações 8=ST / 9=monofásico são permitidas).
 
-        ⚠️ O NOME do campo da qualificação (`codigoQualificacao`) é HIPÓTESE — o
-        dry-run valida. Se a RFB rejeitar nomeando outro campo, trocar só em
-        `_qualif`. Empresa SEM monofásico/ST → só o bucket NORMAL (qualif []),
-        idêntico ao comportamento antigo (sem regressão)."""
+        Então: receita NORMAL vai na atividade 1; ST/MONOFASICO/MONOFASICO_ST vão
+        na atividade 2, cada receita com suas qualificacoesTributarias por tributo
+        ({CodigoTributo, Id}). Tributos: 1004 COFINS, 1005 PIS, 1007 ICMS.
+
+        Empresa SEM ST/monofásico → só a atividade 1 (qualif []), idêntico ao
+        comportamento antigo. ⚠️ idAtividade 1/2 e estrutura confirmados por
+        dry-run (Serpro guiou via MSG_ISN_036/032)."""
         COD_COFINS, COD_PIS, COD_ICMS = 1004, 1005, 1007
         QUAL_ST, QUAL_MONOFASICO = 8, 9
 
-        def _qualif(cod_tributo: int, qualificacao: int) -> dict:
-            # Estrutura confirmada via dry-run (erros MSG_ISN_036 do Serpro):
-            # `CodigoTributo` = tributo (1004/1005/1007), `Id` = código da
-            # qualificação na tabela de domínio (8=ST, 9=monofásico).
-            return {"CodigoTributo": cod_tributo, "Id": qualificacao}
+        def _qualif(cod_tributo: int, qual: int) -> dict:
+            return {"CodigoTributo": cod_tributo, "Id": qual}
+
+        def _receita(valor: float, quals: list[dict]) -> dict:
+            return {
+                "valor": round(valor, 2),
+                "codigoOutroMunicipio": None,
+                "outraUf": None,
+                "qualificacoesTributarias": quals,
+                "isencoes": [],
+                "reducoes": [],
+                "exigibilidadesSuspensas": None,
+            }
 
         buckets: dict[str, float] = {}
         for r in (apur.receitas_segregadas or []):
@@ -140,30 +153,39 @@ class ApuracaoService:
                 continue  # vai em receitaPaCompetenciaExterno, não aqui
             buckets[nat] = buckets.get(nat, 0.0) + float(r.get("valor") or 0)
 
-        itens: list[dict] = []
+        normal = buckets.get("NORMAL", 0.0) + buckets.get("SERVICO", 0.0)
+        st = buckets.get("ST", 0.0)
+        mono = buckets.get("MONOFASICO", 0.0)
+        mono_st = buckets.get("MONOFASICO_ST", 0.0)
 
-        def _add(valor: float, quals: list[dict]) -> None:
-            if valor and valor > 0.005:
-                itens.append({
-                    "valor": round(valor, 2),
-                    "codigoOutroMunicipio": None,
-                    "outraUf": None,
-                    "qualificacoesTributarias": quals,
-                    "isencoes": [],
-                    "reducoes": [],
-                    "exigibilidadesSuspensas": None,
-                })
-
-        _add(buckets.get("NORMAL", 0.0) + buckets.get("SERVICO", 0.0), [])
-        _add(buckets.get("ST", 0.0), [_qualif(COD_ICMS, QUAL_ST)])
-        _add(buckets.get("MONOFASICO", 0.0), [
-            _qualif(COD_COFINS, QUAL_MONOFASICO), _qualif(COD_PIS, QUAL_MONOFASICO),
-        ])
-        _add(buckets.get("MONOFASICO_ST", 0.0), [
-            _qualif(COD_COFINS, QUAL_MONOFASICO), _qualif(COD_PIS, QUAL_MONOFASICO),
-            _qualif(COD_ICMS, QUAL_ST),
-        ])
-        return itens
+        atividades: list[dict] = []
+        # Atividade 1 — revenda SEM ST/monofásico
+        if normal > 0.005:
+            atividades.append({
+                "idAtividade": 1,
+                "valorAtividade": round(normal, 2),
+                "receitasAtividade": [_receita(normal, [])],
+            })
+        # Atividade 2 — revenda COM ST/monofásico (qualificações permitidas aqui)
+        receitas2: list[dict] = []
+        if st > 0.005:
+            receitas2.append(_receita(st, [_qualif(COD_ICMS, QUAL_ST)]))
+        if mono > 0.005:
+            receitas2.append(_receita(mono, [
+                _qualif(COD_COFINS, QUAL_MONOFASICO), _qualif(COD_PIS, QUAL_MONOFASICO),
+            ]))
+        if mono_st > 0.005:
+            receitas2.append(_receita(mono_st, [
+                _qualif(COD_COFINS, QUAL_MONOFASICO), _qualif(COD_PIS, QUAL_MONOFASICO),
+                _qualif(COD_ICMS, QUAL_ST),
+            ]))
+        if receitas2:
+            atividades.append({
+                "idAtividade": 2,
+                "valorAtividade": round(st + mono + mono_st, 2),
+                "receitasAtividade": receitas2,
+            })
+        return atividades
 
     def _receitas_brutas_anteriores(self, empresa_id: int, ano_mes: str) -> list[dict]:
         """Monta receitasBrutasAnteriores[] do payload PGDAS-D a partir da
@@ -220,7 +242,7 @@ class ApuracaoService:
                 receita_externa=externa,
                 receitas_brutas_anteriores=receitas_anteriores,
                 indicador_transmissao=not dry_run,
-                receitas_atividade=self._receitas_atividade_segregadas(apur),
+                atividades=self._atividades_segregadas(apur),
             )
         except IntegraContadorError as exc:
             if not dry_run:
