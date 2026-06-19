@@ -97,6 +97,10 @@ class DocumentoAnalise:
     # Decidido pela emissão (origem/CNPJ), NÃO pelo CFOP — numa compra o CFOP é
     # o de venda do fornecedor e enganaria o motor.
     eh_emitida: bool = True
+    # True = nota de SAÍDA real (tpNF=1, venda). False = nota de ENTRADA própria
+    # (tpNF=0: devolução de compra, retorno) — NÃO é venda/receita. None (não
+    # backfillado) tratado como saída, conservador. Mesmo critério do faturamento.
+    eh_saida: bool = True
 
 
 @dataclass
@@ -206,6 +210,7 @@ class ApuracaoCalculator:
             try:
                 analise = self._analisar_documento(doc)
                 analise.eh_emitida = self._eh_emitida(doc, empresa)
+                analise.eh_saida = getattr(doc, "eh_saida", None) is not False
                 # Reflete no DETALHAMENTO (auditoria) que nota recebida = COMPRA
                 # e NÃO entra na receita. Sem isso, a nota do fornecedor aparece
                 # como "SAÍDA +receita" (pois o CFOP dela é o de VENDA dele) e
@@ -250,6 +255,12 @@ class ApuracaoCalculator:
             # e inflavam de 5.702 pra 9.265). Exceção: devolução de venda
             # (recebida que SUBTRAI da receita).
             if not a.eh_emitida and a.natureza_predominante != "DEVOLUCAO_VENDA":
+                continue
+            # Emitida MAS tpNF=0 = nota de ENTRADA própria (devolução de compra,
+            # retorno, transferência) — NÃO é venda. Mesmo fix do faturamento
+            # (eh_saida). Sem isto o motor inflava a receita (ex.: NEVES 483.898
+            # vs 316.436 real = ~167k de nota de entrada própria contada a maior).
+            if a.eh_emitida and not a.eh_saida and a.natureza_predominante != "DEVOLUCAO_VENDA":
                 continue
             if a.natureza_predominante == "SERVICO":
                 total_servicos += a.valor_nota
