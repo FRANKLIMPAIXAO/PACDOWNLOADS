@@ -7,6 +7,8 @@ export type UsuarioAdmin = {
   email: string;
   ativo: boolean;
   is_admin: boolean;
+  is_cliente?: boolean;
+  empresa_id?: number | null;
 };
 
 export function listarUsuarios() {

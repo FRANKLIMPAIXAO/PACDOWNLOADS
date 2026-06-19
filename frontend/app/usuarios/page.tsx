@@ -11,6 +11,7 @@ import {
   atualizarUsuario,
   criarUsuario,
   listarUsuarios,
+  reenviarConvite,
 } from "../../lib/usuarios";
 
 export default function UsuariosPage() {
@@ -93,6 +94,22 @@ function UsuariosContent() {
       recarregar();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Falha ao atualizar.");
+    }
+  }
+
+  async function reenviar(u: UsuarioAdmin) {
+    setError(null);
+    setToast(null);
+    try {
+      const r = await reenviarConvite(u.id);
+      if (r.email_enviado) {
+        setToast(`Convite reenviado por e-mail para ${u.email}.`);
+      } else {
+        setToast(`E-mail não saiu (${r.detalhe}). Copie o link abaixo e mande pro cliente.`);
+        if (r.link) window.prompt("Link do convite (válido 7 dias) — copie e mande pro cliente:", r.link);
+      }
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Falha ao reenviar convite.");
     }
   }
 
@@ -180,9 +197,13 @@ function UsuariosContent() {
                   <td>{u.nome}{u.id === user?.id ? " (você)" : ""}</td>
                   <td>{u.email}</td>
                   <td>
-                    <span className={u.is_admin ? "pill pill-info" : "pill"}>
-                      {u.is_admin ? "Admin" : "Operador"}
-                    </span>
+                    {u.is_cliente ? (
+                      <span className="pill pill-violet">Cliente</span>
+                    ) : (
+                      <span className={u.is_admin ? "pill pill-info" : "pill"}>
+                        {u.is_admin ? "Admin" : "Operador"}
+                      </span>
+                    )}
                   </td>
                   <td>
                     <span className={u.ativo ? "pill pill-ok" : "pill pill-warn"}>
@@ -193,12 +214,20 @@ function UsuariosContent() {
                     <button type="button" className="btn-ghost" onClick={() => toggleAtivo(u)}>
                       {u.ativo ? "Desativar" : "Ativar"}
                     </button>
-                    <button type="button" className="btn-ghost" onClick={() => toggleAdmin(u)}>
-                      {u.is_admin ? "→ Operador" : "→ Admin"}
-                    </button>
-                    <button type="button" className="btn-ghost" onClick={() => resetarSenha(u)}>
-                      Redefinir senha
-                    </button>
+                    {u.is_cliente ? (
+                      <button type="button" className="btn-ghost" onClick={() => reenviar(u)}>
+                        ✉️ Reenviar convite
+                      </button>
+                    ) : (
+                      <>
+                        <button type="button" className="btn-ghost" onClick={() => toggleAdmin(u)}>
+                          {u.is_admin ? "→ Operador" : "→ Admin"}
+                        </button>
+                        <button type="button" className="btn-ghost" onClick={() => resetarSenha(u)}>
+                          Redefinir senha
+                        </button>
+                      </>
+                    )}
                   </td>
                 </tr>
               ))}
