@@ -128,10 +128,10 @@ class ApuracaoService:
         QUAL_ST, QUAL_MONOFASICO = 8, 9
 
         def _qualif(cod_tributo: int, qualificacao: int) -> dict:
-            # O Serpro exige PascalCase aqui (o erro MSG_ISN_036 nomeou
-            # 'CodigoTributo'). `CodigoQualificacao` é a 2ª chave — se a RFB
-            # reclamar dela, o próximo erro diz o nome certo.
-            return {"CodigoTributo": cod_tributo, "CodigoQualificacao": qualificacao}
+            # Estrutura confirmada via dry-run (erros MSG_ISN_036 do Serpro):
+            # `CodigoTributo` = tributo (1004/1005/1007), `Id` = código da
+            # qualificação na tabela de domínio (8=ST, 9=monofásico).
+            return {"CodigoTributo": cod_tributo, "Id": qualificacao}
 
         buckets: dict[str, float] = {}
         for r in (apur.receitas_segregadas or []):
