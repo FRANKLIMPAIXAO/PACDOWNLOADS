@@ -611,6 +611,30 @@ class ApuracaoCalculator:
                 motivo_zero="XML sem itens parseaveis",
             )
 
+        # AJUSTE BRUTO→LÍQUIDO: os itens carregam `vProd` (valor BRUTO, antes do
+        # desconto). A receita do Simples é o LÍQUIDO da nota (vNF, já com
+        # desconto) — é o que o card de faturamento e o Domínio usam. Numa
+        # farmácia com desconto pesado em medicamento, somar vProd infla a
+        # receita (ex.: NEVES soma de itens 483.898 vs vNF 316.436 real).
+        # Escala os itens DE RECEITA (saída) pro valor_total da nota, preservando
+        # a proporção entre segmentos (monofásico × normal × ST). Empresa sem
+        # desconto: bruto ≈ vNF → fator ≈ 1, nada muda (sem regressão).
+        vnf = doc.valor_total or Decimal("0")
+        if vnf > 0:
+            bruto = sum(
+                (it.valor_produto for it in itens if it.afeta_receita == 1),
+                Decimal("0"),
+            )
+            # Só escala PRA BAIXO (bruto > líquido = houve desconto). Se a nota
+            # somou frete/IPI (líquido > bruto), mantém o bruto — que aí é a
+            # receita correta (venda, sem IPI). Conservador.
+            if bruto > vnf + Decimal("0.01"):
+                fator = vnf / bruto
+                for it in itens:
+                    if it.afeta_receita == 1:
+                        it.valor_produto = (it.valor_produto * fator).quantize(Decimal("0.01"))
+                        it.contribuicao = it.valor_produto * Decimal(it.afeta_receita)
+
         # Direcao = direcao do primeiro item relevante
         direcoes = {it.direcao for it in itens}
         direcao = "SAIDA" if "SAIDA" in direcoes else "ENTRADA"
