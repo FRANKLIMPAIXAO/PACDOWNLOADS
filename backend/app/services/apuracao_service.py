@@ -273,13 +273,20 @@ class ApuracaoService:
         return vistos
 
     def _receitas_brutas_anteriores(self, empresa_id: int, ano_mes: str) -> list[dict]:
-        """Monta receitasBrutasAnteriores[] do payload PGDAS-D a partir da
-        tabela ReceitaMensal (faturamento dos 12 meses anteriores)."""
+        """Monta receitasBrutasAnteriores[] do payload PGDAS-D (faturamento dos 12
+        meses anteriores).
+
+        ⚠️ TEM que bater com o RBT12 que o motor usa (apuracao_calculator._rbt12),
+        senão a Receita cai numa FAIXA diferente e o DAS diverge (ex.: motor Faixa 5
+        2,35M × RFB Faixa 4 1,17M = DAS subestimado). Por isso usa a MESMA prioridade
+        de fonte por mês: ReceitaMensal (manual/Receita) e, na falta, a Apuração
+        salva daquele mês (derivada das NFes). Antes ia SÓ ReceitaMensal → os meses
+        que só tinham Apuração ficavam de fora e o RBT12 enviado vinha menor."""
         from app.models.receita_mensal import ReceitaMensal
         from app.services.receita_mensal_service import meses_anteriores
 
         meses = meses_anteriores(ano_mes, 12)
-        registros = {
+        receitas = {
             r.ano_mes: r for r in self.db.scalars(
                 select(ReceitaMensal).where(
                     ReceitaMensal.empresa_id == empresa_id,
@@ -287,16 +294,31 @@ class ApuracaoService:
                 )
             ).all()
         }
+        apuracoes = {
+            a.ano_mes: a for a in self.db.scalars(
+                select(Apuracao).where(
+                    Apuracao.empresa_id == empresa_id,
+                    Apuracao.ano_mes.in_(meses),
+                )
+            ).all()
+        }
         out = []
         for am in meses:
-            r = registros.get(am)
-            if not r:
+            r = receitas.get(am)
+            if r is not None:
+                interno = float(r.valor_interno or 0)
+                externo = float(r.valor_externo or 0)
+            else:
+                a = apuracoes.get(am)
+                if a is None or not a.receita_bruta:
+                    continue
+                # Apuração não separa interno/externo → tudo em interno (a FAIXA do
+                # RBT12 usa o total interno+externo, então não muda o enquadramento).
+                interno = float(a.receita_bruta)
+                externo = 0.0
+            if interno <= 0 and externo <= 0:
                 continue
-            out.append({
-                "pa": int(am),
-                "valorInterno": float(r.valor_interno or 0),
-                "valorExterno": float(r.valor_externo or 0),
-            })
+            out.append({"pa": int(am), "valorInterno": interno, "valorExterno": externo})
         return out
 
     def transmitir(self, apuracao_id: int, *, dry_run: bool = True) -> dict:

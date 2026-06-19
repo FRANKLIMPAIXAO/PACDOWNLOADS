@@ -265,11 +265,18 @@ function ApuracoesContent() {
                     RBT12 (faturamento dos últimos 12 meses) incompleto ou arredondamento —
                     confira o histórico de receita dessa empresa. NÃO é monofásico/ST.
                   </p>
+                ) : dryRun.divergencia > 0 ? (
+                  <p className="toast toast-warn" style={{ marginTop: 10, fontSize: 13 }}>
+                    ⚠️ Diferença grande — a <strong>RFB calculou MAIS</strong> que o PAC.
+                    Provável causa: receita monofásica/ST não segregada no payload (a RFB
+                    taxou PIS/COFINS sobre o monofásico). NÃO transmita até ajustar.
+                  </p>
                 ) : (
                   <p className="toast toast-warn" style={{ marginTop: 10, fontSize: 13 }}>
-                    ⚠️ Diferença grande. Provável causa: receita monofásica/ST não está
-                    sendo segregada no payload (a RFB taxou PIS/COFINS sobre o monofásico).
-                    NÃO transmita até ajustar — revise manualmente.
+                    ⚠️ Diferença grande — o <strong>PAC calculou MAIS</strong> que a Receita.
+                    Provável causa: RBT12 do PAC maior que o histórico enviado (alíquota
+                    inflada), ou o motor não zerou monofásico/ST que a RFB zerou. Confira a
+                    decomposição por tributo (PAC × RFB). NÃO transmita até bater.
                   </p>
                 )
               ) : (
