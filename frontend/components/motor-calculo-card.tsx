@@ -123,8 +123,9 @@ export function MotorCalculoCard({ empresaId, anoMes, onSalvar }: Props) {
               className="btn-secondary"
               onClick={handleSalvar}
               disabled={busy === "save"}
+              title="Salva a apuração e já roda o dry-run na Receita (compara RFB × PAC)."
             >
-              {busy === "save" ? "Salvando..." : "Criar/atualizar apuração"}
+              {busy === "save" ? "Salvando..." : "Criar apuração + validar na Receita"}
             </button>
           ) : null}
         </div>

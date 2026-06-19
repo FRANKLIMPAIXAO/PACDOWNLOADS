@@ -76,6 +76,9 @@ export type ResultadoTransmissao = {
   status: string;
   raw: Record<string, unknown>;
   apuracao_id: number;
+  // Avisos do backend (ex.: filiais declaradas zeradas por falta de nota — risco
+  // de DAS subestimado). Mostrados em destaque no banner do dry-run.
+  avisos?: string[];
 };
 
 /** Valida (dry-run) ou transmite a declaração PGDAS-D.

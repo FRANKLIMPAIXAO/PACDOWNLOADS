@@ -311,6 +311,7 @@ class IntegraContadorProvider:
         valor_fixo_icms: float | None = None,
         valor_fixo_iss: float | None = None,
         atividades: list[dict[str, Any]] | None = None,
+        estabelecimentos: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Constrói o objeto `dados` do TRANSDECLARACAO11 conforme spec Serpro.
 
@@ -320,23 +321,36 @@ class IntegraContadorProvider:
         interna total e qualificacoesTributarias=[] — comportamento antigo, sem
         regressão.
 
+        `estabelecimentos`: lista PRONTA de estabelecimentos[] (matriz + filiais),
+        cada um {cnpjCompleto, atividades}. Quando informada, ela manda — usada por
+        empresas com filial (a RFB exige TODOS os estabelecimentos do Cadastro CNPJ,
+        senão erro MSG_ISN_018). Quando None, monta um único estabelecimento (a
+        matriz) com `atividades` — comportamento antigo, sem regressão.
+
         `indicador_transmissao=False` → dry-run (calcula sem entregar).
         """
         cnpj = (contribuinte_cnpj or "").replace(".", "").replace("/", "").replace("-", "")
         pa = int(ano_mes)
-        if not atividades:
-            atividades = [{
-                "idAtividade": 1,
-                "valorAtividade": round(receita_interna, 2),
-                "receitasAtividade": [{
-                    "valor": round(receita_interna, 2),
-                    "codigoOutroMunicipio": None,
-                    "outraUf": None,
-                    "qualificacoesTributarias": [],
-                    "isencoes": [],
-                    "reducoes": [],
-                    "exigibilidadesSuspensas": None,
-                }],
+        if estabelecimentos:
+            estabelecimentos_payload = estabelecimentos
+        else:
+            if not atividades:
+                atividades = [{
+                    "idAtividade": 1,
+                    "valorAtividade": round(receita_interna, 2),
+                    "receitasAtividade": [{
+                        "valor": round(receita_interna, 2),
+                        "codigoOutroMunicipio": None,
+                        "outraUf": None,
+                        "qualificacoesTributarias": [],
+                        "isencoes": [],
+                        "reducoes": [],
+                        "exigibilidadesSuspensas": None,
+                    }],
+                }]
+            estabelecimentos_payload = [{
+                "cnpjCompleto": cnpj,
+                "atividades": atividades,
             }]
         declaracao: dict[str, Any] = {
             "tipoDeclaracao": 1,  # Original
@@ -349,10 +363,7 @@ class IntegraContadorProvider:
             "receitasBrutasAnteriores": receitas_brutas_anteriores or [],
             "folhasSalario": folhas_salario or [],
             "naoOptante": None,
-            "estabelecimentos": [{
-                "cnpjCompleto": cnpj,
-                "atividades": atividades,
-            }],
+            "estabelecimentos": estabelecimentos_payload,
         }
         return {
             "cnpjCompleto": cnpj,
@@ -375,6 +386,7 @@ class IntegraContadorProvider:
         indicador_transmissao: bool = False,  # DEFAULT = dry-run (seguro!)
         receitas: list[dict[str, Any]] | None = None,  # compat legado (ignorado)
         atividades: list[dict[str, Any]] | None = None,  # atividades[] segregadas (ST/monofásico)
+        estabelecimentos: list[dict[str, Any]] | None = None,  # matriz+filiais (empresas com filial)
     ) -> dict[str, Any]:
         """TRANSDECLARACAO11 - transmite (ou valida via dry-run) declaração PGDAS-D.
 
@@ -420,6 +432,7 @@ class IntegraContadorProvider:
             receitas_brutas_anteriores=receitas_brutas_anteriores,
             indicador_transmissao=indicador_transmissao,
             atividades=atividades,
+            estabelecimentos=estabelecimentos,
         )
         return self._executar(
             PATH_DECLARAR,

@@ -55,6 +55,8 @@ function ApuracoesContent() {
   const [showNova, setShowNova] = useState(false);
   // Resultado do dry-run (validação) — mostra comparação RFB × PAC antes de transmitir
   const [dryRun, setDryRun] = useState<ResultadoTransmissao | null>(null);
+  // true enquanto o dry-run roda (mostra indicador no topo, sobretudo no auto pós-apuração)
+  const [validando, setValidando] = useState(false);
 
   const reload = useCallback(async () => {
     setError(null);
@@ -75,7 +77,7 @@ function ApuracoesContent() {
 
   // PASSO 1: dry-run — RFB calcula sem entregar, mostra comparação RFB × PAC
   async function handleValidar(id: number) {
-    setBusy(`t-${id}`); setError(null); setDryRun(null);
+    setBusy(`t-${id}`); setError(null); setDryRun(null); setValidando(true);
     try {
       const r = await transmitirComPolling(id, true); // dry-run em background + polling
       setDryRun(r);
@@ -83,7 +85,7 @@ function ApuracoesContent() {
       if (err instanceof ApiError) setError(err.message);
       else setError("Falha ao validar declaração.");
     } finally {
-      setBusy(null);
+      setBusy(null); setValidando(false);
       // O banner/erro renderiza no TOPO (acima da tabela) — sobe pra ele ficar
       // visível, senão parece que "nada aconteceu" quando se clica numa linha lá embaixo.
       if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
@@ -192,6 +194,20 @@ function ApuracoesContent() {
 
       {error ? <p className="toast toast-error">{error}</p> : null}
 
+      {/* Enquanto o dry-run roda (sobretudo o automático logo após apurar) */}
+      {validando && !dryRun ? (
+        <section
+          className="panel"
+          style={{ border: "1px solid rgba(59,130,246,0.4)", marginBottom: 16 }}
+        >
+          <h3 style={{ margin: 0 }}>🔍 Validando na Receita (dry-run)…</h3>
+          <p className="muted" style={{ margin: "6px 0 0", fontSize: 13 }}>
+            A Receita está recalculando a declaração pra comparar com o PAC. Não
+            transmite nada — só valida. Leva alguns segundos.
+          </p>
+        </section>
+      ) : null}
+
       {/* Banner de comparação do dry-run (RFB × PAC) — passo antes de transmitir real */}
       {dryRun ? (
         <section
@@ -261,6 +277,15 @@ function ApuracoesContent() {
                   ✅ Valores batem. Pode transmitir com segurança.
                 </p>
               )}
+              {dryRun.avisos && dryRun.avisos.length > 0 ? (
+                <div style={{ marginTop: 10, display: "grid", gap: 6 }}>
+                  {dryRun.avisos.map((a, i) => (
+                    <p key={i} className="toast toast-error" style={{ fontSize: 13 }}>
+                      🏢 {a}
+                    </p>
+                  ))}
+                </div>
+              ) : null}
               <details style={{ marginTop: 10 }}>
                 <summary className="muted" style={{ fontSize: 12, cursor: "pointer" }}>Ver resposta da Receita (raw)</summary>
                 <pre style={{ fontSize: 11, maxHeight: 220, overflow: "auto", background: "var(--bg-1)", padding: 8, borderRadius: 6, marginTop: 6, whiteSpace: "pre-wrap" }}>
@@ -297,7 +322,13 @@ function ApuracoesContent() {
           anoMes={anoMes}
           empresas={empresas}
           onCreated={async () => { setShowNova(false); await reload(); }}
-          onCalcularAutomatico={async () => { setShowNova(false); await reload(); }}
+          onCalcularAutomatico={async (apuracaoId: number) => {
+            setShowNova(false);
+            await reload();
+            // Dry-run automático logo após apurar: a Receita recalcula e o banner
+            // RFB × PAC aparece no topo, sem o usuário ter que clicar "Validar" de novo.
+            await handleValidar(apuracaoId);
+          }}
         />
       ) : null}
 
@@ -457,7 +488,7 @@ function NovaApuracaoForm({
   anoMes: string;
   empresas: Empresa[];
   onCreated: () => void;
-  onCalcularAutomatico: () => void;
+  onCalcularAutomatico: (apuracaoId: number) => void;
 }) {
   const [empresaId, setEmpresaId] = useState<number | "">("");
   const [receita, setReceita] = useState("");

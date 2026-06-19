@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import re
 import time
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -113,7 +114,23 @@ class ApuracaoService:
             interna = float(apur.receita_bruta)
         return interna, externa
 
+    def _buckets_from_flat(self, apur: Apuracao) -> dict[str, float]:
+        """Buckets {NATUREZA: valor} a partir do receitas_segregadas achatado
+        (total da empresa). Exclui EXPORTACAO (vai em receitaPaCompetenciaExterno)."""
+        buckets: dict[str, float] = {}
+        for r in (apur.receitas_segregadas or []):
+            nat = (r.get("natureza") or "").upper()
+            if nat == "EXPORTACAO":
+                continue
+            buckets[nat] = buckets.get(nat, 0.0) + float(r.get("valor") or 0)
+        return buckets
+
     def _atividades_segregadas(self, apur: Apuracao) -> list[dict]:
+        """atividades[] do PGDAS-D a partir dos totais achatados da empresa
+        (caminho de estabelecimento único — sem filial). Sem regressão."""
+        return self._buckets_to_atividades(self._buckets_from_flat(apur))
+
+    def _buckets_to_atividades(self, buckets: dict[str, float]) -> list[dict]:
         """Monta atividades[] do PGDAS-D segregando por ATIVIDADE e QUALIFICAÇÃO.
 
         A RFB recusa ST/monofásico no idAtividade=1 (erro MSG_ISN_032), porque a
@@ -126,9 +143,10 @@ class ApuracaoService:
         na atividade 2, cada receita com suas qualificacoesTributarias por tributo
         ({CodigoTributo, Id}). Tributos: 1004 COFINS, 1005 PIS, 1007 ICMS.
 
-        Empresa SEM ST/monofásico → só a atividade 1 (qualif []), idêntico ao
-        comportamento antigo. ⚠️ idAtividade 1/2 e estrutura confirmados por
-        dry-run (Serpro guiou via MSG_ISN_036/032)."""
+        Recebe os `buckets` {NORMAL, SERVICO, ST, MONOFASICO, MONOFASICO_ST} — pode
+        ser o total da empresa (estab único) ou de UM estabelecimento (filial).
+        Buckets todos zerados → atividades=[] (estabelecimento sem movimento).
+        ⚠️ idAtividade 1/2 e estrutura confirmados por dry-run (MSG_ISN_036/032)."""
         COD_COFINS, COD_PIS, COD_ICMS = 1004, 1005, 1007
         QUAL_ST, QUAL_MONOFASICO = 8, 9
 
@@ -146,17 +164,10 @@ class ApuracaoService:
                 "exigibilidadesSuspensas": None,
             }
 
-        buckets: dict[str, float] = {}
-        for r in (apur.receitas_segregadas or []):
-            nat = (r.get("natureza") or "").upper()
-            if nat == "EXPORTACAO":
-                continue  # vai em receitaPaCompetenciaExterno, não aqui
-            buckets[nat] = buckets.get(nat, 0.0) + float(r.get("valor") or 0)
-
-        normal = buckets.get("NORMAL", 0.0) + buckets.get("SERVICO", 0.0)
-        st = buckets.get("ST", 0.0)
-        mono = buckets.get("MONOFASICO", 0.0)
-        mono_st = buckets.get("MONOFASICO_ST", 0.0)
+        normal = (buckets.get("NORMAL", 0.0) or 0.0) + (buckets.get("SERVICO", 0.0) or 0.0)
+        st = buckets.get("ST", 0.0) or 0.0
+        mono = buckets.get("MONOFASICO", 0.0) or 0.0
+        mono_st = buckets.get("MONOFASICO_ST", 0.0) or 0.0
 
         atividades: list[dict] = []
         # Atividade 1 — revenda SEM ST/monofásico
@@ -186,6 +197,80 @@ class ApuracaoService:
                 "receitasAtividade": receitas2,
             })
         return atividades
+
+    @staticmethod
+    def _so_digitos(s: str | None) -> str:
+        return "".join(ch for ch in (s or "") if ch.isdigit())
+
+    def _estabelecimentos_payload(
+        self, apur: Apuracao, empresa: Empresa, extra_zero: list[str] | None = None,
+    ) -> list[dict] | None:
+        """Monta estabelecimentos[] (matriz + filiais) pro PGDAS-D.
+
+        - Lê a quebra por estabelecimento que o motor gravou em raw_declaracao
+          (receita das notas de cada CNPJ emitente).
+        - RECONCILIA a matriz com os totais achatados (matriz = total − filiais),
+          garantindo que a soma feche com receitaPaCompetenciaInterno.
+        - `extra_zero`: filiais que a RFB exige (MSG_ISN_018) mas o PAC não tem
+          nota → entram ZERADAS (atividades=[]).
+
+        Retorna None quando só há a matriz e sem extras → o chamador usa o caminho
+        antigo (estabelecimento único), sem regressão pra empresa sem filial.
+        """
+        matriz = self._so_digitos(empresa.cnpj)
+        raw = apur.raw_declaracao or {}
+        por_estab: dict[str, dict[str, float]] = {}
+        for e in (raw.get("estabelecimentos") or []):
+            c = self._so_digitos(e.get("cnpj"))
+            if not c:
+                continue
+            por_estab[c] = {k: float(v or 0) for k, v in (e.get("buckets") or {}).items()}
+
+        for f in (extra_zero or []):
+            fc = self._so_digitos(f)
+            if fc and fc != matriz:
+                por_estab.setdefault(fc, {})
+
+        por_estab.setdefault(matriz, {})
+
+        # Só a matriz e nada exigido → caminho antigo (estab único).
+        if list(por_estab.keys()) == [matriz] and not extra_zero:
+            return None
+
+        # Reconcilia a matriz = total achatado − soma das filiais (por natureza),
+        # pra soma dos estabelecimentos casar EXATAMENTE com os totais da empresa.
+        flat = self._buckets_from_flat(apur)
+        naturezas = ["NORMAL", "MONOFASICO", "ST", "MONOFASICO_ST", "SERVICO"]
+        soma_filiais = {n: 0.0 for n in naturezas}
+        for c, b in por_estab.items():
+            if c == matriz:
+                continue
+            for n in naturezas:
+                soma_filiais[n] += float(b.get(n, 0) or 0)
+        matriz_b: dict[str, float] = {}
+        for n in naturezas:
+            v = round(float(flat.get(n, 0) or 0) - soma_filiais[n], 2)
+            matriz_b[n] = v if v > 0 else 0.0
+        por_estab[matriz] = matriz_b
+
+        ordem = [matriz] + [c for c in por_estab if c != matriz]
+        return [
+            {"cnpjCompleto": c, "atividades": self._buckets_to_atividades(por_estab.get(c, {}))}
+            for c in ordem
+        ]
+
+    @staticmethod
+    def _parse_estab_faltantes(msg: str | None) -> list[str]:
+        """Extrai os CNPJs (14 díg.) que a RFB acusou faltando em estabelecimentos[]
+        no erro MSG_ISN_018. A própria Receita diz quem falta → fonte de verdade."""
+        if not msg or "MSG_ISN_018" not in msg:
+            return []
+        # dedupe preservando ordem
+        vistos: list[str] = []
+        for c in re.findall(r"\d{14}", msg):
+            if c not in vistos:
+                vistos.append(c)
+        return vistos
 
     def _receitas_brutas_anteriores(self, empresa_id: int, ano_mes: str) -> list[dict]:
         """Monta receitasBrutasAnteriores[] do payload PGDAS-D a partir da
@@ -233,8 +318,10 @@ class ApuracaoService:
         empresa = self.get_empresa_or_404(apur.empresa_id)
         interna, externa = self._receita_interna_externa(apur)
         receitas_anteriores = self._receitas_brutas_anteriores(apur.empresa_id, apur.ano_mes)
-        try:
-            payload = self.provider.pgdas_transmitir_declaracao(
+        avisos: list[str] = []
+
+        def _chamar(estabelecimentos: list[dict] | None, atividades: list[dict] | None):
+            return self.provider.pgdas_transmitir_declaracao(
                 empresa.cnpj,
                 ano_mes=apur.ano_mes,
                 receita_bruta=float(apur.receita_bruta),
@@ -242,13 +329,43 @@ class ApuracaoService:
                 receita_externa=externa,
                 receitas_brutas_anteriores=receitas_anteriores,
                 indicador_transmissao=not dry_run,
-                atividades=self._atividades_segregadas(apur),
+                atividades=atividades,
+                estabelecimentos=estabelecimentos,
             )
+
+        # Empresa com filial → estabelecimentos[] (matriz + filiais). Sem filial →
+        # None, e o caminho antigo (atividades achatadas da matriz). Sem regressão.
+        estabs = self._estabelecimentos_payload(apur, empresa)
+        atividades = None if estabs else self._atividades_segregadas(apur)
+        try:
+            payload = _chamar(estabs, atividades)
         except IntegraContadorError as exc:
-            if not dry_run:
-                apur.status = StatusApuracao.ERRO
-                self.db.commit()
-            raise HTTPException(status_code=502, detail=f"Integra Contador: {exc}")
+            # A RFB exige TODOS os estabelecimentos ativos do Cadastro CNPJ
+            # (MSG_ISN_018) e diz QUAIS faltam → adiciona zeradas e retenta 1×.
+            faltantes = [
+                c for c in self._parse_estab_faltantes(str(exc))
+                if c != self._so_digitos(empresa.cnpj)
+            ]
+            if faltantes:
+                estabs = self._estabelecimentos_payload(apur, empresa, extra_zero=faltantes)
+                avisos.append(
+                    "Filiais declaradas com receita ZERO porque o PAC não tem as "
+                    f"notas delas: {', '.join(faltantes)}. ⚠️ Se essas filiais "
+                    "faturam, o DAS está SUBESTIMADO — puxe as notas delas (robô "
+                    "por filial) antes de transmitir de verdade."
+                )
+                try:
+                    payload = _chamar(estabs, None)
+                except IntegraContadorError as exc2:
+                    if not dry_run:
+                        apur.status = StatusApuracao.ERRO
+                        self.db.commit()
+                    raise HTTPException(status_code=502, detail=f"Integra Contador: {exc2}")
+            else:
+                if not dry_run:
+                    apur.status = StatusApuracao.ERRO
+                    self.db.commit()
+                raise HTTPException(status_code=502, detail=f"Integra Contador: {exc}")
 
         dados = parse_dados(payload)
         # Valor devido apurado pela RFB. A Serpro NÃO devolve um total — devolve
@@ -287,6 +404,7 @@ class ApuracaoService:
             "raw": dados,
             "apuracao_id": apur.id,
             "status": apur.status.value,
+            "avisos": avisos,
         }
 
     # --- Geracao DAS ---

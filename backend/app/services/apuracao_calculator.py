@@ -143,6 +143,9 @@ class ResumoApuracao:
     documentos: list[DocumentoAnalise]
     avisos: list[str]
 
+    # Quebra por estabelecimento (matriz + filiais) — [{cnpj, buckets{...str}}]
+    estabelecimentos: list[dict] = field(default_factory=list)
+
     def to_payload(self) -> dict[str, Any]:
         d = asdict(self)
         d["calculo"] = asdict(self.calculo) if self.calculo else None
@@ -248,6 +251,26 @@ class ApuracaoCalculator:
                     + item.valor_produto
                 )
 
+        # Quebra de receita POR ESTABELECIMENTO (matriz + filiais). Empresa com
+        # filial precisa declarar TODOS os estabelecimentos no PGDAS-D, cada um com
+        # a SUA receita (senão a RFB rejeita com MSG_ISN_018). A receita de cada
+        # estabelecimento é a das notas que ELE emitiu (cnpj_emitente). Os totais
+        # globais acima continuam intactos — isto é uma agregação paralela.
+        matriz_cnpj = "".join(filter(str.isdigit, empresa.cnpj or ""))
+        por_estab: dict[str, dict[str, Decimal]] = {}
+
+        def _estab_de(a: DocumentoAnalise) -> str:
+            c = "".join(filter(str.isdigit, a.cnpj_emitente or "")) if a.eh_emitida else ""
+            # só aceita CNPJ do mesmo grupo (mesma raiz de 8 dígitos) como filial;
+            # qualquer coisa estranha cai na matriz.
+            if len(c) == 14 and c[:8] == matriz_cnpj[:8]:
+                return c
+            return matriz_cnpj
+
+        def _estab_bucket(cnpj: str, chave: str, valor: Decimal) -> None:
+            b = por_estab.setdefault(cnpj, {})
+            b[chave] = b.get(chave, Decimal("0")) + valor
+
         for a in analises:
             # SÓ EMITIDAS são receita da empresa. Uma RECEBIDA (compra) carrega
             # o CFOP de VENDA do fornecedor — classificar por CFOP contaria a
@@ -262,11 +285,15 @@ class ApuracaoCalculator:
             # vs 316.436 real = ~167k de nota de entrada própria contada a maior).
             if a.eh_emitida and not a.eh_saida and a.natureza_predominante != "DEVOLUCAO_VENDA":
                 continue
+            cest = _estab_de(a)
             if a.natureza_predominante == "SERVICO":
                 total_servicos += a.valor_nota
+                _estab_bucket(cest, "SERVICO", a.valor_nota)
                 continue
             if a.natureza_predominante == "DEVOLUCAO_VENDA":
                 total_devolucoes += a.valor_nota
+                # devolução atribuída à matriz (a recebida não diz qual filial)
+                _estab_bucket(matriz_cnpj, "DEVOLUCAO", a.valor_nota)
                 continue
             for item in a.itens:
                 if item.afeta_receita != 1:
@@ -277,14 +304,18 @@ class ApuracaoCalculator:
                 tipo = item.tipo_tributacao
                 if tipo == "MONOFASICO_ST":
                     total_monofasico_st += item.valor_produto
+                    _estab_bucket(cest, "MONOFASICO_ST", item.valor_produto)
                     _acumula_categoria(item)
                 elif tipo == "MONOFASICO":
                     total_monofasico += item.valor_produto
+                    _estab_bucket(cest, "MONOFASICO", item.valor_produto)
                     _acumula_categoria(item)
                 elif tipo == "ST":
                     total_st += item.valor_produto
+                    _estab_bucket(cest, "ST", item.valor_produto)
                 else:  # NORMAL, ISENTA, ou qualquer outro tributado cheio
                     total_normal += item.valor_produto
+                    _estab_bucket(cest, "NORMAL", item.valor_produto)
 
         # Devolucoes subtraem proporcionalmente do segmento NORMAL (assumido)
         # — simplificacao MVP. Versao futura poderia identificar o tipo da nota original.
@@ -294,6 +325,26 @@ class ApuracaoCalculator:
             sobra = -total_normal_liquido
             total_normal_liquido = Decimal("0")
             total_monofasico = max(Decimal("0"), total_monofasico - sobra)
+
+        # Lista por estabelecimento (matriz + filiais com nota). O serviço de
+        # transmissão reconcilia a matriz com os totais (absorve resíduo) e
+        # adiciona filiais sem nota como ZERO quando a RFB exigir (MSG_ISN_018).
+        _Z = Decimal("0")
+        estabelecimentos_resumo: list[dict] = []
+        for cnpj_e, b in por_estab.items():
+            normal_e = b.get("NORMAL", _Z) - b.get("DEVOLUCAO", _Z)
+            if normal_e < 0:
+                normal_e = _Z
+            estabelecimentos_resumo.append({
+                "cnpj": cnpj_e,
+                "buckets": {
+                    "NORMAL": str(normal_e.quantize(Decimal("0.01"))),
+                    "MONOFASICO": str(b.get("MONOFASICO", _Z).quantize(Decimal("0.01"))),
+                    "ST": str(b.get("ST", _Z).quantize(Decimal("0.01"))),
+                    "MONOFASICO_ST": str(b.get("MONOFASICO_ST", _Z).quantize(Decimal("0.01"))),
+                    "SERVICO": str(b.get("SERVICO", _Z).quantize(Decimal("0.01"))),
+                },
+            })
 
         receita_bruta = (
             total_normal_liquido + total_monofasico + total_st
@@ -379,6 +430,7 @@ class ApuracaoCalculator:
             calculo=calculo,
             documentos=analises,
             avisos=avisos,
+            estabelecimentos=estabelecimentos_resumo,
         )
 
     def calcular_e_salvar(self, empresa_id: int, ano_mes: str) -> Apuracao:
@@ -413,7 +465,12 @@ class ApuracaoCalculator:
             {"natureza": "EXPORTACAO", "valor": str(resumo.total_exportacao)},
             {"natureza": "SERVICO", "valor": str(resumo.total_servicos)},
         ]
-        apur.raw_declaracao = {"motor_calculo": resumo.to_payload()}
+        apur.raw_declaracao = {
+            "motor_calculo": resumo.to_payload(),
+            # Quebra por estabelecimento (matriz+filiais) p/ o PGDAS-D — lida pelo
+            # ApuracaoService ao montar estabelecimentos[] (empresas com filial).
+            "estabelecimentos": resumo.estabelecimentos,
+        }
         self.db.commit()
         self.db.refresh(apur)
         return apur
