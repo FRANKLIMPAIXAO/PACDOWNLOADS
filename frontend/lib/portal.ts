@@ -163,6 +163,17 @@ export function portalLogout(): void {
   setPortalToken(null);
 }
 
+/** Cliente define a senha a partir do token do convite (link do e-mail) e já
+ * fica logado (guarda o token do portal). Público (skipAuth). */
+export async function portalDefinirSenha(token: string, senha: string): Promise<void> {
+  const res = await portalFetch<{ access_token: string }>("/api/v1/portal/definir-senha", {
+    method: "POST",
+    skipAuth: true,
+    body: JSON.stringify({ token, senha }),
+  });
+  setPortalToken(res.access_token);
+}
+
 export function portalMe() {
   return portalFetch<PortalMe>("/api/v1/portal/me");
 }

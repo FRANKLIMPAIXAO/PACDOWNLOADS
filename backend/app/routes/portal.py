@@ -39,13 +39,14 @@ from app.routes.documentos import (
     listar_documentos,
     resumo_documentos,
 )
-from app.schemas.auth_schema import TokenResponse
+from app.schemas.auth_schema import DefinirSenha, LoginRequest, TokenResponse
 from app.schemas.documento_schema import DocumentoFiscalRead
-from app.schemas.auth_schema import LoginRequest
 from app.services.auth_service import (
     authenticate_user,
     create_access_token,
+    email_do_token_senha,
     get_current_cliente,
+    hash_password,
 )
 
 router = APIRouter(prefix="/portal", tags=["portal-cliente"])
@@ -59,6 +60,23 @@ def login_cliente(payload: LoginRequest, db: Session = Depends(get_db)) -> Token
     if not user or not user.is_cliente or not user.empresa_id:
         # Mensagem genérica de propósito (não revela se o e-mail existe / é cliente)
         raise HTTPException(status_code=401, detail="E-mail ou senha inválidos.")
+    return TokenResponse(access_token=create_access_token(user.email))
+
+
+@router.post("/definir-senha", response_model=TokenResponse)
+def definir_senha(payload: DefinirSenha, db: Session = Depends(get_db)) -> TokenResponse:
+    """PÚBLICO. O cliente define a senha a partir do token do convite (JWT
+    scope=set_senha, 7 dias). Valida a assinatura, grava a senha e já devolve o
+    token de acesso (login automático). Sem coluna no banco — stateless."""
+    if len(payload.senha) < 6:
+        raise HTTPException(status_code=400, detail="A senha precisa de ao menos 6 caracteres.")
+    email = email_do_token_senha(payload.token)  # 400 se inválido/expirado
+    user = db.scalar(select(Usuario).where(Usuario.email == email))
+    if not user or not user.is_cliente:
+        raise HTTPException(status_code=400, detail="Convite inválido.")
+    user.senha_hash = hash_password(payload.senha)
+    user.ativo = True
+    db.commit()
     return TokenResponse(access_token=create_access_token(user.email))
 
 

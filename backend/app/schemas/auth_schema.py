@@ -33,6 +33,20 @@ class ClienteCreate(BaseModel):
     empresa_id: int
 
 
+class ClienteConvite(BaseModel):
+    """Convite de CLIENTE por e-mail: cria o acesso SEM senha (o cliente define
+    a dele pelo link). Vincula a 1 empresa."""
+    nome: str
+    email: EmailStr
+    empresa_id: int
+
+
+class DefinirSenha(BaseModel):
+    """Cliente define a senha a partir do token do convite/reset."""
+    token: str
+    senha: str
+
+
 class UsuarioRead(BaseModel):
     id: int
     nome: str
@@ -43,6 +57,15 @@ class UsuarioRead(BaseModel):
     empresa_id: int | None = None
 
     model_config = {"from_attributes": True}
+
+
+class ConviteResposta(BaseModel):
+    """Resultado de um convite. `email_enviado=False` → usar `link` pra enviar
+    manualmente (ex.: RESEND_API_KEY ainda não configurada)."""
+    usuario: UsuarioRead
+    email_enviado: bool
+    detalhe: str
+    link: str | None = None
 
 
 class UsuarioUpdate(BaseModel):

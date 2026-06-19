@@ -38,6 +38,29 @@ export function criarAcessoCliente(payload: {
   });
 }
 
+export type ConviteResposta = {
+  usuario: UsuarioAdmin & { is_cliente?: boolean; empresa_id?: number | null };
+  email_enviado: boolean;
+  detalhe: string;
+  link: string | null;
+};
+
+/** Convida um CLIENTE por e-mail: cria acesso SEM senha e dispara o convite.
+ * O cliente define a própria senha pelo link. Admin-only. */
+export function convidarCliente(payload: { nome: string; email: string; empresa_id: number }) {
+  return apiFetch<ConviteResposta>("/api/v1/usuarios/cliente/convidar", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+/** Reenvia o convite (novo link) pra um cliente já cadastrado. Admin-only. */
+export function reenviarConvite(usuarioId: number) {
+  return apiFetch<ConviteResposta>(`/api/v1/usuarios/${usuarioId}/reenviar-convite`, {
+    method: "POST",
+  });
+}
+
 export function atualizarUsuario(
   id: number,
   payload: {

@@ -9,15 +9,26 @@ Níveis:
 - operador (is_admin=False): pode usar o sistema (subir cert, rodar robô,
   ver dados) mas NÃO pode gerenciar usuários nem excluir empresas.
 """
+import secrets
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.database import get_db
 from app.models.empresa import Empresa
 from app.models.usuario import Usuario
-from app.schemas.auth_schema import ClienteCreate, UsuarioAdminCreate, UsuarioRead, UsuarioUpdate
-from app.services.auth_service import get_current_admin, hash_password
+from app.schemas.auth_schema import (
+    ClienteConvite,
+    ClienteCreate,
+    ConviteResposta,
+    UsuarioAdminCreate,
+    UsuarioRead,
+    UsuarioUpdate,
+)
+from app.services.auth_service import create_invite_token, get_current_admin, hash_password
+from app.services.email_service import enviar_email, html_convite_cliente
 
 
 router = APIRouter(
@@ -78,6 +89,63 @@ def criar_acesso_cliente(payload: ClienteCreate, db: Session = Depends(get_db)) 
     db.commit()
     db.refresh(user)
     return user
+
+
+def _enviar_convite(user: Usuario, empresa: Empresa) -> ConviteResposta:
+    """Gera o token de definir-senha, monta o link do portal e dispara o e-mail.
+    Sempre devolve o `link` (o admin pode mandar por WhatsApp tb). Se o e-mail
+    falhar (ex.: RESEND_API_KEY vazia), não quebra — o link cobre."""
+    token = create_invite_token(user.email)
+    base = get_settings().portal_url.rstrip("/")
+    link = f"{base}/definir-senha?token={token}"
+    ok, detalhe = enviar_email(
+        user.email,
+        f"Acesso ao Portal do Cliente — {empresa.razao_social}",
+        html_convite_cliente(user.nome, empresa.razao_social, link),
+    )
+    return ConviteResposta(
+        usuario=UsuarioRead.model_validate(user),
+        email_enviado=ok,
+        detalhe="Convite enviado por e-mail." if ok else f"E-mail não enviado ({detalhe}). Envie o link manualmente.",
+        link=link,
+    )
+
+
+@router.post("/cliente/convidar", response_model=ConviteResposta, status_code=status.HTTP_201_CREATED)
+def convidar_cliente(payload: ClienteConvite, db: Session = Depends(get_db)) -> ConviteResposta:
+    """Cria um acesso de CLIENTE SEM senha e ENVIA o convite por e-mail. O cliente
+    define a própria senha pelo link (token JWT, 7 dias). Self-service estilo Jettax/Nibo."""
+    if db.scalar(select(Usuario).where(Usuario.email == payload.email)):
+        raise HTTPException(status_code=400, detail="Já existe um usuário com esse e-mail.")
+    empresa = db.get(Empresa, payload.empresa_id)
+    if not empresa:
+        raise HTTPException(status_code=404, detail="Empresa não encontrada.")
+    user = Usuario(
+        nome=payload.nome,
+        email=payload.email,
+        # senha aleatória inutilizável — o cliente só entra após definir a dele pelo link
+        senha_hash=hash_password(secrets.token_urlsafe(24)),
+        ativo=True,
+        is_admin=False,
+        is_cliente=True,
+        empresa_id=empresa.id,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return _enviar_convite(user, empresa)
+
+
+@router.post("/{usuario_id}/reenviar-convite", response_model=ConviteResposta)
+def reenviar_convite(usuario_id: int, db: Session = Depends(get_db)) -> ConviteResposta:
+    """Reenvia o convite (novo link de definir senha) pra um cliente já cadastrado."""
+    user = db.get(Usuario, usuario_id)
+    if not user or not user.is_cliente or not user.empresa_id:
+        raise HTTPException(status_code=404, detail="Acesso de cliente não encontrado.")
+    empresa = db.get(Empresa, user.empresa_id)
+    if not empresa:
+        raise HTTPException(status_code=404, detail="Empresa do cliente não encontrada.")
+    return _enviar_convite(user, empresa)
 
 
 @router.patch("/{usuario_id}", response_model=UsuarioRead)

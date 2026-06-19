@@ -31,6 +31,31 @@ def create_access_token(subject: str) -> str:
     return jwt.encode(payload, settings.secret_key, algorithm="HS256")
 
 
+def create_invite_token(email: str, horas: int = 168) -> str:
+    """Token de CONVITE (definir senha) — JWT assinado, scope=set_senha, expira em
+    7 dias por padrão. Sem coluna no banco (stateless): o set-senha valida a
+    assinatura. Não loga ninguém — só autoriza criar a senha daquele e-mail."""
+    expire = datetime.now(tz=timezone.utc) + timedelta(hours=horas)
+    payload = {"sub": email, "scope": "set_senha", "exp": expire}
+    return jwt.encode(payload, settings.secret_key, algorithm="HS256")
+
+
+def email_do_token_senha(token: str) -> str:
+    """Valida o token de definir-senha (scope=set_senha) e devolve o e-mail.
+    Levanta 400 se inválido/expirado/escopo errado."""
+    erro = HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="Link inválido ou expirado. Peça um novo convite ao escritório.",
+    )
+    try:
+        payload = jwt.decode(token, settings.secret_key, algorithms=["HS256"])
+    except JWTError as exc:
+        raise erro from exc
+    if payload.get("scope") != "set_senha" or not payload.get("sub"):
+        raise erro
+    return payload["sub"]
+
+
 def authenticate_user(db: Session, email: str, password: str) -> Usuario | None:
     user = db.scalar(select(Usuario).where(Usuario.email == email, Usuario.ativo.is_(True)))
     if not user or not verify_password(password, user.senha_hash):

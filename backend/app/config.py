@@ -77,6 +77,17 @@ class Settings(BaseSettings):
 
     access_token_expire_minutes: int = Field(default=480, alias="ACCESS_TOKEN_EXPIRE_MINUTES")
     secret_key: str = Field(default="change-me", alias="SECRET_KEY")
+
+    # --- E-mail transacional (Resend) ---
+    # Domínio pacgestao.com.br já VERIFICADO no Resend (SPF/DKIM ok). Quando a
+    # RESEND_API_KEY estiver vazia, o envio é pulado e o link do convite volta
+    # na resposta pra colar manualmente (degrada com elegância, não quebra).
+    resend_api_key: str = Field(default="", alias="RESEND_API_KEY")
+    email_from: str = Field(
+        default="PAC Gestão <nao-responda@pacgestao.com.br>", alias="EMAIL_FROM",
+    )
+    # Base do portal do cliente, usada no link do convite (definir senha).
+    portal_url: str = Field(default="https://pacgestao.com.br/portal", alias="PORTAL_URL")
     first_superuser_email: str = Field(default="admin@pacxml.com.br", alias="FIRST_SUPERUSER_EMAIL")
     first_superuser_password: str = Field(default="admin123", alias="FIRST_SUPERUSER_PASSWORD")
 
