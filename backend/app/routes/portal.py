@@ -11,6 +11,7 @@ posse do documento.
 """
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -19,6 +20,8 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy import desc, func, select
+
+logger = logging.getLogger("pac.portal")
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -639,6 +642,14 @@ def portal_atualizar_guia(
         raise HTTPException(status_code=404, detail=str(exc))
     except IntegraContadorError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 — nunca devolver 500 cru (vira CORS no browser)
+        logger.exception("Falha inesperada ao recalcular guia DAS %s", guia.id)
+        raise HTTPException(
+            status_code=502,
+            detail=f"Não foi possível gerar a guia atualizada agora: {exc}",
+        )
 
     valor = VALOR_RECALCULO if cobrar else Decimal("0.00")
     db.add(CobrancaPortal(

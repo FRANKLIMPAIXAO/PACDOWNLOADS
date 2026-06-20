@@ -209,12 +209,14 @@ class GuiaDASService:
             total = dados.get("valorTotal") or detalhe.get("valorTotal")
 
         guia.valor_atualizado = self._d(total)
+        # str() defensivo: a Serpro às vezes manda número e o fatiamento [:N]
+        # quebraria (TypeError → 500 cru sem CORS).
         guia.numero_das = (
-            (detalhe.get("numeroDocumento") or dados.get("numeroDocumento") or "")[:32]
+            str(detalhe.get("numeroDocumento") or dados.get("numeroDocumento") or "")[:32]
             or None
         )
         guia.codigo_barras = (
-            (detalhe.get("codigoBarras") or dados.get("codigoBarras") or "")[:64]
+            str(detalhe.get("codigoBarras") or dados.get("codigoBarras") or "")[:64]
             or None
         )
         # dataLimiteAcolhimento (preferido pra atrasadas) ou dataVencimento
