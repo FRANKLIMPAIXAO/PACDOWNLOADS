@@ -5,6 +5,7 @@ import { Fragment, ReactNode, useCallback, useEffect, useMemo, useState } from "
 
 import { DataTable } from "../../components/data-table";
 import { ProtectedRoute } from "../../components/protected-route";
+import { SituacaoFiscalCarteira } from "../../components/situacao-fiscal-carteira";
 import { ApiError } from "../../lib/api";
 import {
   CndDashboardLinha,
@@ -246,6 +247,9 @@ function PrevencaoContent() {
       </header>
 
       {toast ? <p className="toast">{toast}</p> : null}
+
+      {/* Situação fiscal consolidada da carteira — triagem por exceção (estilo Jettax). */}
+      <SituacaoFiscalCarteira />
 
       {totais ? (
         <section className="grid">
