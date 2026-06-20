@@ -1,6 +1,7 @@
 """Rotas da Distribuição DF-e da NFe (direto com cert A1, sem Focus)."""
 from __future__ import annotations
 
+import hmac
 import os
 
 from fastapi import APIRouter, Depends, Header, HTTPException
@@ -34,7 +35,8 @@ def cron_diario(
     esperado = os.getenv("DFE_CRON_TOKEN", "")
     if not esperado:
         raise HTTPException(status_code=503, detail="DFE_CRON_TOKEN não configurado no servidor.")
-    if not x_cron_token or x_cron_token != esperado:
+    if not x_cron_token or not hmac.compare_digest(x_cron_token, esperado):
+        # compare_digest = comparação de tempo constante (anti timing-attack)
         raise HTTPException(status_code=401, detail="Token do cron inválido.")
     return DfeDistribuicaoService(db).cron_diario(chunk=max(1, min(chunk, 5)))
 

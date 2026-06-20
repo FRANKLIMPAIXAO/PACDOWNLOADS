@@ -19,6 +19,7 @@ Storage:
 """
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
@@ -28,6 +29,15 @@ from fastapi import HTTPException, status
 
 from app.config import get_settings
 from app.models.empresa import Empresa
+
+
+def _restringir_permissao(caminho: Path, modo: int) -> None:
+    """chmod best-effort (no-op tolerante em Windows/FS sem suporte). Em Linux
+    (produção) garante que o .pfx/dir não fique legível por outros usuários."""
+    try:
+        os.chmod(caminho, modo)
+    except (OSError, NotImplementedError):
+        pass
 
 
 _settings = get_settings()
@@ -51,6 +61,7 @@ def _certificados_dir() -> Path:
     storage_root = Path(_settings.storage_path).parent
     p = storage_root / "certs"
     p.mkdir(parents=True, exist_ok=True)
+    _restringir_permissao(p, 0o700)  # só o dono lê os certs
     return p
 
 
@@ -151,9 +162,10 @@ def salvar_certificado_para_empresa(
             ),
         )
 
-    # Salva o .pfx no disco
+    # Salva o .pfx no disco com permissão restrita (0600 — só o dono lê).
     destino = _certificados_dir() / f"{cnpj_empresa}.pfx"
     destino.write_bytes(pfx_bytes)
+    _restringir_permissao(destino, 0o600)
 
     empresa.cert_a1_path = str(destino)
     empresa.cert_a1_validade_ate = validade

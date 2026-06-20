@@ -34,8 +34,10 @@ util para desenvolver/testar sem credenciais Serpro reais.
 """
 from __future__ import annotations
 
+import atexit
 import base64
 import json
+import os
 import tempfile
 import time
 from dataclasses import dataclass
@@ -50,6 +52,15 @@ from app.config import get_settings
 
 
 settings = get_settings()
+
+
+def _apagar_arquivo(caminho: str) -> None:
+    """Remove um arquivo se existir (best-effort). Usado via atexit pra apagar o
+    PEM da chave-mestra do escritório ao encerrar o processo."""
+    try:
+        os.remove(caminho)
+    except OSError:
+        pass
 
 
 # --- Path do gateway por categoria de servico ---
@@ -1294,7 +1305,9 @@ class IntegraContadorProvider:
             )
         )
 
-        # Tempfile com permissao restrita (Windows: cleanup ao final do processo).
+        # PEM da chave-mestra do escritório em tempfile. CHAVE PRIVADA EM CLARO —
+        # endurecer: 0600 (só o dono lê) + apagar no fim do processo (atexit),
+        # senão persistia em /tmp entre reinícios.
         fd = tempfile.NamedTemporaryFile(
             suffix=".pem", delete=False, mode="wb",
         )
@@ -1302,6 +1315,11 @@ class IntegraContadorProvider:
             fd.write(b"".join(pem_parts))
         finally:
             fd.close()
+        try:
+            os.chmod(fd.name, 0o600)
+        except (OSError, NotImplementedError):
+            pass
+        atexit.register(_apagar_arquivo, fd.name)
         self._cert_tempfile = Path(fd.name)
         return (str(self._cert_tempfile), str(self._cert_tempfile))
 

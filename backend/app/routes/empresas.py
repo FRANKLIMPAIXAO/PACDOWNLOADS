@@ -1,4 +1,5 @@
 import json
+import logging
 
 import requests
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
@@ -7,6 +8,11 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.empresa import Empresa
+from app.models.usuario import Usuario
+
+logger = logging.getLogger("pac.seguranca")
+# Tamanho máximo do .pfx no upload (um A1 tem poucos KB; teto generoso anti-DoS).
+MAX_CERT_BYTES = 512 * 1024
 from app.schemas.empresa_schema import (
     CertificadoUploadInfo,
     EmpresaCreate,
@@ -820,9 +826,15 @@ async def upload_certificado(
     empresa = db.get(Empresa, empresa_id)
     if not empresa:
         raise HTTPException(status_code=404, detail="Empresa nao encontrada")
+    # Rejeita arquivo gigante ANTES de carregar tudo (anti-DoS de memória).
+    tam = getattr(arquivo_certificado, "size", None)
+    if tam is not None and tam > MAX_CERT_BYTES:
+        raise HTTPException(status_code=400, detail="Arquivo grande demais para um certificado (.pfx tem poucos KB).")
     pfx_bytes = await arquivo_certificado.read()
     if not pfx_bytes:
         raise HTTPException(status_code=400, detail="Arquivo vazio")
+    if len(pfx_bytes) > MAX_CERT_BYTES:
+        raise HTTPException(status_code=400, detail="Arquivo grande demais para um certificado (.pfx tem poucos KB).")
     info = salvar_certificado_para_empresa(
         db, empresa, pfx_bytes, senha_certificado,
         permitir_cnpj_diferente=permitir_cnpj_diferente,
@@ -896,18 +908,26 @@ def diagnosticar_cert(empresa_id: int, db: Session = Depends(get_db)) -> dict:
 
 
 @router.get("/{empresa_id}/certificado/baixar")
-def baixar_certificado_para_agente(empresa_id: int, db: Session = Depends(get_db)):
+def baixar_certificado_para_agente(
+    empresa_id: int,
+    db: Session = Depends(get_db),
+    admin: Usuario = Depends(get_current_admin),
+):
     """Devolve o .pfx + senha em CLARO da empresa.
 
-    USO INTERNO RESTRITO: somente pelo agente PAC SEFAZ rodando em ambiente
-    controlado (mesmo VPS ou via VPN). NUNCA expor publicamente sem TLS +
-    auth forte.
+    USO INTERNO RESTRITO: SOMENTE ADMIN (o agente PAC SEFAZ loga como o admin do
+    escritório). Operador/funcionário NÃO baixa cert — é a credencial mais
+    sensível do sistema. Toda chamada é AUDITADA (log pac.seguranca).
+    NUNCA expor publicamente sem TLS.
 
-    Retorna multipart-friendly: senha no header X-Cert-Password e bytes
-    do .pfx no body como application/x-pkcs12.
+    Retorna: senha no header X-Cert-Password e bytes do .pfx no body
+    (application/x-pkcs12).
     """
     from fastapi.responses import Response
     from pathlib import Path
+
+    # AUDITORIA: registra quem baixou o cert de qual empresa.
+    logger.warning("AUDITORIA cert-download: empresa_id=%s por admin=%s", empresa_id, admin.email)
 
     empresa = db.get(Empresa, empresa_id)
     if not empresa:

@@ -30,7 +30,7 @@ settings = get_settings()
 # BUILD_COMMIT no build (commit fica "unknown"), este é o sinal confiável pra
 # saber, via GET /version, se o deploy pegou o código novo (cache stale é
 # recorrente). Formato livre: AAAA-MM-DD + resumo curto.
-APP_BUILD_TAG = "2026-06-19-convite-cliente-resend"
+APP_BUILD_TAG = "2026-06-20-seguranca-lote1"
 
 
 @asynccontextmanager
@@ -43,6 +43,17 @@ async def lifespan(_: FastAPI):
     # browser mostra um enganoso "erro de CORS / Failed to fetch".
     import logging
     log = logging.getLogger(__name__)
+    # AVISO DE SEGURANÇA (não derruba — respeita a blindagem acima). Em produção,
+    # SECRET_KEY fraco = JWT forjável + senhas dos certs decifráveis. Veja o
+    # estado completo em GET /usuarios/seguranca-diagnostico (admin).
+    _sk = settings.secret_key or ""
+    if settings.is_production and (_sk in ("", "change-me") or len(_sk) < 32):
+        log.warning(
+            "🔴 SEGURANCA: SECRET_KEY fraco/default em PRODUCAO — assina JWT e cifra "
+            "as senhas dos certificados. Configure um valor forte e unico (>=32 chars) JA."
+        )
+    if settings.is_production and settings.first_superuser_password == "admin123":
+        log.warning("🔴 SEGURANCA: senha de admin no default 'admin123' em PRODUCAO — troque JA.")
     try:
         Base.metadata.create_all(bind=engine)
     except Exception:  # noqa: BLE001

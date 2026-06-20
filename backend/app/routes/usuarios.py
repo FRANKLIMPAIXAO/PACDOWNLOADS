@@ -43,6 +43,27 @@ def listar_usuarios(db: Session = Depends(get_db)) -> list[Usuario]:
     return db.scalars(select(Usuario).order_by(Usuario.id)).all()
 
 
+@router.get("/seguranca-diagnostico")
+def seguranca_diagnostico() -> dict:
+    """Diagnóstico de segurança da CONFIG (admin-only). NÃO devolve nenhum valor
+    de segredo — só flags booleanas pra detectar config fraca em produção.
+    `true` em qualquer "_default"/"_fraco"/"_wildcard" = corrigir no env do servidor."""
+    s = get_settings()
+    sk = s.secret_key or ""
+    return {
+        "ambiente": s.app_env,
+        "is_production": s.is_production,
+        # CRÍTICO: assina JWT e cifra as senhas dos certs. Tem que ser forte e único.
+        "secret_key_default_ou_fraco": sk in ("", "change-me") or len(sk) < 32,
+        "senha_admin_default": s.first_superuser_password == "admin123",
+        "cors_wildcard": "*" in s.cors_origins,
+        "mock_ligado_em_producao": s.is_production and any([
+            s.use_mock_focus_nfe, s.use_mock_integra, s.use_mock_sefaz, s.use_mock_infosimples,
+        ]),
+        "resend_configurado": bool(s.resend_api_key),
+    }
+
+
 @router.post("", response_model=UsuarioRead, status_code=status.HTTP_201_CREATED)
 def criar_usuario(payload: UsuarioAdminCreate, db: Session = Depends(get_db)) -> Usuario:
     existing = db.scalar(select(Usuario).where(Usuario.email == payload.email))

@@ -7,6 +7,7 @@ portal pra o PAC TAREFAS incluir no e-mail que ele já manda. Sem SMTP no PAC.
 from __future__ import annotations
 
 import base64
+import hmac
 import os
 import re
 from datetime import date
@@ -31,7 +32,8 @@ def _checar_api_key(x_api_key: str = Header(default="")) -> None:
     esperado = os.getenv("INTEGRACAO_API_KEY", "")
     if not esperado:
         raise HTTPException(status_code=503, detail="INTEGRACAO_API_KEY não configurada no servidor.")
-    if not x_api_key or x_api_key != esperado:
+    if not x_api_key or not hmac.compare_digest(x_api_key, esperado):
+        # compare_digest = comparação de tempo constante (anti timing-attack)
         raise HTTPException(status_code=401, detail="API key inválida.")
 
 
