@@ -4,7 +4,13 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
 import { ApiError } from "../lib/api";
-import { PrevSituacaoFiscal, situacaoFiscalCarteira } from "../lib/prevencao";
+import {
+  PrevSituacaoFiscal,
+  SitfisJob,
+  atualizarSituacaoFiscal,
+  situacaoFiscalCarteira,
+  statusAtualizacaoSituacaoFiscal,
+} from "../lib/prevencao";
 
 function fmtBRL(v: number): string {
   return v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -25,12 +31,62 @@ export function SituacaoFiscalCarteira() {
   const [erro, setErro] = useState<string | null>(null);
   // Default = já abre nos PROBLEMAS (o que a equipe precisa olhar).
   const [filtro, setFiltro] = useState<Filtro>("pendencia");
+  const [jobId, setJobId] = useState<string | null>(null);
+  const [job, setJob] = useState<SitfisJob | null>(null);
+  const [iniciando, setIniciando] = useState(false);
 
-  useEffect(() => {
+  function carregar() {
     situacaoFiscalCarteira()
       .then(setData)
       .catch((e) => setErro(e instanceof ApiError ? e.message : "Falha ao carregar a situação fiscal."));
-  }, []);
+  }
+
+  useEffect(() => { carregar(); }, []);
+
+  // Polling do job de atualização do SITFIS (a cada 5s) enquanto rodando.
+  useEffect(() => {
+    if (!jobId) return;
+    let vivo = true;
+    const tick = async () => {
+      try {
+        const s = await statusAtualizacaoSituacaoFiscal(jobId);
+        if (!vivo) return;
+        setJob(s);
+        if (s.status === "rodando") {
+          setTimeout(tick, 5000);
+        } else {
+          carregar(); // terminou → recarrega o painel já preenchido
+        }
+      } catch {
+        if (vivo) setTimeout(tick, 8000);
+      }
+    };
+    tick();
+    return () => { vivo = false; };
+  }, [jobId]);
+
+  async function iniciarAtualizacao() {
+    const total = data?.totais.empresas ?? 0;
+    const ok = window.confirm(
+      `Atualizar a situação fiscal de ${total} empresa(s) via Integra Contador?\n\n` +
+      `• Custo ~R$ 0,03 por empresa (≈ R$ ${(total * 0.03).toFixed(2)}).\n` +
+      `• Roda em segundo plano (~30-60s por empresa) — você pode sair da tela.\n\n` +
+      `Continuar?`,
+    );
+    if (!ok) return;
+    setIniciando(true);
+    setErro(null);
+    try {
+      const r = await atualizarSituacaoFiscal();
+      setJobId(r.job_id);
+    } catch (e) {
+      setErro(e instanceof ApiError ? e.message : "Falha ao iniciar a atualização.");
+    } finally {
+      setIniciando(false);
+    }
+  }
+
+  const rodando = job?.status === "rodando";
 
   const lista = useMemo(() => {
     if (!data) return [];
@@ -49,14 +105,61 @@ export function SituacaoFiscalCarteira() {
 
   return (
     <>
-      <header className="page-header" style={{ marginTop: 4 }}>
+      <header className="page-header" style={{ marginTop: 4, alignItems: "center" }}>
         <div>
           <h3>Situação fiscal da carteira</h3>
           <p className="muted">
             Visão consolidada do e-CAC — olhe só quem tem pendência ou débito, sem abrir empresa por empresa.
           </p>
         </div>
+        <div className="page-actions">
+          <button
+            type="button"
+            className="btn-primary"
+            onClick={iniciarAtualizacao}
+            disabled={iniciando || rodando}
+            title="Puxa o SITFIS de todas as empresas via Integra Contador (background)."
+          >
+            {rodando ? "Atualizando…" : iniciando ? "Iniciando…" : "🔄 Atualizar situação fiscal da carteira"}
+          </button>
+        </div>
       </header>
+
+      {job ? (
+        <section
+          className="panel"
+          style={{
+            marginBottom: 12,
+            border: job.status === "erro"
+              ? "1px solid rgba(248,113,113,0.5)"
+              : job.status === "concluido"
+                ? "1px solid rgba(34,197,94,0.4)"
+                : "1px solid rgba(59,130,246,0.4)",
+          }}
+        >
+          {job.status === "rodando" ? (
+            <>
+              <strong>🔄 Atualizando situação fiscal — {job.feitas}/{job.total || "…"}</strong>
+              <div style={{ height: 8, borderRadius: 6, background: "var(--bg-1)", margin: "8px 0", overflow: "hidden" }}>
+                <div style={{
+                  height: "100%",
+                  width: `${job.total ? Math.round((job.feitas / job.total) * 100) : 0}%`,
+                  background: "rgb(59,130,246)",
+                }} />
+              </div>
+              <p className="muted" style={{ margin: 0, fontSize: 13 }}>
+                {job.sucesso} ok · {job.falhas} falha(s){job.atual ? ` · agora: ${job.atual}` : ""}. Pode sair da tela — roda em segundo plano.
+              </p>
+            </>
+          ) : job.status === "concluido" ? (
+            <strong style={{ color: "rgb(16,185,129)" }}>
+              ✅ Atualização concluída — {job.sucesso} ok · {job.falhas} falha(s). Painel atualizado.
+            </strong>
+          ) : (
+            <strong style={{ color: "rgb(248,113,113)" }}>⚠️ Falha na atualização: {job.erro_geral || "erro"}</strong>
+          )}
+        </section>
+      ) : null}
 
       <section className="grid">
         <article className="metric metric--rose">

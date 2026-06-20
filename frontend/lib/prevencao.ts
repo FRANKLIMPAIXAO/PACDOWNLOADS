@@ -34,3 +34,26 @@ export type PrevSituacaoFiscal = { totais: PrevTotais; empresas: PrevEmpresa[] }
 export function situacaoFiscalCarteira() {
   return apiFetch<PrevSituacaoFiscal>("/api/v1/prevencao/situacao-fiscal");
 }
+
+export type SitfisJob = {
+  status: "rodando" | "concluido" | "erro";
+  total: number;
+  feitas: number;
+  sucesso: number;
+  falhas: number;
+  atual: string | null;
+  erros: { empresa: string; erro: string }[];
+  erro_geral?: string;
+};
+
+/** Dispara, em background, a atualização do SITFIS de toda a carteira (Integra). */
+export function atualizarSituacaoFiscal() {
+  return apiFetch<{ job_id: string; ja_rodando: boolean }>(
+    "/api/v1/prevencao/atualizar-situacao-fiscal",
+    { method: "POST" },
+  );
+}
+
+export function statusAtualizacaoSituacaoFiscal(jobId: string) {
+  return apiFetch<SitfisJob>(`/api/v1/prevencao/atualizar-situacao-fiscal/status/${jobId}`);
+}
