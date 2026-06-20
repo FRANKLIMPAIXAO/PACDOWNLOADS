@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Fragment, ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import { ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 
 import { DataTable } from "../../components/data-table";
 import { ProtectedRoute } from "../../components/protected-route";
@@ -11,29 +11,11 @@ import {
   CndDashboardLinha,
   StatusCertidao,
   TIPOS_CND,
-  TipoCertidao,
   dashboardCnds,
   efetivoLabel,
   efetivoPillClass,
   renovarVencendo,
 } from "../../lib/cnds";
-import { Empresa, listarEmpresas } from "../../lib/empresas";
-import {
-  consultarDte,
-  Dte,
-  listarCaixaPostal,
-  MensagemEcac,
-  obterProcuracao,
-  Procuracao,
-  syncCaixaPostal,
-} from "../../lib/integra";
-
-type LinhaPrevencao = {
-  empresa: Empresa;
-  procuracao: Procuracao | null;
-  mensagens: MensagemEcac[];
-  dte: Dte | null;
-};
 
 export default function PrevencaoPage() {
   return (
@@ -44,60 +26,33 @@ export default function PrevencaoPage() {
 }
 
 function PrevencaoContent() {
-  const [linhas, setLinhas] = useState<LinhaPrevencao[] | null>(null);
   const [cnds, setCnds] = useState<CndDashboardLinha[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
-  const [syncingId, setSyncingId] = useState<number | null>(null);
   const [renovandoTodas, setRenovandoTodas] = useState(false);
 
-  const carregarTudo = useCallback(async () => {
+  // Carrega SÓ o dashboard de CNDs (1 chamada, lê do banco). NÃO dispara mais
+  // caixa-postal/procuração/DTE por empresa (eram 100+ chamadas Integra ao vivo
+  // que estouravam o Traefik e travavam a tela em "Carregando").
+  const carregarCnds = useCallback(async () => {
     setError(null);
     try {
-      const empresas = await listarEmpresas();
-      const dadosLinhas = await Promise.all(
-        empresas.map(async (empresa) => {
-          const linha: LinhaPrevencao = {
-            empresa, procuracao: null, mensagens: [], dte: null,
-          };
-          try { linha.mensagens = await listarCaixaPostal(empresa.id); } catch {}
-          try { linha.procuracao = await obterProcuracao(empresa.id); } catch {}
-          try { linha.dte = await consultarDte(empresa.id); } catch {}
-          return linha;
-        }),
-      );
-      setLinhas(dadosLinhas);
-      const cndList = await dashboardCnds();
-      setCnds(cndList);
+      setCnds(await dashboardCnds());
     } catch (err) {
       if (err instanceof ApiError) setError(err.message);
-      else setError("Falha ao carregar prevencao.");
+      else setError("Falha ao carregar CNDs.");
     }
   }, []);
 
-  useEffect(() => { carregarTudo(); }, [carregarTudo]);
-
-  async function handleSync(empresaId: number) {
-    setSyncingId(empresaId);
-    try {
-      await syncCaixaPostal(empresaId);
-      await carregarTudo();
-    } catch (err) {
-      if (err instanceof ApiError) setError(err.message);
-    } finally {
-      setSyncingId(null);
-    }
-  }
+  useEffect(() => { carregarCnds(); }, [carregarCnds]);
 
   async function handleRenovarTodas() {
     setRenovandoTodas(true);
     setToast(null); setError(null);
     try {
       const r = await renovarVencendo(7);
-      setToast(
-        `Robô SEFAZ: ${r.sucesso} renovadas · ${r.falhas} falhas · ${r.pulados} ainda válidas.`,
-      );
-      await carregarTudo();
+      setToast(`Robô SEFAZ: ${r.sucesso} renovadas · ${r.falhas} falhas · ${r.pulados} ainda válidas.`);
+      await carregarCnds();
     } catch (err) {
       if (err instanceof ApiError) setError(err.message);
       else setError("Falha ao renovar.");
@@ -107,114 +62,31 @@ function PrevencaoContent() {
   }
 
   const totais = useMemo(() => {
-    if (!linhas || !cnds) return null;
-    const empresas = linhas.length;
-    const procAtivas = linhas.filter((l) => l.procuracao?.situacao === "ATIVA").length;
-    const naoLidas = linhas.reduce(
-      (sum, l) => sum + l.mensagens.filter((m) => m.indicador_leitura === "0").length,
-      0,
-    );
-    const optantesDte = linhas.filter((l) => l.dte?.indicador_optante).length;
-    let cndsValidas = 0;
-    let cndsAVencer = 0;
-    let cndsVencidas = 0;
-    let cndsPendencia = 0;
+    if (!cnds) return null;
+    let validas = 0, aVencer = 0, vencidas = 0, pendencia = 0;
     for (const c of cnds) {
       for (const tipo of TIPOS_CND) {
         const cert = c[tipo.tipo.toLowerCase() as keyof CndDashboardLinha] as
           | { status: StatusCertidao; situacao_fiscal?: string | null } | null;
         if (!cert) continue;
-        if (cert.situacao_fiscal === "pendencias") cndsPendencia++;
-        else if (cert.status === "VALIDA" && cert.situacao_fiscal !== "verificar") cndsValidas++;
-        else if (cert.status === "A_VENCER") cndsAVencer++;
-        else if (cert.status === "VENCIDA") cndsVencidas++;
+        if (cert.situacao_fiscal === "pendencias") pendencia++;
+        else if (cert.status === "VALIDA" && cert.situacao_fiscal !== "verificar") validas++;
+        else if (cert.status === "A_VENCER") aVencer++;
+        else if (cert.status === "VENCIDA") vencidas++;
       }
     }
-    return { empresas, procAtivas, naoLidas, optantesDte, cndsValidas, cndsAVencer, cndsVencidas, cndsPendencia };
-  }, [linhas, cnds]);
+    return { validas, aVencer, vencidas, pendencia };
+  }, [cnds]);
 
-  if (error) {
-    return (
-      <section className="panel">
-        <p className="toast toast-error">{error}</p>
-      </section>
-    );
-  }
-
-  if (!linhas || !cnds) {
-    return (
-      <section className="panel">
-        <p className="muted">Carregando prevencao...</p>
-      </section>
-    );
-  }
-
-  if (linhas.length === 0) {
-    return (
-      <section className="panel">
-        <header className="page-header">
-          <div>
-            <h2>Prevencao</h2>
-            <p className="muted">Caixa Postal eCAC, DTE, Procuracoes e CND via Integra Contador.</p>
-          </div>
-        </header>
-        <div className="empty-state">
-          Nenhuma empresa cadastrada.{" "}
-          <Link href="/empresas/novo" className="row-link">Cadastre uma empresa</Link>.
-        </div>
-      </section>
-    );
-  }
-
-  const rows: ReactNode[][] = linhas.map((l) => {
-    const naoLidas = l.mensagens.filter((m) => m.indicador_leitura === "0").length;
-    return [
-      <Link key={`e-${l.empresa.id}`} href={`/empresas/${l.empresa.id}`} className="row-link">
-        {l.empresa.razao_social}
-      </Link>,
-      l.empresa.cnpj,
-      l.procuracao?.situacao === "ATIVA" ? (
-        <span key={`p-${l.empresa.id}`} className="pill pill-ok">Ativa</span>
-      ) : (
-        <span key={`p-${l.empresa.id}`} className="pill pill-warn">{l.procuracao?.situacao || "Pendente"}</span>
-      ),
-      l.dte === null ? (
-        <span key={`d-${l.empresa.id}`} className="muted">—</span>
-      ) : l.dte.indicador_optante ? (
-        <span key={`d-${l.empresa.id}`} className="pill pill-ok">Optante</span>
-      ) : (
-        <span key={`d-${l.empresa.id}`} className="pill pill-warn">Nao</span>
-      ),
-      <span key={`m-${l.empresa.id}`}>
-        {l.mensagens.length}
-        {naoLidas > 0 ? <> · <span className="pill pill-warn">{naoLidas} novas</span></> : null}
-      </span>,
-      <button
-        key={`s-${l.empresa.id}`}
-        type="button"
-        className="btn-secondary"
-        style={{ padding: "5px 11px", fontSize: "0.82rem" }}
-        onClick={() => handleSync(l.empresa.id)}
-        disabled={syncingId === l.empresa.id}
-      >
-        {syncingId === l.empresa.id ? "..." : "Sync"}
-      </button>,
-    ];
-  });
-
-  // Coluna principal usa apenas tipos NAO sob demanda (5 colunas).
-  // FEDERAL_OFICIAL nao entra (eh emitido pontualmente para licitacoes/bancos).
   const tiposTabela = TIPOS_CND.filter((t) => !t.sob_demanda);
-  const cndRows: ReactNode[][] = cnds.map((c) => [
+  const cndRows: ReactNode[][] = (cnds ?? []).map((c) => [
     <Link key={`ce-${c.empresa_id}`} href={`/empresas/${c.empresa_id}`} className="row-link">
       {c.empresa_razao_social}
     </Link>,
     ...tiposTabela.map((t) => {
       const cert = c[t.tipo.toLowerCase() as keyof CndDashboardLinha] as
         | { status: StatusCertidao; situacao_fiscal?: string | null; pendencias?: string[]; data_validade: string } | null;
-      if (!cert) {
-        return <span key={`${c.empresa_id}-${t.tipo}`} className="pill pill-muted">—</span>;
-      }
+      if (!cert) return <span key={`${c.empresa_id}-${t.tipo}`} className="pill pill-muted">—</span>;
       const pend = cert.pendencias && cert.pendencias.length ? ` · ${cert.pendencias.join(" · ")}` : "";
       return (
         <span key={`${c.empresa_id}-${t.tipo}`} className={efetivoPillClass(cert)} title={`${t.fonte} · validade ${cert.data_validade}${pend}`}>
@@ -229,52 +101,21 @@ function PrevencaoContent() {
     <>
       <header className="page-header">
         <div>
-          <h2>Prevencao</h2>
-          <p className="muted">
-            CND, Caixa Postal eCAC, DTE e Procuracoes — visao consolidada do escritorio.
-          </p>
+          <h2>Prevenção</h2>
+          <p className="muted">Saúde fiscal da carteira — triagem por exceção + controle de CNDs.</p>
         </div>
         <div className="page-actions">
-          <button
-            type="button"
-            className="btn-primary"
-            onClick={handleRenovarTodas}
-            disabled={renovandoTodas}
-          >
-            {renovandoTodas ? "Renovando..." : "🤖 Robo SEFAZ — renovar todas vencendo"}
+          <button type="button" className="btn-primary" onClick={handleRenovarTodas} disabled={renovandoTodas}>
+            {renovandoTodas ? "Renovando..." : "🤖 Robô SEFAZ — renovar CNDs vencendo"}
           </button>
         </div>
       </header>
 
+      {error ? <p className="toast toast-error">{error}</p> : null}
       {toast ? <p className="toast">{toast}</p> : null}
 
       {/* Situação fiscal consolidada da carteira — triagem por exceção (estilo Jettax). */}
       <SituacaoFiscalCarteira />
-
-      {totais ? (
-        <section className="grid">
-          <article className="metric metric--emerald">
-            <span>Empresas monitoradas</span>
-            <strong>{totais.empresas}</strong>
-            <p>com integracao prevencao</p>
-          </article>
-          <article className="metric metric--cyan">
-            <span>Procuracoes ativas</span>
-            <strong>{totais.procAtivas}</strong>
-            <p>de {totais.empresas} empresas</p>
-          </article>
-          <article className="metric metric--amber">
-            <span>Mensagens nao lidas</span>
-            <strong>{totais.naoLidas}</strong>
-            <p>caixa postal eCAC</p>
-          </article>
-          <article className="metric metric--rose">
-            <span>CNDs com pendência</span>
-            <strong>{totais.cndsPendencia}</strong>
-            <p>{totais.cndsVencidas} vencidas · {totais.cndsAVencer} a vencer · {totais.cndsValidas} válidas</p>
-          </article>
-        </section>
-      ) : null}
 
       <header className="page-header" style={{ marginTop: 8 }}>
         <div>
@@ -284,22 +125,20 @@ function PrevencaoContent() {
           </p>
         </div>
       </header>
-      <DataTable
-        headers={["Empresa", ...tiposTabela.map((t) => t.label), "Score"]}
-        rows={cndRows}
-        subtitle={`${cnds.length} empresa(s).`}
-      />
-
-      <header className="page-header" style={{ marginTop: 8 }}>
-        <div>
-          <h3>Caixa Postal · DTE · Procuracoes</h3>
-          <p className="muted">Status de procuracao e mensagens da Receita Federal por empresa.</p>
-        </div>
-      </header>
-      <DataTable
-        headers={["Empresa", "CNPJ", "Procuracao", "DTE", "Mensagens", "Acao"]}
-        rows={rows}
-      />
+      {totais ? (
+        <p className="muted" style={{ marginTop: -6, marginBottom: 8, fontSize: "0.86rem" }}>
+          {totais.pendencia} com pendência · {totais.vencidas} vencidas · {totais.aVencer} a vencer · {totais.validas} válidas
+        </p>
+      ) : null}
+      {cnds === null ? (
+        <section className="panel"><p className="muted">Carregando CNDs…</p></section>
+      ) : (
+        <DataTable
+          headers={["Empresa", ...tiposTabela.map((t) => t.label), "Score"]}
+          rows={cndRows}
+          subtitle={`${cnds.length} empresa(s).`}
+        />
+      )}
     </>
   );
 }
