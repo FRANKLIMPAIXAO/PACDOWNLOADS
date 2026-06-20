@@ -16,7 +16,7 @@ function fmtBRL(v: number): string {
   return v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 
-type Filtro = "todos" | "pendencia" | "debito" | "parcelamento";
+type Filtro = "todos" | "pendencia" | "debito" | "parcelamento" | "ausencia";
 
 function statusPill(s: string | null) {
   if (s === "regular") return <span className="pill pill-ok">Regular</span>;
@@ -94,6 +94,7 @@ export function SituacaoFiscalCarteira() {
       if (filtro === "pendencia") return e.situacao_fiscal === "pendencias" || e.situacao_fiscal === "verificar";
       if (filtro === "debito") return e.saldo_devedor > 0;
       if (filtro === "parcelamento") return e.tem_parcelamento;
+      if (filtro === "ausencia") return e.ausencias.length > 0;
       return true;
     });
   }, [data, filtro]);
@@ -184,6 +185,34 @@ export function SituacaoFiscalCarteira() {
         </article>
       </section>
 
+      {data.ausencias.total > 0 ? (
+        <section className="panel" style={{ marginTop: 8 }}>
+          <div className="page-header" style={{ alignItems: "center" }}>
+            <div>
+              <h3 style={{ margin: 0 }}>Ausência de declarações</h3>
+              <p className="muted" style={{ margin: "4px 0 0", fontSize: 13 }}>
+                {data.ausencias.empresas} empresa(s) · {data.ausencias.total} declaração(ões) faltando (omissão no e-CAC).
+              </p>
+            </div>
+            <button
+              type="button"
+              className="btn-secondary"
+              style={{ padding: "5px 11px", fontSize: "0.82rem" }}
+              onClick={() => setFiltro("ausencia")}
+            >
+              Ver empresas →
+            </button>
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
+            {Object.entries(data.ausencias.por_tipo).map(([tipo, n]) => (
+              <span key={tipo} className="pill pill-err" style={{ padding: "6px 12px" }}>
+                {tipo}: <strong>{n}</strong>
+              </span>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
       <section className="panel" style={{ marginTop: 8 }}>
         <div className="page-header" style={{ alignItems: "center" }}>
           <h3 style={{ margin: 0 }}>Triagem ({lista.length})</h3>
@@ -191,6 +220,7 @@ export function SituacaoFiscalCarteira() {
             {([
               ["pendencia", "⚠ Com pendência"],
               ["debito", "💰 Com débito"],
+              ["ausencia", "📋 Sem declaração"],
               ["parcelamento", "📄 Parcelamento"],
               ["todos", "Todas"],
             ] as [Filtro, string][]).map(([k, label]) => (

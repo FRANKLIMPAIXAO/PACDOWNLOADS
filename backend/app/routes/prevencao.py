@@ -124,6 +124,32 @@ def status_atualizacao_sitfis(job_id: str) -> dict:
         return dict(job)
 
 
+def _tipo_omissao(pendencia: str) -> str | None:
+    """Se a pendência é uma OMISSÃO de declaração, devolve o tipo canônico
+    (DCTFWeb, DASN, DEFIS…). Senão (débito, parcelamento, inscrição), None.
+    O SITFIS escreve 'Omissão de <declaração>'."""
+    p = (pendencia or "").lower()
+    if "omiss" not in p:
+        return None
+    if "dctfweb" in p or "dctf-web" in p or "dctf web" in p:
+        return "DCTFWeb"
+    if "dasn" in p or "simei" in p:
+        return "DASN"
+    if "defis" in p:
+        return "DEFIS"
+    if "dirf" in p:
+        return "DIRF"
+    if "ecf" in p:
+        return "ECF"
+    if "efd" in p or "contribui" in p:
+        return "EFD-Contrib"
+    if "pgdas" in p:
+        return "PGDAS"
+    if "dctf" in p:
+        return "DCTF"
+    return "Outras"
+
+
 @router.get("/situacao-fiscal")
 def situacao_fiscal_carteira(db: Session = Depends(get_db)) -> dict:
     """Saúde fiscal da carteira inteira, consolidada por empresa + totais."""
@@ -162,6 +188,10 @@ def situacao_fiscal_carteira(db: Session = Depends(get_db)) -> dict:
         "empresas_com_debito": 0, "saldo_devedor": 0.0, "guias_vencidas": 0,
         "empresas_com_parcelamento": 0,
     }
+    # Ausência de declarações (omissões), por tipo — Fase 2.
+    aus_por_tipo: dict[str, int] = defaultdict(int)
+    aus_empresas = 0
+    aus_total = 0
 
     for e in empresas:
         cert = fed.get(e.id)
@@ -170,6 +200,14 @@ def situacao_fiscal_carteira(db: Session = Depends(get_db)) -> dict:
         saldo = round(d["saldo"], 2)
         venc = d["qtd"]
         tem_parc = e.id in parc_ids
+
+        # Quais declarações esta empresa está OMITINDO (das pendências do SITFIS).
+        ausencias_emp = sorted({t for p in pendencias if (t := _tipo_omissao(p))})
+        if ausencias_emp:
+            aus_empresas += 1
+            aus_total += len(ausencias_emp)
+            for t in ausencias_emp:
+                aus_por_tipo[t] += 1
 
         if situacao == "regular":
             tot["regular"] += 1
@@ -197,6 +235,7 @@ def situacao_fiscal_carteira(db: Session = Depends(get_db)) -> dict:
             "guias_vencidas": venc,
             "tem_parcelamento": tem_parc,
             "tem_situacao": cert is not None,
+            "ausencias": ausencias_emp,
         })
 
     # Ordena pra triagem: quem tem PROBLEMA primeiro (pendência > débito > resto),
@@ -211,4 +250,9 @@ def situacao_fiscal_carteira(db: Session = Depends(get_db)) -> dict:
 
     linhas.sort(key=_peso)
     tot["saldo_devedor"] = round(tot["saldo_devedor"], 2)
-    return {"totais": tot, "empresas": linhas}
+    ausencias = {
+        "empresas": aus_empresas,
+        "total": aus_total,
+        "por_tipo": dict(sorted(aus_por_tipo.items(), key=lambda kv: -kv[1])),
+    }
+    return {"totais": tot, "ausencias": ausencias, "empresas": linhas}

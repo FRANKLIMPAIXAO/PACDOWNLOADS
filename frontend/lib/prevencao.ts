@@ -14,6 +14,13 @@ export type PrevEmpresa = {
   guias_vencidas: number;
   tem_parcelamento: boolean;
   tem_situacao: boolean;
+  ausencias: string[];
+};
+
+export type PrevAusencias = {
+  empresas: number;
+  total: number;
+  por_tipo: Record<string, number>;
 };
 
 export type PrevTotais = {
@@ -28,7 +35,11 @@ export type PrevTotais = {
   empresas_com_parcelamento: number;
 };
 
-export type PrevSituacaoFiscal = { totais: PrevTotais; empresas: PrevEmpresa[] };
+export type PrevSituacaoFiscal = {
+  totais: PrevTotais;
+  ausencias: PrevAusencias;
+  empresas: PrevEmpresa[];
+};
 
 /** Saúde fiscal de TODA a carteira numa chamada (situação + débitos + parcelamento). */
 export function situacaoFiscalCarteira() {
