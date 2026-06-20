@@ -15,6 +15,21 @@ export function listarUsuarios() {
   return apiFetch<UsuarioAdmin[]>("/api/v1/usuarios");
 }
 
+export type SegurancaDiag = {
+  ambiente: string;
+  is_production: boolean;
+  secret_key_default_ou_fraco: boolean;
+  senha_admin_default: boolean;
+  cors_wildcard: boolean;
+  mock_ligado_em_producao: boolean;
+  resend_configurado: boolean;
+};
+
+/** Diagnóstico de segurança da config (admin-only). Só flags booleanas. */
+export function segurancaDiagnostico() {
+  return apiFetch<SegurancaDiag>("/api/v1/usuarios/seguranca-diagnostico");
+}
+
 export function criarUsuario(payload: {
   nome: string;
   email: string;

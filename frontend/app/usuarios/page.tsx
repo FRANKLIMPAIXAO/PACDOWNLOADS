@@ -7,11 +7,13 @@ import { ProtectedRoute } from "../../components/protected-route";
 import { ApiError } from "../../lib/api";
 import { useAuth } from "../../lib/auth-context";
 import {
+  SegurancaDiag,
   UsuarioAdmin,
   atualizarUsuario,
   criarUsuario,
   listarUsuarios,
   reenviarConvite,
+  segurancaDiagnostico,
 } from "../../lib/usuarios";
 
 export default function UsuariosPage() {
@@ -28,6 +30,7 @@ function UsuariosContent() {
   const [usuarios, setUsuarios] = useState<UsuarioAdmin[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [seg, setSeg] = useState<SegurancaDiag | null>(null);
 
   // Form de criação
   const [nome, setNome] = useState("");
@@ -51,6 +54,7 @@ function UsuariosContent() {
 
   useEffect(() => {
     recarregar();
+    segurancaDiagnostico().then(setSeg).catch(() => setSeg(null));
   }, []);
 
   async function handleCriar(e: FormEvent) {
@@ -144,6 +148,8 @@ function UsuariosContent() {
       {toast ? <p className="toast toast-ok">{toast}</p> : null}
       {error ? <p className="toast toast-error">{error}</p> : null}
 
+      {seg ? <SegurancaBanner seg={seg} /> : null}
+
       {/* Form de criação */}
       <section className="panel" style={{ marginBottom: 16 }}>
         <h3>Criar novo usuário</h3>
@@ -236,5 +242,53 @@ function UsuariosContent() {
         )}
       </section>
     </>
+  );
+}
+
+function SegurancaBanner({ seg }: { seg: SegurancaDiag }) {
+  const problemas: string[] = [];
+  if (seg.secret_key_default_ou_fraco)
+    problemas.push("SECRET_KEY fraco/default — assina os logins E cifra as senhas dos certificados. Troque no Easypanel JÁ (e re-cadastre as senhas dos certs depois, pois a chave muda).");
+  if (seg.senha_admin_default)
+    problemas.push("Senha do admin no default 'admin123' — troque agora.");
+  if (seg.cors_wildcard)
+    problemas.push("CORS liberado pra qualquer origem (*) — restrinja ao domínio.");
+  if (seg.mock_ligado_em_producao)
+    problemas.push("Algum provedor (Focus/Integra/SEFAZ/Infosimples) está em MOCK em produção.");
+
+  const critico = seg.secret_key_default_ou_fraco || seg.senha_admin_default || seg.cors_wildcard;
+
+  if (problemas.length === 0) {
+    return (
+      <section className="panel" style={{ border: "1px solid rgba(34,197,94,0.4)", marginBottom: 16 }}>
+        <h3 style={{ margin: 0, color: "rgb(16,185,129)" }}>🔒 Segurança: config OK</h3>
+        <p className="muted" style={{ margin: "6px 0 0", fontSize: 13 }}>
+          SECRET_KEY forte, senha admin trocada, CORS restrito{seg.is_production ? "" : " (ambiente: " + seg.ambiente + ")"}.
+          Certificados protegidos com a chave atual.
+        </p>
+      </section>
+    );
+  }
+
+  return (
+    <section
+      className="panel"
+      style={{
+        border: critico ? "1px solid rgba(248,113,113,0.6)" : "1px solid rgba(245,158,11,0.5)",
+        marginBottom: 16,
+      }}
+    >
+      <h3 style={{ margin: 0, color: critico ? "rgb(248,113,113)" : "rgb(245,158,11)" }}>
+        {critico ? "🔴 Segurança: AÇÃO NECESSÁRIA" : "⚠️ Segurança: revisar"}
+      </h3>
+      <p className="muted" style={{ margin: "6px 0 10px", fontSize: 13 }}>
+        Config do servidor (ambiente: {seg.ambiente}). Corrija no env do Easypanel e rebuilde.
+      </p>
+      <ul style={{ display: "grid", gap: 6, listStyle: "none", padding: 0, margin: 0 }}>
+        {problemas.map((p, i) => (
+          <li key={i} className="toast toast-error" style={{ fontSize: 13 }}>{p}</li>
+        ))}
+      </ul>
+    </section>
   );
 }
