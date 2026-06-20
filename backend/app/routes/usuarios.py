@@ -44,18 +44,29 @@ def listar_usuarios(db: Session = Depends(get_db)) -> list[Usuario]:
 
 
 @router.get("/seguranca-diagnostico")
-def seguranca_diagnostico() -> dict:
+def seguranca_diagnostico(db: Session = Depends(get_db)) -> dict:
     """Diagnóstico de segurança da CONFIG (admin-only). NÃO devolve nenhum valor
     de segredo — só flags booleanas pra detectar config fraca em produção.
-    `true` em qualquer "_default"/"_fraco"/"_wildcard" = corrigir no env do servidor."""
+    `true` em qualquer "_fraco"/"_default"/"_wildcard" = corrigir no servidor."""
+    from app.services.auth_service import verify_password
+
     s = get_settings()
     sk = s.secret_key or ""
+    # RISCO REAL: algum admin ATIVO ainda loga com 'admin123'? (testa o hash do
+    # banco, não o env — assim trocar a senha pela tela já reflete aqui.)
+    admins = db.scalars(
+        select(Usuario).where(Usuario.is_admin.is_(True), Usuario.ativo.is_(True))
+    ).all()
+    admin_loga_com_123 = any(verify_password("admin123", a.senha_hash) for a in admins)
     return {
         "ambiente": s.app_env,
         "is_production": s.is_production,
         # CRÍTICO: assina JWT e cifra as senhas dos certs. Tem que ser forte e único.
         "secret_key_default_ou_fraco": sk in ("", "change-me") or len(sk) < 32,
-        "senha_admin_default": s.first_superuser_password == "admin123",
+        # true = EXISTE admin cuja senha REAL é 'admin123' (perigo de verdade).
+        "senha_admin_default": admin_loga_com_123,
+        # env ainda no default (cosmético: não recria admin123 num bootstrap futuro).
+        "env_senha_admin_default": s.first_superuser_password == "admin123",
         "cors_wildcard": "*" in s.cors_origins,
         "mock_ligado_em_producao": s.is_production and any([
             s.use_mock_focus_nfe, s.use_mock_integra, s.use_mock_sefaz, s.use_mock_infosimples,
