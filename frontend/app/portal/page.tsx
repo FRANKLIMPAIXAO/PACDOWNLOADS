@@ -18,6 +18,7 @@ import {
   portalDctfweb,
   portalDocumentos,
   portalDocumentosEscritorio,
+  portalDocumentosEmpresa,
   portalGuias,
   portalLogout,
   portalManifestarDoc,
@@ -29,6 +30,9 @@ import {
   portalStatusUploadSaidas,
   type DocEscritorio,
   type DocsEscritorio,
+  type DocEmpresa,
+  type DocsEmpresa,
+  type CertificadoEmpresa,
   type PortalCertidao,
   type PortalDashboard,
   type PortalDctfweb,
@@ -77,6 +81,35 @@ function tipoEscritorio(tipo: string): { label: string; cor: string } {
     case "comunicado": return { label: "Comunicado", cor: NAVY };
     default: return { label: "Documento", cor: GRAY };
   }
+}
+
+function tipoDocEmpresa(tipo: string): { label: string; cor: string } {
+  switch (tipo) {
+    case "contrato":
+    case "contrato_social": return { label: "Contrato social", cor: NAVY };
+    case "alteracao_contratual": return { label: "Alteração contratual", cor: NAVY };
+    case "estatuto": return { label: "Estatuto", cor: NAVY };
+    case "ata": return { label: "Ata", cor: NAVY };
+    case "alvara": return { label: "Alvará", cor: BLUE };
+    case "licenca": return { label: "Licença", cor: BLUE };
+    case "certificado": return { label: "Certificado digital", cor: ORANGE_TX };
+    case "procuracao": return { label: "Procuração", cor: GREEN };
+    case "inscricao": return { label: "Inscrição", cor: BLUE };
+    case "cartao_cnpj": return { label: "Cartão CNPJ", cor: BLUE };
+    default: return { label: "Documento", cor: GRAY };
+  }
+}
+
+// Cor/rótulo do vencimento do certificado digital.
+function statusCert(c: CertificadoEmpresa): { label: string; cor: string; urgente: boolean } {
+  if (c.status === "vencido") {
+    const d = Math.abs(c.dias_para_vencer);
+    return { label: `Vencido há ${d} dia${d === 1 ? "" : "s"}`, cor: RED, urgente: true };
+  }
+  if (c.status === "a_vencer") {
+    return { label: `Vence em ${c.dias_para_vencer} dia${c.dias_para_vencer === 1 ? "" : "s"}`, cor: ORANGE_TX, urgente: true };
+  }
+  return { label: `Válido — vence em ${c.dias_para_vencer} dias`, cor: GREEN, urgente: false };
 }
 
 function diasDesde(iso: string | null): number {
@@ -167,7 +200,7 @@ function Ranking({ items, cor }: { items: RankItem[]; cor: string }) {
   );
 }
 
-type View = "home" | "notas" | "documentos" | "indicadores" | "manifestar" | "guias" | "certidoes";
+type View = "home" | "notas" | "documentos" | "empresa" | "indicadores" | "manifestar" | "guias" | "certidoes";
 
 export default function PortalPage() {
   const router = useRouter();
@@ -176,6 +209,7 @@ export default function PortalPage() {
   const [resumo, setResumo] = useState<PortalResumo | null>(null);
   const [dash, setDash] = useState<PortalDashboard | null>(null);
   const [escritorio, setEscritorio] = useState<DocsEscritorio | null>(null);
+  const [docsEmpresa, setDocsEmpresa] = useState<DocsEmpresa | null>(null);
   const [certidoes, setCertidoes] = useState<PortalCertidao[] | null>(null);
   const [guias, setGuias] = useState<PortalGuiaDAS[]>([]);
   const [dctfweb, setDctfweb] = useState<PortalDctfweb[]>([]);
@@ -200,6 +234,10 @@ export default function PortalPage() {
     portalDocumentosEscritorio().then(setEscritorio).catch(() => { /* seção é opcional */ });
   }, []);
 
+  const carregarEmpresa = useCallback(() => {
+    portalDocumentosEmpresa().then(setDocsEmpresa).catch(() => { /* seção é opcional */ });
+  }, []);
+
   const carregarFiscal = useCallback(() => {
     portalCertidoes().then((r) => setCertidoes(r.certidoes)).catch(() => setCertidoes([]));
     portalGuias().then((r) => { setGuias(r.guias); setValorRecalc(r.valor_recalculo_extra); }).catch(() => { /* opcional */ });
@@ -210,8 +248,9 @@ export default function PortalPage() {
     if (!getPortalToken()) { router.replace("/portal/login"); return; }
     portalMe().then(setMe).catch(() => { portalLogout(); router.replace("/portal/login"); });
     carregarEscritorio();
+    carregarEmpresa();
     carregarFiscal();
-  }, [router, carregarEscritorio, carregarFiscal]);
+  }, [router, carregarEscritorio, carregarEmpresa, carregarFiscal]);
 
   async function recalcularGuia(g: PortalGuiaDAS, confirmar = false) {
     setGuiaBusy(`recalc-${g.id}`); setErro(null); setAviso(null);
@@ -274,6 +313,16 @@ export default function PortalPage() {
     try {
       await portalBaixarDocEscritorio(d.id, d.nome_arquivo || undefined);
       carregarEscritorio();
+    } catch (err) {
+      setErro(err instanceof ApiError ? err.message : "Falha ao baixar o documento.");
+    } finally { setBaixando(null); }
+  }
+
+  async function baixarDocEmpresa(d: DocEmpresa) {
+    setBaixando(`emp-${d.id}`); setErro(null);
+    try {
+      await portalBaixarDocEscritorio(d.id, d.nome_arquivo || undefined);
+      carregarEmpresa(); // re-busca pra atualizar o "lido"
     } catch (err) {
       setErro(err instanceof ApiError ? err.message : "Falha ao baixar o documento.");
     } finally { setBaixando(null); }
@@ -384,6 +433,8 @@ export default function PortalPage() {
     setView(v);
   }
 
+  const cert = docsEmpresa?.certificado ?? null;
+  const certUrgente = cert ? statusCert(cert).urgente : false;
   const docsVisiveis = docs.slice(0, MAX_LINHAS);
   const manifestaveis = docs.filter((d) => { const s = statusNota(d); return s.manifestar || s.aguardando; });
   const fatMax = Math.max(...(dash?.faturamento_mensal.map((f) => f.valor) || [1]), 1);
@@ -400,6 +451,7 @@ export default function PortalPage() {
       { id: "certidoes" as View, label: "Certidões", icon: "shield" },
     ] },
     { grupo: "Documentos", itens: [
+      { id: "empresa" as View, label: "Documentos da empresa", icon: "folder", badge: docsEmpresa?.nao_lidos || 0 },
       { id: "documentos" as View, label: "Do escritório", icon: "folder", badge: escritorio?.nao_lidos || 0 },
       { id: "manifestar" as View, label: "Manifestações", icon: "check", badge: aManifestar },
     ] },
@@ -532,6 +584,25 @@ export default function PortalPage() {
           {/* ===================== HOME ===================== */}
           {view === "home" ? (
             <>
+              {/* Alerta: certificado digital vencido / a vencer */}
+              {cert && certUrgente ? (
+                <button
+                  type="button"
+                  onClick={() => irPara("empresa")}
+                  className="pac-card"
+                  style={{
+                    width: "100%", textAlign: "left", cursor: "pointer", marginBottom: 14,
+                    borderLeft: `4px solid ${statusCert(cert).cor}`, display: "flex",
+                    justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap",
+                  }}
+                >
+                  <span style={{ color: NAVY, fontSize: 14 }}>
+                    🔐 Seu <strong>certificado digital</strong> {statusCert(cert).label.toLowerCase()} (validade {dataBR(cert.validade)}).
+                  </span>
+                  <span style={{ color: statusCert(cert).cor, fontWeight: 600, fontSize: 13 }}>Ver detalhes →</span>
+                </button>
+              ) : null}
+
               {filtroPeriodo(false)}
               {resumo ? (
                 <div className="pac-kpis">
@@ -564,6 +635,11 @@ export default function PortalPage() {
                   <Icon name="file" size={22} />
                   <div className="pac-atalho-tit">Minhas notas fiscais</div>
                   <div className="pac-atalho-sub">{resumo ? `${resumo.total_geral} notas · baixar XML/PDF/ZIP` : "Carregando..."}</div>
+                </button>
+                <button type="button" className="pac-atalho" onClick={() => irPara("empresa")}>
+                  <span style={{ color: NAVY }}><Icon name="folder" size={22} /></span>
+                  <div className="pac-atalho-tit">Documentos da empresa{docsEmpresa && docsEmpresa.nao_lidos > 0 ? <span className="pac-tag">{docsEmpresa.nao_lidos} novos</span> : null}</div>
+                  <div className="pac-atalho-sub">Contrato, alvará, certificado{cert ? ` · vence ${dataBR(cert.validade)}` : ""}</div>
                 </button>
                 <button type="button" className="pac-atalho" onClick={() => irPara("documentos")}>
                   <span style={{ color: NAVY }}><Icon name="folder" size={22} /></span>
@@ -682,6 +758,87 @@ export default function PortalPage() {
           ) : null}
 
           {/* ===================== DOCUMENTOS DO ESCRITÓRIO ===================== */}
+          {view === "empresa" ? (
+            <>
+              {tituloSecao("folder", "Documentos da empresa", docsEmpresa && docsEmpresa.nao_lidos > 0 ? <span className="pac-tag">{docsEmpresa.nao_lidos} novos</span> : undefined)}
+
+              {/* Certificado digital em destaque */}
+              {cert ? (
+                <div className="pac-card" style={{ marginBottom: 14, borderLeft: `4px solid ${statusCert(cert).cor}` }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
+                    <div>
+                      <h3 style={{ margin: "0 0 3px", color: NAVY, fontSize: 15 }}>🔐 Certificado digital (e-CNPJ A1)</h3>
+                      {cert.subject ? <div style={{ fontSize: 12.5, color: GRAY }}>{cert.subject}</div> : null}
+                      <div style={{ fontSize: 12.5, color: GRAY, marginTop: 2 }}>
+                        Validade: <strong>{dataBR(cert.validade)}</strong>
+                      </div>
+                    </div>
+                    <div style={{ textAlign: "right" }}>
+                      <div style={{ fontSize: 16, fontWeight: 700, color: statusCert(cert).cor }}>{statusCert(cert).label}</div>
+                      {statusCert(cert).urgente ? (
+                        <div style={{ fontSize: 12, color: statusCert(cert).cor, marginTop: 2 }}>
+                          ⚠️ Providencie a renovação com seu contador.
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="pac-card" style={{ marginBottom: 14 }}>
+                  <h3 style={{ margin: "0 0 3px", color: NAVY, fontSize: 15 }}>🔐 Certificado digital</h3>
+                  <p style={{ margin: 0, color: GRAY, fontSize: 13 }}>
+                    Sem data de validade de certificado cadastrada ainda. Assim que o escritório registrar, ela aparece aqui.
+                  </p>
+                </div>
+              )}
+
+              {/* Documentos cadastrais (contrato, alvará, etc.) */}
+              <div className="pac-card">
+                {!docsEmpresa ? (
+                  <p style={{ margin: 0, color: GRAY }}>Carregando...</p>
+                ) : docsEmpresa.documentos.length === 0 ? (
+                  <p style={{ margin: 0, color: GRAY }}>
+                    Nenhum documento ainda. Contrato social, alvarás, certificados e procurações enviados pelo escritório aparecem aqui.
+                  </p>
+                ) : (
+                  <div style={{ overflowX: "auto" }}>
+                    <table className="pac-table">
+                      <thead>
+                        <tr>
+                          <th>Tipo</th><th>Documento</th><th>Vencimento</th><th style={{ textAlign: "center" }}>Ação</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {docsEmpresa.documentos.map((d) => {
+                          const t = tipoDocEmpresa(d.tipo);
+                          return (
+                            <tr key={d.id}>
+                              <td>{pill(t.label, t.cor)}</td>
+                              <td>
+                                <span style={!d.lido ? { fontWeight: 500 } : undefined}>
+                                  {!d.lido ? "🔵 " : ""}{d.titulo}
+                                </span>
+                                {d.mensagem ? <div style={{ fontSize: 12, color: GRAY }}>{d.mensagem}</div> : null}
+                              </td>
+                              <td>{d.vencimento ? dataBR(d.vencimento) : "—"}</td>
+                              <td style={{ textAlign: "center", whiteSpace: "nowrap" }}>
+                                {d.tem_arquivo ? (
+                                  <button type="button" className="pac-btn pac-btn-ghost" onClick={() => baixarDocEmpresa(d)} disabled={baixando === `emp-${d.id}`}>
+                                    {baixando === `emp-${d.id}` ? "..." : "⬇ Baixar"}
+                                  </button>
+                                ) : <span style={{ color: GRAY }}>—</span>}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </>
+          ) : null}
+
           {view === "documentos" ? (
             <>
               {tituloSecao("folder", "Documentos do escritório", escritorio && escritorio.nao_lidos > 0 ? <span className="pac-tag">{escritorio.nao_lidos} novos</span> : undefined)}

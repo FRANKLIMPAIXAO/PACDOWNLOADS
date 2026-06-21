@@ -448,16 +448,32 @@ def portal_manifestar_lote(
 # Documentos do ESCRITÓRIO (entregues pelo PAC TAREFAS) — guias, relatórios,
 # comunicados. Separados das notas fiscais.
 # ---------------------------------------------------------------------------
+# Tipos de documento CADASTRAL/JURÍDICO da empresa (contrato, alvará, certificado…),
+# entregues pelo PAC TAREFAS. Ficam num card SEPARADO ("Documentos da empresa") e
+# por isso são EXCLUÍDOS da lista operacional "Do escritório" (guias/relatórios/
+# comunicados) — senão o mesmo doc apareceria em dois lugares.
+# Lista ordenada (não set) p/ o IN gerar SQL determinístico e cache estável.
+TIPOS_DOC_EMPRESA = [
+    "alteracao_contratual", "alvara", "ata", "cartao_cnpj", "certificado",
+    "contrato", "contrato_social", "documento", "estatuto", "inscricao",
+    "juridico", "licenca", "procuracao",
+]
+
+
 @router.get("/documentos-escritorio")
 def portal_documentos_escritorio(
     cliente: Usuario = Depends(get_current_cliente),
     db: Session = Depends(get_db),
 ) -> dict:
-    """Lista os documentos que o escritório entregou pra esta empresa + nº de
-    não lidos (pro badge)."""
+    """Lista os documentos OPERACIONAIS que o escritório entregou (guias/relatórios/
+    comunicados) + nº de não lidos (pro badge). Os documentos cadastrais (contrato,
+    alvará, certificado) saem aqui — vão no card 'Documentos da empresa'."""
     docs = list(db.scalars(
         select(DocumentoEscritorio)
-        .where(DocumentoEscritorio.empresa_id == cliente.empresa_id)
+        .where(
+            DocumentoEscritorio.empresa_id == cliente.empresa_id,
+            ~DocumentoEscritorio.tipo.in_(TIPOS_DOC_EMPRESA),
+        )
         .order_by(DocumentoEscritorio.enviado_em.desc())
         .limit(300)
     ).all())
@@ -509,6 +525,76 @@ def portal_baixar_documento_escritorio(
         media_type="application/octet-stream",
         headers={"Content-Disposition": f'attachment; filename="{nome}"'},
     )
+
+
+def _cert_empresa(empresa: Empresa | None, docs_cert: list[DocumentoEscritorio]) -> dict | None:
+    """Monta o bloco de vencimento do certificado digital. Fonte primária = o A1
+    carregado no PAC (`cert_a1_validade_ate`, autoritativo, lido do próprio .pfx).
+    Fallback = o vencimento de um documento tipo 'certificado' entregue pelo PAC
+    TAREFAS (caso a empresa não tenha o A1 carregado aqui). Nunca expõe a senha."""
+    from datetime import date as _date
+
+    validade = empresa.cert_a1_validade_ate if empresa else None
+    subject = empresa.cert_a1_subject if empresa else None
+    origem = "a1_pac"
+    if validade is None and docs_cert:
+        com_venc = [d for d in docs_cert if d.vencimento]
+        if com_venc:
+            d = max(com_venc, key=lambda x: x.vencimento)
+            validade, origem = d.vencimento, "documento"
+            subject = subject or d.titulo
+    if validade is None:
+        return None
+    dias = (validade - _date.today()).days
+    status = "vencido" if dias < 0 else ("a_vencer" if dias <= 30 else "valido")
+    return {
+        "validade": validade.isoformat(),
+        "dias_para_vencer": dias,
+        "subject": subject,
+        "status": status,
+        "origem": origem,
+    }
+
+
+@router.get("/documentos-empresa")
+def portal_documentos_empresa(
+    cliente: Usuario = Depends(get_current_cliente),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Documentos CADASTRAIS/JURÍDICOS da empresa (contrato, alvará, certificado…)
+    que o PAC TAREFAS entregou + o vencimento do certificado digital em destaque.
+    Isolado por empresa (empresa_id do TOKEN, nunca do request). Read-only — a
+    senha do certificado JAMAIS é exposta (só validade/titular)."""
+    empresa = db.get(Empresa, cliente.empresa_id)
+    docs = list(db.scalars(
+        select(DocumentoEscritorio)
+        .where(
+            DocumentoEscritorio.empresa_id == cliente.empresa_id,
+            DocumentoEscritorio.tipo.in_(TIPOS_DOC_EMPRESA),
+        )
+        .order_by(DocumentoEscritorio.enviado_em.desc())
+        .limit(300)
+    ).all())
+    docs_cert = [d for d in docs if d.tipo == "certificado"]
+    nao_lidos = sum(1 for d in docs if d.lido_em is None)
+    return {
+        "certificado": _cert_empresa(empresa, docs_cert),
+        "nao_lidos": nao_lidos,
+        "documentos": [
+            {
+                "id": d.id,
+                "tipo": d.tipo,
+                "titulo": d.titulo,
+                "mensagem": d.mensagem,
+                "vencimento": d.vencimento.isoformat() if d.vencimento else None,
+                "nome_arquivo": d.nome_arquivo,
+                "tem_arquivo": bool(d.arquivo_path),
+                "enviado_em": d.enviado_em.isoformat() if d.enviado_em else None,
+                "lido": d.lido_em is not None,
+            }
+            for d in docs
+        ],
+    }
 
 
 # ---------------------------------------------------------------------------

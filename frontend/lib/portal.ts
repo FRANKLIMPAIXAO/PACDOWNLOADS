@@ -99,6 +99,33 @@ export type DocEscritorio = {
 };
 export type DocsEscritorio = { nao_lidos: number; documentos: DocEscritorio[] };
 
+/** Vencimento do certificado digital (A1 carregado no PAC, ou fallback de um
+ * documento tipo 'certificado' do PAC TAREFAS). Senha NUNCA vem. */
+export type CertificadoEmpresa = {
+  validade: string;
+  dias_para_vencer: number;
+  subject: string | null;
+  status: "valido" | "a_vencer" | "vencido";
+  origem: "a1_pac" | "documento";
+};
+/** Documento cadastral/jurídico da empresa (contrato, alvará, certificado…). */
+export type DocEmpresa = {
+  id: number;
+  tipo: string;
+  titulo: string;
+  mensagem: string | null;
+  vencimento: string | null;
+  nome_arquivo: string | null;
+  tem_arquivo: boolean;
+  enviado_em: string | null;
+  lido: boolean;
+};
+export type DocsEmpresa = {
+  certificado: CertificadoEmpresa | null;
+  nao_lidos: number;
+  documentos: DocEmpresa[];
+};
+
 export type PortalCertidao = {
   id: number;
   tipo: string;
@@ -270,6 +297,12 @@ export function portalManifestarLote(limite = 20) {
 /** Documentos que o escritório entregou (guias/relatórios/comunicados via PAC TAREFAS). */
 export function portalDocumentosEscritorio() {
   return portalFetch<DocsEscritorio>("/api/v1/portal/documentos-escritorio");
+}
+
+/** Documentos cadastrais da empresa (contrato, alvará, certificado…) + vencimento
+ * do certificado digital em destaque. Vêm do PAC TAREFAS. */
+export function portalDocumentosEmpresa() {
+  return portalFetch<DocsEmpresa>("/api/v1/portal/documentos-empresa");
 }
 
 /** Baixa um documento entregue pelo escritório (marca como lido). */

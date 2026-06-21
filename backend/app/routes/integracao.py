@@ -39,7 +39,16 @@ def _checar_api_key(x_api_key: str = Header(default="")) -> None:
 
 class EntregarDocumento(BaseModel):
     cnpj: str = Field(..., description="CNPJ do cliente (com ou sem máscara)")
-    tipo: str = Field("outro", description="guia | relatorio | comunicado | outro")
+    tipo: str = Field(
+        "outro",
+        description=(
+            "Operacional: guia | relatorio | comunicado | outro. "
+            "Cadastral (vai no card 'Documentos da empresa' do portal): contrato | "
+            "contrato_social | alteracao_contratual | estatuto | ata | alvara | "
+            "licenca | certificado | procuracao | inscricao | cartao_cnpj | documento. "
+            "Para 'certificado', mande `vencimento` = validade do certificado."
+        ),
+    )
     titulo: str = Field(..., max_length=255)
     mensagem: str | None = None
     competencia: str | None = Field(None, description="AAAA-MM (guias)")
