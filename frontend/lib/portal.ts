@@ -163,6 +163,37 @@ export function portalLogout(): void {
   setPortalToken(null);
 }
 
+export type UploadSaidasResp = {
+  total_arquivos: number;
+  persistidos: number;
+  duplicados: number;
+  fora_do_escopo: number;
+  nao_cadastrada: number;
+  erros: number;
+};
+
+/** Cliente sobe XMLs/ZIP das próprias notas (saída de qualquer estado). Multipart
+ * — NÃO usa portalFetch (que força JSON); deixa o browser pôr o boundary. */
+export async function portalUploadSaidas(file: File): Promise<UploadSaidasResp> {
+  const fd = new FormData();
+  fd.append("arquivo", file);
+  const token = getPortalToken();
+  const res = await fetch(`${API_BASE_URL}/api/v1/portal/upload-saidas`, {
+    method: "POST",
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: fd,
+  });
+  const text = await res.text();
+  let payload: unknown = null;
+  if (text) { try { payload = JSON.parse(text); } catch { payload = text; } }
+  if (!res.ok) {
+    const detail = payload && typeof payload === "object" && payload !== null && "detail" in payload
+      ? (payload as { detail: unknown }).detail : payload;
+    throw new ApiError(res.status, detail, typeof detail === "string" ? detail : `Erro ${res.status}`);
+  }
+  return payload as UploadSaidasResp;
+}
+
 /** Cliente define a senha a partir do token do convite (link do e-mail) e já
  * fica logado (guarda o token do portal). Público (skipAuth). */
 export async function portalDefinirSenha(token: string, senha: string): Promise<void> {

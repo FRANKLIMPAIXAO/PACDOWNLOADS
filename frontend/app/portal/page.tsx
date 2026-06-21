@@ -25,6 +25,7 @@ import {
   portalMe,
   portalResumo,
   portalSyncGuias,
+  portalUploadSaidas,
   type DocEscritorio,
   type DocsEscritorio,
   type PortalCertidao,
@@ -35,6 +36,7 @@ import {
   type PortalMe,
   type PortalResumo,
   type RankItem,
+  type UploadSaidasResp,
 } from "../../lib/portal";
 
 // ---- Marca PAC ----
@@ -189,6 +191,8 @@ export default function PortalPage() {
   const [baixando, setBaixando] = useState<string | null>(null);
   const [zipBusy, setZipBusy] = useState(false);
   const [manifBusy, setManifBusy] = useState<string | null>(null);
+  const [uploadBusy, setUploadBusy] = useState(false);
+  const [uploadResult, setUploadResult] = useState<UploadSaidasResp | null>(null);
 
   const carregarEscritorio = useCallback(() => {
     portalDocumentosEscritorio().then(setEscritorio).catch(() => { /* seção é opcional */ });
@@ -308,6 +312,20 @@ export default function PortalPage() {
     } catch (err) {
       setErro(err instanceof ApiError ? err.message : "Falha ao baixar o ZIP.");
     } finally { setZipBusy(false); }
+  }
+
+  async function handleUploadSaidas(file: File | null) {
+    if (!file) return;
+    setUploadBusy(true); setErro(null); setUploadResult(null);
+    try {
+      const r = await portalUploadSaidas(file);
+      setUploadResult(r);
+      if (r.persistidos > 0) await carregar(); // notas novas já aparecem
+    } catch (err) {
+      setErro(err instanceof ApiError ? err.message : "Falha ao enviar o arquivo.");
+    } finally {
+      setUploadBusy(false);
+    }
   }
 
   async function manifestarDoc(doc: PortalDocumento) {
@@ -554,6 +572,39 @@ export default function PortalPage() {
           {view === "notas" ? (
             <>
               {tituloSecao("file", "Minhas notas fiscais")}
+
+              <div className="pac-card" style={{ marginBottom: 14 }}>
+                <h3 style={{ margin: "0 0 4px", color: NAVY, fontSize: 15 }}>📤 Subir notas de saída (qualquer estado)</h3>
+                <p style={{ margin: "0 0 12px", color: GRAY, fontSize: 13 }}>
+                  Exporte o ZIP de XMLs do seu emissor e solte aqui — as notas entram automaticamente.
+                  Só são aceitas notas da <strong>sua</strong> empresa.
+                </p>
+                <label
+                  style={{
+                    display: "inline-block", background: ORANGE, color: "#fff", fontWeight: 500,
+                    padding: "10px 18px", borderRadius: 9, cursor: uploadBusy ? "not-allowed" : "pointer",
+                    opacity: uploadBusy ? 0.6 : 1, fontSize: 14,
+                  }}
+                >
+                  {uploadBusy ? "Enviando…" : "Escolher arquivo (.zip ou .xml)"}
+                  <input
+                    type="file" accept=".zip,.xml" style={{ display: "none" }} disabled={uploadBusy}
+                    onChange={(e) => { handleUploadSaidas(e.target.files?.[0] || null); e.target.value = ""; }}
+                  />
+                </label>
+                {uploadResult ? (
+                  <div style={{ marginTop: 12, fontSize: 13.5, color: GREEN }}>
+                    ✅ {uploadResult.persistidos} nota(s) importada(s) · {uploadResult.duplicados} já existiam
+                    {uploadResult.fora_do_escopo > 0 ? (
+                      <span style={{ color: ORANGE_TX }}> · {uploadResult.fora_do_escopo} ignorada(s) (não são da sua empresa)</span>
+                    ) : null}
+                    {uploadResult.nao_cadastrada > 0 ? (
+                      <span style={{ color: GRAY }}> · {uploadResult.nao_cadastrada} sem empresa cadastrada</span>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+
               {filtroPeriodo(true)}
               <div className="pac-card">
                 <div className="pac-toolbar">

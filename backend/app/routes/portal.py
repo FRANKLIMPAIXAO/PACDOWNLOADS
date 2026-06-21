@@ -17,7 +17,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy import desc, func, select
 
@@ -81,6 +81,69 @@ def definir_senha(payload: DefinirSenha, db: Session = Depends(get_db)) -> Token
     user.ativo = True
     db.commit()
     return TokenResponse(access_token=create_access_token(user.email))
+
+
+# Teto do upload de saídas no portal (ZIP de varejo pode ter milhares de XMLs;
+# 50 MB cobre com folga e barra abuso/DoS de cliente externo).
+MAX_UPLOAD_SAIDAS = 50 * 1024 * 1024
+
+
+@router.post("/upload-saidas")
+async def portal_upload_saidas(
+    arquivo: UploadFile = File(..., description="ZIP com XMLs OU um XML"),
+    cliente: Usuario = Depends(get_current_cliente),
+    db: Session = Depends(get_db),
+) -> dict:
+    """O CLIENTE sobe os XMLs das próprias notas (saída/entrada) de QUALQUER estado.
+
+    ISOLAMENTO multi-tenant (regra de ouro): só grava notas DESTA empresa — o
+    `empresa_id` vem do TOKEN (get_current_cliente), NUNCA do request. Nota de
+    outra empresa é PULADA (fora_do_escopo) e a resposta é um RESUMO (não vaza
+    razão/CNPJ de outra empresa). SEM `empresa_id_fallback` de propósito: XML de
+    CNPJ não-cadastrado NÃO é atribuído a este cliente."""
+    from starlette.concurrency import run_in_threadpool
+
+    from app.services.upload_xml_service import UploadXmlService
+
+    if not arquivo.filename:
+        raise HTTPException(status_code=400, detail="Arquivo sem nome.")
+    nome = arquivo.filename.lower()
+    if not (nome.endswith(".zip") or nome.endswith(".xml")):
+        raise HTTPException(status_code=400, detail="Envie um arquivo .xml ou .zip.")
+    tam = getattr(arquivo, "size", None)
+    if tam is not None and tam > MAX_UPLOAD_SAIDAS:
+        raise HTTPException(status_code=400, detail="Arquivo grande demais (máx 50 MB).")
+    content = await arquivo.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Arquivo vazio.")
+    if len(content) > MAX_UPLOAD_SAIDAS:
+        raise HTTPException(status_code=400, detail="Arquivo grande demais (máx 50 MB).")
+
+    svc = UploadXmlService(db)
+    if nome.endswith(".zip"):
+        r = await run_in_threadpool(
+            svc.processar_zip, content, restringir_empresa_id=cliente.empresa_id,
+        )
+    else:
+        r = await run_in_threadpool(
+            svc.processar_xmls, [(arquivo.filename, content)],
+            restringir_empresa_id=cliente.empresa_id,
+        )
+
+    # Auditoria SEM dado sensível (quem subiu o quê, quanto).
+    logger.info(
+        "AUDITORIA portal-upload-saidas: empresa=%s arquivos=%s persistidos=%s fora_escopo=%s",
+        cliente.empresa_id, r.total_arquivos, r.persistidos, r.fora_do_escopo,
+    )
+    # Resposta = RESUMO. Não devolve `detalhes` (poderiam conter dado de terceiros).
+    return {
+        "total_arquivos": r.total_arquivos,
+        "persistidos": r.persistidos,
+        "duplicados": r.duplicados,
+        "fora_do_escopo": r.fora_do_escopo,
+        "nao_cadastrada": r.empresa_nao_cadastrada,
+        "erros": r.erros,
+    }
 
 
 @router.get("/me")

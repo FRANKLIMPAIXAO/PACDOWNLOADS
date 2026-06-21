@@ -45,6 +45,9 @@ class UploadResultado:
     persistidos: int = 0
     duplicados: int = 0
     empresa_nao_cadastrada: int = 0
+    # XMLs pulados por ISOLAMENTO multi-tenant: nota de OUTRA empresa enviada num
+    # upload restrito (ex.: cliente no portal subindo nota que não é dele).
+    fora_do_escopo: int = 0
     erros: int = 0
     detalhes: list[UploadDetalhe] = field(default_factory=list)
 
@@ -126,8 +129,13 @@ class UploadXmlService:
         zip_bytes: bytes,
         *,
         empresa_id_fallback: int | None = None,
+        restringir_empresa_id: int | None = None,
     ) -> UploadResultado:
-        """Descompacta ZIP em memória e processa cada XML."""
+        """Descompacta ZIP em memória e processa cada XML.
+
+        `restringir_empresa_id`: ISOLAMENTO multi-tenant — quando setado, SÓ grava
+        notas dessa empresa; nota de outra é PULADA (fora_do_escopo). Usado no
+        upload pelo PORTAL do cliente (default None = sem restrição, robô/escritório)."""
         resultado = UploadResultado()
         try:
             zf = zipfile.ZipFile(io.BytesIO(zip_bytes))
@@ -154,6 +162,7 @@ class UploadXmlService:
                 continue
             self._processar_xml(
                 info.filename, xml_bytes, empresa_id_fallback, resultado,
+                restringir_empresa_id=restringir_empresa_id,
             )
         return resultado
 
@@ -162,6 +171,7 @@ class UploadXmlService:
         arquivos: list[tuple[str, bytes]],
         *,
         empresa_id_fallback: int | None = None,
+        restringir_empresa_id: int | None = None,
     ) -> UploadResultado:
         """Processa lista de (filename, bytes)."""
         resultado = UploadResultado()
@@ -169,7 +179,10 @@ class UploadXmlService:
             if not nome.lower().endswith(".xml"):
                 continue
             resultado.total_arquivos += 1
-            self._processar_xml(nome, content, empresa_id_fallback, resultado)
+            self._processar_xml(
+                nome, content, empresa_id_fallback, resultado,
+                restringir_empresa_id=restringir_empresa_id,
+            )
         return resultado
 
     def _processar_xml(
@@ -178,6 +191,8 @@ class UploadXmlService:
         xml_bytes: bytes,
         empresa_id_fallback: int | None,
         resultado: UploadResultado,
+        *,
+        restringir_empresa_id: int | None = None,
     ) -> None:
         det = UploadDetalhe(arquivo=nome)
         try:
@@ -243,6 +258,18 @@ class UploadXmlService:
             )
             det.empresa_cnpj = cnpj_emitente or cnpj_destinatario
             resultado.empresa_nao_cadastrada += 1
+            resultado.detalhes.append(det)
+            return
+
+        # ISOLAMENTO MULTI-TENANT: upload RESTRITO (portal do cliente) só grava
+        # nota da PRÓPRIA empresa. Nota resolvida pra OUTRA empresa é PULADA — não
+        # grava e NÃO vaza dados (razão/CNPJ) da outra empresa na resposta.
+        if restringir_empresa_id is not None and empresa.id != restringir_empresa_id:
+            det.status = "fora_do_escopo"
+            det.mensagem = "Documento não pertence a esta empresa — ignorado."
+            det.empresa_id = None
+            det.empresa_cnpj = None
+            resultado.fora_do_escopo += 1
             resultado.detalhes.append(det)
             return
 
