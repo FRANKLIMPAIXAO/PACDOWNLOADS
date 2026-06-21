@@ -172,9 +172,19 @@ export type UploadSaidasResp = {
   erros: number;
 };
 
+export type UploadSaidasJob = {
+  status: "rodando" | "concluido" | "erro";
+  feitas: number;
+  total: number;
+  resultado?: UploadSaidasResp;
+  erro?: string;
+};
+
 /** Cliente sobe XMLs/ZIP das próprias notas (saída de qualquer estado). Multipart
- * — NÃO usa portalFetch (que força JSON); deixa o browser pôr o boundary. */
-export async function portalUploadSaidas(file: File): Promise<UploadSaidasResp> {
+ * — NÃO usa portalFetch (que força JSON); deixa o browser pôr o boundary. O upload
+ * roda em BACKGROUND (varejo = milhares de NFC-e), então volta só o job_id e o
+ * front faz polling em portalStatusUploadSaidas. */
+export async function portalUploadSaidas(file: File): Promise<{ job_id: string }> {
   const fd = new FormData();
   fd.append("arquivo", file);
   const token = getPortalToken();
@@ -191,7 +201,12 @@ export async function portalUploadSaidas(file: File): Promise<UploadSaidasResp> 
       ? (payload as { detail: unknown }).detail : payload;
     throw new ApiError(res.status, detail, typeof detail === "string" ? detail : `Erro ${res.status}`);
   }
-  return payload as UploadSaidasResp;
+  return payload as { job_id: string };
+}
+
+/** Consulta o progresso do upload em background (X/N + resultado final). */
+export function portalStatusUploadSaidas(jobId: string) {
+  return portalFetch<UploadSaidasJob>(`/api/v1/portal/upload-saidas/status/${jobId}`);
 }
 
 /** Cliente define a senha a partir do token do convite (link do e-mail) e já

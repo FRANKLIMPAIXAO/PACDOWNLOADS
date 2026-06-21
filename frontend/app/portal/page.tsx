@@ -26,6 +26,7 @@ import {
   portalResumo,
   portalSyncGuias,
   portalUploadSaidas,
+  portalStatusUploadSaidas,
   type DocEscritorio,
   type DocsEscritorio,
   type PortalCertidao,
@@ -193,6 +194,7 @@ export default function PortalPage() {
   const [manifBusy, setManifBusy] = useState<string | null>(null);
   const [uploadBusy, setUploadBusy] = useState(false);
   const [uploadResult, setUploadResult] = useState<UploadSaidasResp | null>(null);
+  const [uploadProg, setUploadProg] = useState<{ feitas: number; total: number } | null>(null);
 
   const carregarEscritorio = useCallback(() => {
     portalDocumentosEscritorio().then(setEscritorio).catch(() => { /* seção é opcional */ });
@@ -316,11 +318,35 @@ export default function PortalPage() {
 
   async function handleUploadSaidas(file: File | null) {
     if (!file) return;
-    setUploadBusy(true); setErro(null); setUploadResult(null);
+    setUploadBusy(true); setErro(null); setUploadResult(null); setUploadProg(null);
     try {
-      const r = await portalUploadSaidas(file);
-      setUploadResult(r);
-      if (r.persistidos > 0) await carregar(); // notas novas já aparecem
+      // Upload em BACKGROUND: o POST volta na hora (job_id) e a gente faz polling
+      // até concluir. Varejo (milhares de NFC-e) não estoura mais o Traefik (60s).
+      const { job_id } = await portalUploadSaidas(file);
+      const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms));
+      // Poll a cada 2s; teto generoso (~20min) p/ ZIP gigante de supermercado.
+      for (let i = 0; i < 600; i++) {
+        await sleep(2000);
+        let job;
+        try {
+          job = await portalStatusUploadSaidas(job_id);
+        } catch {
+          continue; // hiccup de rede transitório — tenta de novo
+        }
+        setUploadProg({ feitas: job.feitas, total: job.total });
+        if (job.status === "concluido" && job.resultado) {
+          setUploadResult(job.resultado);
+          setUploadProg(null);
+          if (job.resultado.persistidos > 0) await carregar(); // notas novas já aparecem
+          return;
+        }
+        if (job.status === "erro") {
+          setErro(`Falha ao processar: ${job.erro || "erro desconhecido"}`);
+          setUploadProg(null);
+          return;
+        }
+      }
+      setErro("O processamento está demorando mais que o esperado. As notas continuam sendo importadas — atualize a página em alguns minutos.");
     } catch (err) {
       setErro(err instanceof ApiError ? err.message : "Falha ao enviar o arquivo.");
     } finally {
@@ -586,12 +612,41 @@ export default function PortalPage() {
                     opacity: uploadBusy ? 0.6 : 1, fontSize: 14,
                   }}
                 >
-                  {uploadBusy ? "Enviando…" : "Escolher arquivo (.zip ou .xml)"}
+                  {uploadBusy ? "Importando…" : "Escolher arquivo (.zip ou .xml)"}
                   <input
                     type="file" accept=".zip,.xml" style={{ display: "none" }} disabled={uploadBusy}
                     onChange={(e) => { handleUploadSaidas(e.target.files?.[0] || null); e.target.value = ""; }}
                   />
                 </label>
+                {uploadBusy ? (
+                  <div style={{ marginTop: 12 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, color: GRAY, marginBottom: 5 }}>
+                      <span>
+                        {uploadProg && uploadProg.total > 0
+                          ? `Processando ${uploadProg.feitas.toLocaleString("pt-BR")} de ${uploadProg.total.toLocaleString("pt-BR")} notas…`
+                          : "Lendo o arquivo… (pode levar alguns minutos em ZIP grande de varejo)"}
+                      </span>
+                      {uploadProg && uploadProg.total > 0 ? (
+                        <span>{Math.floor((uploadProg.feitas / uploadProg.total) * 100)}%</span>
+                      ) : null}
+                    </div>
+                    <div style={{ height: 8, borderRadius: 6, background: "#e6e9f0", overflow: "hidden" }}>
+                      <div
+                        style={{
+                          height: "100%",
+                          width: uploadProg && uploadProg.total > 0
+                            ? `${Math.min(100, Math.floor((uploadProg.feitas / uploadProg.total) * 100))}%`
+                            : "15%",
+                          background: ORANGE,
+                          transition: "width 0.4s ease",
+                        }}
+                      />
+                    </div>
+                    <p style={{ margin: "7px 0 0", fontSize: 12, color: GRAY }}>
+                      Pode fechar esta aba — a importação continua no servidor.
+                    </p>
+                  </div>
+                ) : null}
                 {uploadResult ? (
                   <div style={{ marginTop: 12, fontSize: 13.5, color: GREEN }}>
                     ✅ {uploadResult.persistidos} nota(s) importada(s) · {uploadResult.duplicados} já existiam

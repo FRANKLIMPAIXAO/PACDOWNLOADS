@@ -12,6 +12,8 @@ posse do documento.
 from __future__ import annotations
 
 import logging
+import threading
+import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -24,7 +26,7 @@ from sqlalchemy import desc, func, select
 logger = logging.getLogger("pac.portal")
 from sqlalchemy.orm import Session
 
-from app.database import get_db
+from app.database import SessionLocal, get_db
 from app.models.certidao import Certidao, TipoCertidao
 from app.models.cobranca_portal import CobrancaPortal
 from app.models.documento_escritorio import DocumentoEscritorio
@@ -87,24 +89,67 @@ def definir_senha(payload: DefinirSenha, db: Session = Depends(get_db)) -> Token
 # 50 MB cobre com folga e barra abuso/DoS de cliente externo).
 MAX_UPLOAD_SAIDAS = 50 * 1024 * 1024
 
+# Jobs do upload de saídas (eager, --workers 1). Varejo = milhares de NFC-e: o
+# parse demora minutos e estouraria o Traefik (60s) se fosse síncrono. Então roda
+# em BACKGROUND (thread daemon + polling), igual o SITFIS/transmissão.
+_UPLOAD_JOBS: dict[str, dict] = {}
+_UPLOAD_LOCK = threading.Lock()
+
+
+def _rodar_upload_saidas(job_id: str, content: bytes, nome: str, empresa_id: int) -> None:
+    """Processa o ZIP/XML em background, escopado à empresa do cliente. Atualiza o
+    progresso no dict compartilhado. Resiliente: erro vira status=erro, não crash."""
+    from app.services.upload_xml_service import UploadXmlService
+
+    db = SessionLocal()
+    try:
+        def _prog(feitas: int, total: int) -> None:
+            with _UPLOAD_LOCK:
+                _UPLOAD_JOBS[job_id]["feitas"] = feitas
+                _UPLOAD_JOBS[job_id]["total"] = total
+
+        svc = UploadXmlService(db)
+        if nome.endswith(".zip"):
+            r = svc.processar_zip(content, restringir_empresa_id=empresa_id, on_progress=_prog)
+        else:
+            r = svc.processar_xmls([(nome, content)], restringir_empresa_id=empresa_id)
+        logger.info(
+            "AUDITORIA portal-upload-saidas: empresa=%s arquivos=%s persistidos=%s fora_escopo=%s",
+            empresa_id, r.total_arquivos, r.persistidos, r.fora_do_escopo,
+        )
+        with _UPLOAD_LOCK:
+            _UPLOAD_JOBS[job_id].update({
+                "status": "concluido",
+                # RESUMO só — sem detalhes (não vaza dado de terceiros).
+                "resultado": {
+                    "total_arquivos": r.total_arquivos,
+                    "persistidos": r.persistidos,
+                    "duplicados": r.duplicados,
+                    "fora_do_escopo": r.fora_do_escopo,
+                    "nao_cadastrada": r.empresa_nao_cadastrada,
+                    "erros": r.erros,
+                },
+            })
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Upload de saídas do portal falhou (empresa %s)", empresa_id)
+        with _UPLOAD_LOCK:
+            _UPLOAD_JOBS[job_id].update({"status": "erro", "erro": str(exc)[:300]})
+    finally:
+        db.close()
+
 
 @router.post("/upload-saidas")
 async def portal_upload_saidas(
     arquivo: UploadFile = File(..., description="ZIP com XMLs OU um XML"),
     cliente: Usuario = Depends(get_current_cliente),
-    db: Session = Depends(get_db),
 ) -> dict:
     """O CLIENTE sobe os XMLs das próprias notas (saída/entrada) de QUALQUER estado.
+    Roda em BACKGROUND (varejo = milhares de NFC-e); responde com job_id e o front
+    faz polling em /upload-saidas/status/{job_id}.
 
-    ISOLAMENTO multi-tenant (regra de ouro): só grava notas DESTA empresa — o
-    `empresa_id` vem do TOKEN (get_current_cliente), NUNCA do request. Nota de
-    outra empresa é PULADA (fora_do_escopo) e a resposta é um RESUMO (não vaza
-    razão/CNPJ de outra empresa). SEM `empresa_id_fallback` de propósito: XML de
-    CNPJ não-cadastrado NÃO é atribuído a este cliente."""
-    from starlette.concurrency import run_in_threadpool
-
-    from app.services.upload_xml_service import UploadXmlService
-
+    ISOLAMENTO multi-tenant: só grava notas DESTA empresa — `restringir_empresa_id`
+    vem do TOKEN (get_current_cliente), NUNCA do request. SEM `empresa_id_fallback`
+    (XML de CNPJ não-cadastrado NÃO é atribuído ao cliente)."""
     if not arquivo.filename:
         raise HTTPException(status_code=400, detail="Arquivo sem nome.")
     nome = arquivo.filename.lower()
@@ -119,31 +164,33 @@ async def portal_upload_saidas(
     if len(content) > MAX_UPLOAD_SAIDAS:
         raise HTTPException(status_code=400, detail="Arquivo grande demais (máx 50 MB).")
 
-    svc = UploadXmlService(db)
-    if nome.endswith(".zip"):
-        r = await run_in_threadpool(
-            svc.processar_zip, content, restringir_empresa_id=cliente.empresa_id,
-        )
-    else:
-        r = await run_in_threadpool(
-            svc.processar_xmls, [(arquivo.filename, content)],
-            restringir_empresa_id=cliente.empresa_id,
-        )
+    job_id = uuid.uuid4().hex
+    with _UPLOAD_LOCK:
+        _UPLOAD_JOBS[job_id] = {
+            "status": "rodando", "feitas": 0, "total": 0,
+            "empresa_id": cliente.empresa_id,
+        }
+    threading.Thread(
+        target=_rodar_upload_saidas,
+        args=(job_id, content, nome, cliente.empresa_id),
+        daemon=True,
+    ).start()
+    return {"job_id": job_id}
 
-    # Auditoria SEM dado sensível (quem subiu o quê, quanto).
-    logger.info(
-        "AUDITORIA portal-upload-saidas: empresa=%s arquivos=%s persistidos=%s fora_escopo=%s",
-        cliente.empresa_id, r.total_arquivos, r.persistidos, r.fora_do_escopo,
-    )
-    # Resposta = RESUMO. Não devolve `detalhes` (poderiam conter dado de terceiros).
-    return {
-        "total_arquivos": r.total_arquivos,
-        "persistidos": r.persistidos,
-        "duplicados": r.duplicados,
-        "fora_do_escopo": r.fora_do_escopo,
-        "nao_cadastrada": r.empresa_nao_cadastrada,
-        "erros": r.erros,
-    }
+
+@router.get("/upload-saidas/status/{job_id}")
+def portal_upload_saidas_status(
+    job_id: str,
+    cliente: Usuario = Depends(get_current_cliente),
+) -> dict:
+    with _UPLOAD_LOCK:
+        job = _UPLOAD_JOBS.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Upload não encontrado (pode ter reiniciado).")
+        # ISOLAMENTO: o cliente só vê o próprio job (não o de outra empresa).
+        if job.get("empresa_id") != cliente.empresa_id:
+            raise HTTPException(status_code=404, detail="Upload não encontrado.")
+        return {k: v for k, v in job.items() if k != "empresa_id"}
 
 
 @router.get("/me")

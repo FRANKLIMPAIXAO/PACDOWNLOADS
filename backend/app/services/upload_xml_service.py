@@ -130,12 +130,15 @@ class UploadXmlService:
         *,
         empresa_id_fallback: int | None = None,
         restringir_empresa_id: int | None = None,
+        on_progress=None,
     ) -> UploadResultado:
         """Descompacta ZIP em memória e processa cada XML.
 
         `restringir_empresa_id`: ISOLAMENTO multi-tenant — quando setado, SÓ grava
         notas dessa empresa; nota de outra é PULADA (fora_do_escopo). Usado no
-        upload pelo PORTAL do cliente (default None = sem restrição, robô/escritório)."""
+        upload pelo PORTAL do cliente (default None = sem restrição, robô/escritório).
+        `on_progress(feitas, total)`: callback opcional p/ barra de progresso (varejo
+        com milhares de NFC-e demora minutos — o portal sobe em background)."""
         resultado = UploadResultado()
         try:
             zf = zipfile.ZipFile(io.BytesIO(zip_bytes))
@@ -146,9 +149,14 @@ class UploadXmlService:
             ))
             return resultado
 
-        for info in zf.infolist():
-            if info.is_dir() or not info.filename.lower().endswith(".xml"):
-                continue
+        entradas = [
+            i for i in zf.infolist()
+            if not i.is_dir() and i.filename.lower().endswith(".xml")
+        ]
+        total = len(entradas)
+        if on_progress:
+            on_progress(0, total)
+        for idx, info in enumerate(entradas, 1):
             resultado.total_arquivos += 1
             try:
                 xml_bytes = zf.read(info)
@@ -159,11 +167,14 @@ class UploadXmlService:
                     status="erro",
                     mensagem=f"Falha ao ler do ZIP: {exc}",
                 ))
-                continue
-            self._processar_xml(
-                info.filename, xml_bytes, empresa_id_fallback, resultado,
-                restringir_empresa_id=restringir_empresa_id,
-            )
+            else:
+                self._processar_xml(
+                    info.filename, xml_bytes, empresa_id_fallback, resultado,
+                    restringir_empresa_id=restringir_empresa_id,
+                )
+            # Reporta a cada 25 (ou no fim) pra não martelar o lock.
+            if on_progress and (idx % 25 == 0 or idx == total):
+                on_progress(idx, total)
         return resultado
 
     def processar_xmls(
