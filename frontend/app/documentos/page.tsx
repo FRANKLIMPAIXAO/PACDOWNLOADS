@@ -29,7 +29,7 @@ import { Empresa, listarEmpresas } from "../../lib/empresas";
 import { dfeDistribuirLote, dfeElegiveis, dfeManifestar, dfeManifestarDoc } from "../../lib/dfe";
 import { cteDistribuirLote, cteElegiveis } from "../../lib/cte";
 import { nfseElegiveis, nfseSincronizar } from "../../lib/nfse";
-import { conectorEmailProcessar, conectorEmailStatus } from "../../lib/conector-email";
+import { conectorEmailProcessar, conectorEmailStatus, conectorEmailExecucoes, type ConectorEmailExecucao } from "../../lib/conector-email";
 
 const TIPOS: TipoDocumento[] = ["NFE", "CTE", "NFSE"];
 
@@ -69,6 +69,7 @@ function DocumentosContent() {
   const [syncFocusModalOpen, setSyncFocusModalOpen] = useState(false);
   const [dfeBusy, setDfeBusy] = useState(false);
   const [dfeMsg, setDfeMsg] = useState<string | null>(null);
+  const [relatorioOpen, setRelatorioOpen] = useState(false);
 
   // Conector de SAÍDAS por e-mail (Nível 2): lê a caixa notas@pacgestao.com.br,
   // importa os anexos e roteia por CNPJ. Roda em background no servidor (polling).
@@ -839,6 +840,15 @@ function DocumentosContent() {
         >
           {dfeBusy ? "..." : "📧 Ler notas por e-mail"}
         </button>
+        <button
+          type="button"
+          className="btn-secondary"
+          onClick={() => setRelatorioOpen(true)}
+          title="Relatório das leituras automáticas da caixa de e-mail (quando rodou, quais empresas, erros)"
+          style={{ alignSelf: "end" }}
+        >
+          📋 Relatório de e-mails
+        </button>
         <div className="page-actions form-grid" style={{ gridTemplateColumns: "200px 100px 140px 140px 140px" }}>
           <label>
             <span>Empresa</span>
@@ -909,6 +919,10 @@ function DocumentosContent() {
           onClose={() => setSyncFocusModalOpen(false)}
           onConcluido={() => setRefreshTick((t) => t + 1)}
         />
+      ) : null}
+
+      {relatorioOpen ? (
+        <RelatorioEmailModal onClose={() => setRelatorioOpen(false)} />
       ) : null}
 
       {/* Atalhos rápidos de período */}
@@ -1687,6 +1701,116 @@ function UploadResultadoView({
         <button type="button" className="btn-primary" onClick={onClose}>
           Fechar e ver documentos
         </button>
+      </div>
+    </div>
+  );
+}
+
+function RelatorioEmailModal({ onClose }: { onClose: () => void }) {
+  const [data, setData] = useState<ConectorEmailExecucao[] | null>(null);
+  const [rodando, setRodando] = useState(false);
+  const [erro, setErro] = useState<string | null>(null);
+
+  async function carregar() {
+    setErro(null);
+    try {
+      const r = await conectorEmailExecucoes(30);
+      setData(r.execucoes);
+      setRodando(r.rodando);
+    } catch (e) {
+      setErro(e instanceof ApiError ? e.message : "Falha ao carregar o relatório.");
+      setData([]);
+    }
+  }
+
+  useEffect(() => { carregar(); }, []);
+
+  function quando(iso: string | null): string {
+    if (!iso) return "—";
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return iso;
+    return d.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+  }
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 760 }}>
+        <header className="modal-header">
+          <h2>📋 Relatório — notas por e-mail</h2>
+          <button type="button" className="btn-ghost" onClick={onClose}>✕</button>
+        </header>
+        <div className="modal-body" style={{ display: "grid", gap: 12 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <p className="muted" style={{ margin: 0 }}>
+              Cada linha é uma leitura da caixa <code>notas@pacgestao.com.br</code> (automática a cada 10 min ou manual).
+              {rodando ? <strong style={{ color: "rgb(234,88,12)" }}> Uma leitura está rodando agora…</strong> : null}
+            </p>
+            <button type="button" className="btn-secondary" onClick={carregar}>↻ Atualizar</button>
+          </div>
+
+          {erro ? <p className="toast toast-error">{erro}</p> : null}
+
+          {data === null ? (
+            <p className="muted">Carregando…</p>
+          ) : data.length === 0 ? (
+            <p className="muted">
+              Nenhuma leitura registrada ainda. Assim que o cron rodar (ou você clicar em
+              “Ler notas por e-mail”), o histórico aparece aqui.
+            </p>
+          ) : (
+            <div style={{ display: "grid", gap: 10 }}>
+              {data.map((e) => {
+                const teveErro = e.erros > 0 || !!e.erro_msg;
+                const entrou = e.persistidos > 0;
+                const cor = e.erro_msg ? "rgb(220,38,38)" : entrou ? "rgb(16,185,129)" : "rgba(148,163,184,0.6)";
+                return (
+                  <div key={e.id} className="panel" style={{ padding: "10px 14px", borderLeft: `4px solid ${cor}` }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "baseline" }}>
+                      <strong>{quando(e.criado_em)}
+                        <span className="muted" style={{ fontWeight: 400, marginLeft: 6, fontSize: "0.8rem" }}>
+                          {e.origem === "manual" ? "(manual)" : "(automático)"}
+                        </span>
+                      </strong>
+                      <span style={{ fontSize: "0.85rem" }}>
+                        {e.erro_msg
+                          ? <span style={{ color: "rgb(220,38,38)" }}>⚠ Falha na conexão</span>
+                          : <>
+                              {e.emails_lidos} e-mail(s) · <strong style={{ color: "rgb(16,185,129)" }}>{e.persistidos}</strong> importada(s)
+                              {e.duplicados ? ` · ${e.duplicados} já existiam` : ""}
+                              {e.nao_cadastrada ? <span style={{ color: "rgb(234,88,12)" }}> · {e.nao_cadastrada} CNPJ não cadastrado</span> : null}
+                              {teveErro ? <span style={{ color: "rgb(220,38,38)" }}> · {e.erros} erro(s)</span> : null}
+                            </>
+                        }
+                      </span>
+                    </div>
+                    {e.erro_msg ? (
+                      <div className="muted" style={{ marginTop: 6, fontSize: "0.8rem", color: "rgb(220,38,38)" }}>{e.erro_msg}</div>
+                    ) : null}
+                    {e.empresas.length > 0 ? (
+                      <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 6 }}>
+                        {e.empresas.map((emp) => (
+                          <span key={emp.cnpj} style={{ fontSize: "0.78rem", padding: "2px 8px", borderRadius: 6, background: "rgba(16,185,129,0.12)", border: "1px solid rgba(16,185,129,0.35)" }}>
+                            {emp.razao || emp.cnpj}: <strong>{emp.importadas}</strong>
+                            {emp.duplicadas ? ` (+${emp.duplicadas} dup)` : ""}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
+                    {e.remetentes.length > 0 ? (
+                      <div className="muted" style={{ marginTop: 6, fontSize: "0.74rem" }}>
+                        De: {e.remetentes.slice(0, 5).join(", ")}{e.remetentes.length > 5 ? "…" : ""}
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          <div className="form-actions">
+            <button type="button" className="btn-primary" onClick={onClose}>Fechar</button>
+          </div>
+        </div>
       </div>
     </div>
   );

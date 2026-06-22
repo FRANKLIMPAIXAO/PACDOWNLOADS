@@ -23,6 +23,7 @@ import logging
 from dataclasses import dataclass, field
 from email.message import Message
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -43,6 +44,11 @@ class ResultadoCaixa:
     nao_cadastrada: int = 0
     erros: int = 0
     remetentes: list[str] = field(default_factory=list)
+    # cnpj -> {"cnpj","importadas","duplicadas"} (preenche razao no fim, com o db).
+    por_empresa: dict = field(default_factory=dict)
+
+    def empresas_lista(self) -> list[dict]:
+        return sorted(self.por_empresa.values(), key=lambda e: -e["importadas"])
 
     def to_dict(self) -> dict:
         return {
@@ -53,6 +59,7 @@ class ResultadoCaixa:
             "nao_cadastrada": self.nao_cadastrada,
             "erros": self.erros,
             "remetentes": self.remetentes[:50],  # amostra, sem inundar
+            "empresas": self.empresas_lista(),
         }
 
 
@@ -80,6 +87,19 @@ class EmailInboxService:
         res.duplicados += r.duplicados
         res.nao_cadastrada += r.empresa_nao_cadastrada
         res.erros += r.erros
+        # Quebra por EMPRESA cadastrada (empresa_id setado). Só conta importada/
+        # duplicada — não-cadastrada não tem empresa pra atribuir.
+        for det in r.detalhes:
+            if det.empresa_id is None or not det.empresa_cnpj:
+                continue
+            e = res.por_empresa.setdefault(
+                det.empresa_cnpj,
+                {"cnpj": det.empresa_cnpj, "razao": None, "importadas": 0, "duplicadas": 0},
+            )
+            if det.status == "ok":
+                e["importadas"] += 1
+            elif det.status == "duplicado":
+                e["duplicadas"] += 1
 
     def _processar_email(self, raw: bytes, res: ResultadoCaixa) -> None:
         msg = email.message_from_bytes(raw)
@@ -163,4 +183,12 @@ class EmailInboxService:
                 conn.logout()
             except Exception:  # noqa: BLE001
                 pass
+
+        # Preenche a razão social das empresas que receberam notas (1 query).
+        if res.por_empresa:
+            from app.models.empresa import Empresa
+            cnpjs = list(res.por_empresa.keys())
+            for emp in self.db.scalars(select(Empresa).where(Empresa.cnpj.in_(cnpjs))).all():
+                if emp.cnpj in res.por_empresa:
+                    res.por_empresa[emp.cnpj]["razao"] = emp.razao_social
         return res

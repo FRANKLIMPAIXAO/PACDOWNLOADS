@@ -11,6 +11,7 @@ from app.database import Base, SessionLocal, engine
 from app.models.apuracao import Apuracao  # noqa: F401
 from app.models.certidao import Certidao  # noqa: F401
 from app.models.cobranca_portal import CobrancaPortal  # noqa: F401
+from app.models.conector_email_execucao import ConectorEmailExecucao  # noqa: F401
 from app.models.consulta_log import ConsultaLog  # noqa: F401
 from app.models.documento_escritorio import DocumentoEscritorio  # noqa: F401
 from app.models.documento_fiscal import DocumentoFiscal  # noqa: F401
@@ -30,7 +31,7 @@ settings = get_settings()
 # BUILD_COMMIT no build (commit fica "unknown"), este é o sinal confiável pra
 # saber, via GET /version, se o deploy pegou o código novo (cache stale é
 # recorrente). Formato livre: AAAA-MM-DD + resumo curto.
-APP_BUILD_TAG = "2026-06-22-cte-cron"
+APP_BUILD_TAG = "2026-06-22-relatorio-email"
 
 
 @asynccontextmanager
