@@ -10,6 +10,7 @@ from app.database import Base, SessionLocal, engine
 # registrados na metadata.
 from app.models.apuracao import Apuracao  # noqa: F401
 from app.models.certidao import Certidao  # noqa: F401
+from app.models.cliente_empresa import ClienteEmpresa  # noqa: F401
 from app.models.cobranca_portal import CobrancaPortal  # noqa: F401
 from app.models.conector_email_execucao import ConectorEmailExecucao  # noqa: F401
 from app.models.consulta_log import ConsultaLog  # noqa: F401
@@ -18,6 +19,7 @@ from app.models.documento_escritorio import DocumentoEscritorio  # noqa: F401
 from app.models.documento_fiscal import DocumentoFiscal  # noqa: F401
 from app.models.empresa import Empresa  # noqa: F401
 from app.models.mensagem_ecac import MensagemEcac  # noqa: F401
+from app.models.portal_acesso_log import PortalAcessoLog  # noqa: F401
 from app.models.procuracao import Procuracao  # noqa: F401
 from app.models.receita_mensal import ReceitaMensal  # noqa: F401
 from app.models.situacao_fiscal import SituacaoFiscal  # noqa: F401
@@ -32,7 +34,7 @@ settings = get_settings()
 # BUILD_COMMIT no build (commit fica "unknown"), este é o sinal confiável pra
 # saber, via GET /version, se o deploy pegou o código novo (cache stale é
 # recorrente). Formato livre: AAAA-MM-DD + resumo curto.
-APP_BUILD_TAG = "2026-06-22-perf-indices-relatorio-cron"
+APP_BUILD_TAG = "2026-06-22-portal-multiempresa-acessos"
 
 
 @asynccontextmanager

@@ -92,3 +92,36 @@ export function atualizarUsuario(
     body: JSON.stringify(payload),
   });
 }
+
+// --- Multi-empresa do cliente + controle de acessos ---
+export type ClienteEmpresaItem = { id: number; razao_social: string | null; cnpj?: string | null; primaria?: boolean };
+
+/** Empresas que um cliente pode acessar (primária + adicionais). */
+export function listarEmpresasCliente(usuarioId: number) {
+  return apiFetch<{ primaria_id: number; empresas: ClienteEmpresaItem[] }>(
+    `/api/v1/usuarios/cliente/${usuarioId}/empresas`,
+  );
+}
+
+/** Define as empresas ADICIONAIS (além da primária) que o cliente acessa. */
+export function definirEmpresasCliente(usuarioId: number, empresaIds: number[]) {
+  return apiFetch<{ primaria_id: number; adicionais: number[]; total: number }>(
+    `/api/v1/usuarios/cliente/${usuarioId}/empresas`,
+    { method: "PUT", body: JSON.stringify({ empresa_ids: empresaIds }) },
+  );
+}
+
+export type ClienteAcesso = {
+  id: number;
+  nome: string;
+  email: string;
+  ativo: boolean;
+  empresas: { id: number; razao_social: string | null }[];
+  ultimo_acesso: string | null;
+  total_acessos: number;
+};
+
+/** Relatório de controle: quais clientes acessam o portal e com que frequência. */
+export function clientesAcesso() {
+  return apiFetch<{ clientes: ClienteAcesso[] }>("/api/v1/usuarios/clientes-acesso");
+}

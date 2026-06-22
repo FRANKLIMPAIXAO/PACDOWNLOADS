@@ -25,10 +25,26 @@ def verify_password(password: str, password_hash: str) -> bool:
     return pwd_context.verify(password, password_hash)
 
 
-def create_access_token(subject: str) -> str:
+def create_access_token(subject: str, emp: int | None = None) -> str:
     expire = datetime.now(tz=timezone.utc) + timedelta(minutes=settings.access_token_expire_minutes)
-    payload = {"sub": subject, "exp": expire}
+    payload: dict = {"sub": subject, "exp": expire}
+    # `emp` = empresa ATIVA do cliente multi-empresa (um e-mail, várias empresas).
+    # Sempre revalidada em get_current_cliente contra o conjunto permitido.
+    if emp is not None:
+        payload["emp"] = emp
     return jwt.encode(payload, settings.secret_key, algorithm="HS256")
+
+
+def empresas_permitidas(db: Session, user: Usuario) -> set[int]:
+    """Conjunto de empresas que ESTE cliente pode acessar: a primária
+    (`empresa_id`) ∪ as vinculadas em `cliente_empresas`."""
+    from app.models.cliente_empresa import ClienteEmpresa
+    ids: set[int] = set()
+    if user.empresa_id:
+        ids.add(user.empresa_id)
+    for ce in db.scalars(select(ClienteEmpresa).where(ClienteEmpresa.usuario_id == user.id)).all():
+        ids.add(ce.empresa_id)
+    return ids
 
 
 def create_invite_token(email: str, horas: int = 168) -> str:
@@ -111,6 +127,16 @@ def get_current_cliente(token: str = Depends(oauth2_scheme), db: Session = Depen
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Acesso restrito ao portal do cliente.",
         )
+    # MULTI-EMPRESA: a empresa ATIVA vem do claim `emp` do token, mas SÓ vale se
+    # estiver no conjunto permitido deste usuário (senão ignora e mantém a
+    # primária — nunca confia no que veio do token sem revalidar no banco). Assim
+    # todo endpoint do portal segue lendo `cliente.empresa_id` sem mudar nada.
+    try:
+        emp = jwt.decode(token, settings.secret_key, algorithms=["HS256"]).get("emp")
+    except JWTError:
+        emp = None
+    if emp and emp != user.empresa_id and emp in empresas_permitidas(db, user):
+        user.empresa_id = emp
     return user
 
 

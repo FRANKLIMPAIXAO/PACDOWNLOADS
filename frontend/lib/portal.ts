@@ -47,10 +47,14 @@ export async function portalFetch<T = unknown>(path: string, options: PortalOpti
 }
 
 // --- Tipos ---
+export type PortalEmpresaItem = { id: number; razao_social: string; cnpj: string };
 export type PortalMe = {
   nome: string;
   email: string;
   empresa: { id: number; razao_social: string; nome_fantasia: string | null; cnpj: string } | null;
+  // Multi-empresa: empresa ativa + todas as que este login pode acessar.
+  empresa_ativa_id?: number;
+  empresas?: PortalEmpresaItem[];
 };
 
 export type PortalDocumento = {
@@ -249,6 +253,15 @@ export async function portalDefinirSenha(token: string, senha: string): Promise<
 
 export function portalMe() {
   return portalFetch<PortalMe>("/api/v1/portal/me");
+}
+
+/** Troca a empresa ATIVA (cliente multi-empresa). Grava o novo token e devolve-o. */
+export async function portalTrocarEmpresa(empresaId: number): Promise<void> {
+  const res = await portalFetch<{ access_token: string }>(
+    `/api/v1/portal/trocar-empresa?empresa_id=${empresaId}`,
+    { method: "POST" },
+  );
+  setPortalToken(res.access_token);
 }
 
 export function portalDocumentos(params: {

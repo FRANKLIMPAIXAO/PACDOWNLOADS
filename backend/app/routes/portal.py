@@ -19,7 +19,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Literal
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy import desc, func, select
 
@@ -32,6 +32,7 @@ from app.models.cobranca_portal import CobrancaPortal
 from app.models.documento_escritorio import DocumentoEscritorio
 from app.models.documento_fiscal import DocumentoFiscal, TipoDocumento
 from app.models.empresa import Empresa
+from app.models.portal_acesso_log import PortalAcessoLog
 from app.models.guia_das import GuiaDAS
 from app.models.guia_dctfweb import GuiaDctfweb
 from app.models.usuario import Usuario
@@ -58,14 +59,21 @@ router = APIRouter(prefix="/portal", tags=["portal-cliente"])
 
 
 @router.post("/login", response_model=TokenResponse)
-def login_cliente(payload: LoginRequest, db: Session = Depends(get_db)) -> TokenResponse:
+def login_cliente(payload: LoginRequest, request: Request, db: Session = Depends(get_db)) -> TokenResponse:
     """Login do PORTAL. Só aceita usuário CLIENTE (equipe do escritório usa o
-    /auth/login). Mesmo mecanismo de JWT — o que muda é quem cada área aceita."""
+    /auth/login). Mesmo mecanismo de JWT — o que muda é quem cada área aceita.
+    Registra o acesso (controle de quem entra e com que frequência)."""
     user = authenticate_user(db, payload.email, payload.password)
     if not user or not user.is_cliente or not user.empresa_id:
         # Mensagem genérica de propósito (não revela se o e-mail existe / é cliente)
         raise HTTPException(status_code=401, detail="E-mail ou senha inválidos.")
-    return TokenResponse(access_token=create_access_token(user.email))
+    try:
+        ip = request.client.host if request.client else None
+        db.add(PortalAcessoLog(usuario_id=user.id, empresa_id=user.empresa_id, evento="login", ip=ip))
+        db.commit()
+    except Exception:  # noqa: BLE001 — log de acesso nunca bloqueia o login
+        db.rollback()
+    return TokenResponse(access_token=create_access_token(user.email, emp=user.empresa_id))
 
 
 @router.post("/definir-senha", response_model=TokenResponse)
@@ -195,8 +203,16 @@ def portal_upload_saidas_status(
 
 @router.get("/me")
 def me(cliente: Usuario = Depends(get_current_cliente), db: Session = Depends(get_db)) -> dict:
-    """Dados do cliente logado + a empresa dele (básico, sem credenciais)."""
+    """Dados do cliente logado + a empresa ATIVA + a lista de empresas que este
+    login pode acessar (multi-empresa: um e-mail, várias empresas)."""
+    from app.services.auth_service import empresas_permitidas
+
     empresa = db.get(Empresa, cliente.empresa_id)
+    ids = empresas_permitidas(db, cliente)
+    outras = []
+    if ids:
+        for e in db.scalars(select(Empresa).where(Empresa.id.in_(ids)).order_by(Empresa.razao_social)).all():
+            outras.append({"id": e.id, "razao_social": e.razao_social, "cnpj": e.cnpj})
     return {
         "nome": cliente.nome,
         "email": cliente.email,
@@ -206,7 +222,28 @@ def me(cliente: Usuario = Depends(get_current_cliente), db: Session = Depends(ge
             "nome_fantasia": empresa.nome_fantasia,
             "cnpj": empresa.cnpj,
         } if empresa else None,
+        # Multi-empresa: empresa ativa + todas as permitidas (pro seletor no portal).
+        "empresa_ativa_id": cliente.empresa_id,
+        "empresas": outras,
     }
+
+
+@router.post("/trocar-empresa", response_model=TokenResponse)
+def trocar_empresa(
+    empresa_id: int,
+    cliente: Usuario = Depends(get_current_cliente),
+    db: Session = Depends(get_db),
+) -> TokenResponse:
+    """Troca a empresa ATIVA do cliente multi-empresa. Só permite empresa do
+    conjunto permitido (revalida no banco) e devolve um TOKEN novo com o claim
+    `emp`. Registra a troca no log de acesso."""
+    from app.services.auth_service import empresas_permitidas
+
+    if empresa_id not in empresas_permitidas(db, cliente):
+        raise HTTPException(status_code=403, detail="Você não tem acesso a esta empresa.")
+    db.add(PortalAcessoLog(usuario_id=cliente.id, empresa_id=empresa_id, evento="troca_empresa"))
+    db.commit()
+    return TokenResponse(access_token=create_access_token(cliente.email, emp=empresa_id))
 
 
 @router.get("/documentos", response_model=list[DocumentoFiscalRead])

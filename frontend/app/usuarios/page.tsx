@@ -9,12 +9,17 @@ import { useAuth } from "../../lib/auth-context";
 import {
   SegurancaDiag,
   UsuarioAdmin,
+  ClienteAcesso,
   atualizarUsuario,
+  clientesAcesso,
   criarUsuario,
+  definirEmpresasCliente,
+  listarEmpresasCliente,
   listarUsuarios,
   reenviarConvite,
   segurancaDiagnostico,
 } from "../../lib/usuarios";
+import { listarEmpresas, type Empresa } from "../../lib/empresas";
 
 export default function UsuariosPage() {
   return (
@@ -31,6 +36,8 @@ function UsuariosContent() {
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [seg, setSeg] = useState<SegurancaDiag | null>(null);
+  const [acessos, setAcessos] = useState<ClienteAcesso[] | null>(null);
+  const [gerenciar, setGerenciar] = useState<ClienteAcesso | null>(null);
 
   // Form de criação
   const [nome, setNome] = useState("");
@@ -52,10 +59,22 @@ function UsuariosContent() {
       .catch((e) => setError(e instanceof ApiError ? e.message : "Falha ao carregar usuários."));
   }
 
+  function recarregarAcessos() {
+    clientesAcesso().then((r) => setAcessos(r.clientes)).catch(() => setAcessos([]));
+  }
+
   useEffect(() => {
     recarregar();
+    recarregarAcessos();
     segurancaDiagnostico().then(setSeg).catch(() => setSeg(null));
   }, []);
+
+  function dataHora(iso: string | null): string {
+    if (!iso) return "Nunca acessou";
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return iso;
+    return d.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" });
+  }
 
   async function handleCriar(e: FormEvent) {
     e.preventDefault();
@@ -241,7 +260,147 @@ function UsuariosContent() {
           </table>
         )}
       </section>
+
+      {/* Controle de acessos dos CLIENTES (portal) */}
+      <section className="panel" style={{ marginTop: 16 }}>
+        <h3>Acesso dos clientes ao portal</h3>
+        <p className="muted" style={{ margin: "4px 0 12px", fontSize: 13 }}>
+          Quem está acessando o portal e com que frequência. Um mesmo e-mail pode acessar
+          várias empresas — use <strong>Empresas</strong> pra liberar as empresas de cada cliente.
+        </p>
+        {acessos === null ? (
+          <p className="muted">Carregando...</p>
+        ) : acessos.length === 0 ? (
+          <p className="muted">Nenhum acesso de cliente cadastrado ainda.</p>
+        ) : (
+          <table className="data-table" style={{ width: "100%" }}>
+            <thead>
+              <tr>
+                <th>Cliente</th><th>Empresas</th><th>Último acesso</th><th>Acessos</th><th>Ações</th>
+              </tr>
+            </thead>
+            <tbody>
+              {acessos.map((c) => (
+                <tr key={c.id}>
+                  <td>
+                    {c.nome}{!c.ativo ? <span className="pill pill-warn" style={{ marginLeft: 6 }}>inativo</span> : null}
+                    <div className="muted" style={{ fontSize: 12 }}>{c.email}</div>
+                  </td>
+                  <td style={{ display: "flex", flexWrap: "wrap", gap: 4, maxWidth: 320 }}>
+                    {c.empresas.map((e) => (
+                      <span key={e.id} className="pill pill-violet" style={{ fontSize: 11 }}>{e.razao_social || `#${e.id}`}</span>
+                    ))}
+                  </td>
+                  <td style={{ color: c.ultimo_acesso ? undefined : "rgb(245,158,11)" }}>{dataHora(c.ultimo_acesso)}</td>
+                  <td>{c.total_acessos}</td>
+                  <td>
+                    <button type="button" className="btn-ghost" onClick={() => setGerenciar(c)}>🏢 Empresas</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
+
+      {gerenciar ? (
+        <GerenciarEmpresasModal
+          cliente={gerenciar}
+          onClose={() => setGerenciar(null)}
+          onSaved={() => { setGerenciar(null); recarregarAcessos(); setToast("Empresas do cliente atualizadas."); }}
+        />
+      ) : null}
     </>
+  );
+}
+
+function GerenciarEmpresasModal({
+  cliente, onClose, onSaved,
+}: { cliente: ClienteAcesso; onClose: () => void; onSaved: () => void }) {
+  const [empresas, setEmpresas] = useState<Empresa[] | null>(null);
+  const [primariaId, setPrimariaId] = useState<number | null>(null);
+  const [sel, setSel] = useState<Set<number>>(new Set());
+  const [busy, setBusy] = useState(false);
+  const [erro, setErro] = useState<string | null>(null);
+  const [filtro, setFiltro] = useState("");
+
+  useEffect(() => {
+    Promise.all([listarEmpresas(), listarEmpresasCliente(cliente.id)])
+      .then(([todas, atual]) => {
+        setEmpresas(todas);
+        setPrimariaId(atual.primaria_id);
+        // marca as ADICIONAIS (a primária fica fixa, fora do conjunto editável)
+        setSel(new Set(atual.empresas.filter((e) => !e.primaria).map((e) => e.id)));
+      })
+      .catch((e) => setErro(e instanceof ApiError ? e.message : "Falha ao carregar empresas."));
+  }, [cliente.id]);
+
+  function toggle(id: number) {
+    setSel((s) => {
+      const n = new Set(s);
+      if (n.has(id)) n.delete(id); else n.add(id);
+      return n;
+    });
+  }
+
+  async function salvar() {
+    setBusy(true); setErro(null);
+    try {
+      await definirEmpresasCliente(cliente.id, Array.from(sel));
+      onSaved();
+    } catch (e) {
+      setErro(e instanceof ApiError ? e.message : "Falha ao salvar.");
+    } finally { setBusy(false); }
+  }
+
+  const lista = (empresas || [])
+    .filter((e) => e.id !== primariaId)
+    .filter((e) => !filtro || (e.razao_social || "").toLowerCase().includes(filtro.toLowerCase()) || (e.cnpj || "").includes(filtro));
+
+  return (
+    <div className="modal-backdrop" onClick={busy ? undefined : onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 560 }}>
+        <header className="modal-header">
+          <h2>🏢 Empresas de {cliente.nome}</h2>
+          <button type="button" className="btn-ghost" onClick={onClose} disabled={busy}>✕</button>
+        </header>
+        <div className="modal-body" style={{ display: "grid", gap: 12 }}>
+          <p className="muted" style={{ margin: 0, fontSize: 13 }}>
+            Marque TODAS as empresas que este e-mail (<strong>{cliente.email}</strong>) pode acessar no portal.
+            A empresa principal já vem liberada e não sai.
+          </p>
+          {erro ? <p className="toast toast-error">{erro}</p> : null}
+          {empresas === null ? (
+            <p className="muted">Carregando empresas...</p>
+          ) : (
+            <>
+              <input placeholder="Filtrar por razão social ou CNPJ..." value={filtro} onChange={(e) => setFiltro(e.target.value)} />
+              <div style={{ maxHeight: 320, overflowY: "auto", display: "grid", gap: 4, border: "1px solid #e6e9f0", borderRadius: 8, padding: 8 }}>
+                {primariaId ? (
+                  <label style={{ display: "flex", gap: 8, alignItems: "center", padding: "4px 6px", opacity: 0.7 }}>
+                    <input type="checkbox" checked disabled />
+                    <span>{(empresas.find((e) => e.id === primariaId)?.razao_social) || `Empresa #${primariaId}`} <span className="pill pill-violet" style={{ fontSize: 10 }}>principal</span></span>
+                  </label>
+                ) : null}
+                {lista.map((e) => (
+                  <label key={e.id} style={{ display: "flex", gap: 8, alignItems: "center", padding: "4px 6px", cursor: "pointer" }}>
+                    <input type="checkbox" checked={sel.has(e.id)} onChange={() => toggle(e.id)} />
+                    <span>{e.razao_social} <span className="muted" style={{ fontSize: 11 }}>{e.cnpj}</span></span>
+                  </label>
+                ))}
+                {lista.length === 0 ? <p className="muted" style={{ margin: 6 }}>Nenhuma empresa encontrada.</p> : null}
+              </div>
+            </>
+          )}
+          <div className="form-actions" style={{ display: "flex", justifyContent: "space-between" }}>
+            <span className="muted" style={{ fontSize: 12, alignSelf: "center" }}>{sel.size + 1} empresa(s) no total</span>
+            <button type="button" className="btn-primary" onClick={salvar} disabled={busy || empresas === null}>
+              {busy ? "Salvando..." : "Salvar empresas"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 

@@ -229,3 +229,110 @@ def atualizar_usuario(
     db.commit()
     db.refresh(user)
     return user
+
+
+# ---------------------------------------------------------------------------
+# Multi-empresa do cliente: um e-mail pode acessar VÁRIAS empresas.
+# ---------------------------------------------------------------------------
+from pydantic import BaseModel, Field  # noqa: E402
+
+from app.models.cliente_empresa import ClienteEmpresa  # noqa: E402
+from app.models.portal_acesso_log import PortalAcessoLog  # noqa: E402
+
+
+class ClienteEmpresasSet(BaseModel):
+    empresa_ids: list[int] = Field(default_factory=list, description="Empresas ADICIONAIS (além da primária)")
+
+
+@router.get("/cliente/{usuario_id}/empresas")
+def listar_empresas_cliente(usuario_id: int, db: Session = Depends(get_db)) -> dict:
+    """Empresas que ESTE cliente pode acessar: a primária + as adicionais."""
+    user = db.get(Usuario, usuario_id)
+    if not user or not user.is_cliente:
+        raise HTTPException(status_code=404, detail="Acesso de cliente não encontrado.")
+    adicionais = [ce.empresa_id for ce in db.scalars(
+        select(ClienteEmpresa).where(ClienteEmpresa.usuario_id == user.id)
+    ).all()]
+    ids = list({user.empresa_id, *adicionais})
+    emap = {e.id: e for e in db.scalars(select(Empresa).where(Empresa.id.in_(ids))).all()}
+    return {
+        "primaria_id": user.empresa_id,
+        "empresas": [
+            {"id": i, "razao_social": emap[i].razao_social if i in emap else None,
+             "cnpj": emap[i].cnpj if i in emap else None,
+             "primaria": i == user.empresa_id}
+            for i in ids if i is not None
+        ],
+    }
+
+
+@router.put("/cliente/{usuario_id}/empresas")
+def definir_empresas_cliente(
+    usuario_id: int, payload: ClienteEmpresasSet, db: Session = Depends(get_db),
+) -> dict:
+    """Define as empresas ADICIONAIS que este cliente pode acessar (além da
+    primária). Substitui o conjunto. A primária NUNCA sai (continua em
+    `empresa_id`). Valida que cada empresa existe."""
+    user = db.get(Usuario, usuario_id)
+    if not user or not user.is_cliente:
+        raise HTTPException(status_code=404, detail="Acesso de cliente não encontrado.")
+    novos = {i for i in payload.empresa_ids if i and i != user.empresa_id}
+    if novos:
+        achadas = {e.id for e in db.scalars(select(Empresa).where(Empresa.id.in_(novos))).all()}
+        faltando = novos - achadas
+        if faltando:
+            raise HTTPException(status_code=404, detail=f"Empresa(s) inexistente(s): {sorted(faltando)}")
+    for ce in db.scalars(select(ClienteEmpresa).where(ClienteEmpresa.usuario_id == user.id)).all():
+        db.delete(ce)
+    for eid in novos:
+        db.add(ClienteEmpresa(usuario_id=user.id, empresa_id=eid))
+    db.commit()
+    return {"primaria_id": user.empresa_id, "adicionais": sorted(novos), "total": len(novos) + 1}
+
+
+@router.get("/clientes-acesso")
+def clientes_acesso(db: Session = Depends(get_db)) -> dict:
+    """Relatório de CONTROLE: lista os acessos de cliente com último login e total
+    de acessos (frequência) + as empresas que cada um acessa."""
+    from sqlalchemy import func
+
+    clientes = list(db.scalars(
+        select(Usuario).where(Usuario.is_cliente.is_(True)).order_by(Usuario.nome)
+    ).all())
+    if not clientes:
+        return {"clientes": []}
+    ids = [c.id for c in clientes]
+    ultimos = dict(db.execute(
+        select(PortalAcessoLog.usuario_id, func.max(PortalAcessoLog.criado_em))
+        .where(PortalAcessoLog.usuario_id.in_(ids))
+        .group_by(PortalAcessoLog.usuario_id)
+    ).all())
+    totais = dict(db.execute(
+        select(PortalAcessoLog.usuario_id, func.count(PortalAcessoLog.id))
+        .where(PortalAcessoLog.usuario_id.in_(ids), PortalAcessoLog.evento == "login")
+        .group_by(PortalAcessoLog.usuario_id)
+    ).all())
+    adic: dict[int, list[int]] = {}
+    for ce in db.scalars(select(ClienteEmpresa).where(ClienteEmpresa.usuario_id.in_(ids))).all():
+        adic.setdefault(ce.usuario_id, []).append(ce.empresa_id)
+    todas_emp_ids = {c.empresa_id for c in clientes if c.empresa_id} | {e for v in adic.values() for e in v}
+    emap = {e.id: e for e in db.scalars(select(Empresa).where(Empresa.id.in_(todas_emp_ids))).all()} if todas_emp_ids else {}
+
+    def _nome(i: int | None) -> str | None:
+        return emap[i].razao_social if i in emap else None
+
+    out = []
+    for c in clientes:
+        emp_ids = list({c.empresa_id, *adic.get(c.id, [])})
+        ult = ultimos.get(c.id)
+        out.append({
+            "id": c.id,
+            "nome": c.nome,
+            "email": c.email,
+            "ativo": c.ativo,
+            "empresas": [{"id": i, "razao_social": _nome(i)} for i in emp_ids if i is not None],
+            "ultimo_acesso": ult.isoformat() if ult else None,
+            "total_acessos": int(totais.get(c.id, 0)),
+        })
+    out.sort(key=lambda x: (x["ultimo_acesso"] or ""))
+    return {"clientes": out}

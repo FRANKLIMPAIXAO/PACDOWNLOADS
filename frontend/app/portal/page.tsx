@@ -24,6 +24,7 @@ import {
   portalManifestarDoc,
   portalManifestarLote,
   portalMe,
+  portalTrocarEmpresa,
   portalResumo,
   portalSyncGuias,
   portalUploadSaidas,
@@ -427,6 +428,17 @@ export default function PortalPage() {
 
   function sair() { portalLogout(); router.replace("/portal/login"); }
 
+  async function handleTrocarEmpresa(id: number) {
+    if (!id || id === me?.empresa_ativa_id) return;
+    try {
+      await portalTrocarEmpresa(id); // grava novo token (empresa ativa)
+      // Recarrega tudo de forma limpa com a nova empresa ativa.
+      window.location.reload();
+    } catch (err) {
+      setErro(err instanceof ApiError ? err.message : "Falha ao trocar de empresa.");
+    }
+  }
+
   function irPara(v: View) {
     if (v === "manifestar" && origem === "emitida") setOrigem("");
     setErro(null); setAviso(null);
@@ -574,7 +586,24 @@ export default function PortalPage() {
             <div className="pac-topbar-empresa">{me?.empresa?.razao_social || "Portal do Cliente"}</div>
             <div className="pac-topbar-cnpj">{me?.empresa?.cnpj ? `CNPJ ${me.empresa.cnpj}` : ""}</div>
           </div>
-          <span style={{ color: GRAY }}><Icon name="bell" size={20} /></span>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            {/* Multi-empresa: seletor só aparece se o login acessa mais de uma. */}
+            {me?.empresas && me.empresas.length > 1 ? (
+              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: GRAY }}>
+                Empresa:
+                <select
+                  value={me.empresa_ativa_id}
+                  onChange={(e) => handleTrocarEmpresa(Number(e.target.value))}
+                  style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #d7dbe6", fontSize: 13, maxWidth: 280 }}
+                >
+                  {me.empresas.map((e) => (
+                    <option key={e.id} value={e.id}>{e.razao_social}</option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+            <span style={{ color: GRAY }}><Icon name="bell" size={20} /></span>
+          </div>
         </header>
 
         <div className="pac-content">
