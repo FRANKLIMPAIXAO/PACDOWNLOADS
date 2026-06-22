@@ -162,6 +162,65 @@ class CteDistribuicaoService:
                 })
         return resultados
 
+    def cron_diario(self, *, chunk: int = 2, budget_s: int = 40) -> dict:
+        """Passo do cron do CT-e: avança um PEDAÇO da carteira distribuindo os CT-e.
+
+        Espelha o cron do DF-e (NFe), mas SEM manifestação — o CT-e não exige
+        Ciência da Operação. Cursor próprio em arquivo (round-robin, sem migration);
+        chamado por cron EXTERNO a cada ~15 min, drena a carteira ao longo do dia.
+        O 656 (consumo indevido) é esperado: o cursor avança e a empresa é
+        retentada na próxima volta (o bloqueio ~1h já passou).
+        """
+        import json
+        import time
+        from app.config import get_settings
+
+        elegiveis = self.listar_elegiveis()
+        n = len(elegiveis)
+        if n == 0:
+            return {"processadas": [], "total_elegiveis": 0, "cursor": 0}
+
+        cursor_path = Path(get_settings().storage_path) / "cte_cron_cursor.json"
+        cursor = 0
+        try:
+            cursor = int(json.loads(cursor_path.read_text()).get("cursor", 0))
+        except Exception:  # noqa: BLE001 — sem estado ainda = começa do 0
+            cursor = 0
+        cursor %= n
+
+        inicio = time.time()
+        processadas: list[dict] = []
+        i = cursor
+        feitas = 0
+        while feitas < chunk and (time.time() - inicio) < budget_s:
+            emp = elegiveis[i % n]
+            item: dict = {"empresa_id": emp.id, "razao_social": emp.razao_social}
+            try:
+                dist = self.distribuir_empresa(emp.id, max_paginas=2)
+                item["resumos"] = dist.get("resumos_recebidas_novos")
+                item["completas"] = dist.get("ctes_completas_novas")
+                item["cstat"] = dist.get("cstat")
+            except Exception as exc:  # noqa: BLE001
+                self.db.rollback()
+                item["dist_erro"] = str(exc)[:140]
+            processadas.append(item)
+            feitas += 1
+            i += 1
+
+        novo_cursor = i % n
+        try:
+            cursor_path.parent.mkdir(parents=True, exist_ok=True)
+            cursor_path.write_text(json.dumps({"cursor": novo_cursor}))
+        except OSError:
+            pass
+
+        return {
+            "total_elegiveis": n,
+            "cursor_anterior": cursor,
+            "cursor_novo": novo_cursor,
+            "processadas": processadas,
+        }
+
     # ------------------------------------------------------------------
     def _salvar_completa(self, empresa: Empresa, doc: DocCteDistribuido) -> bool:
         """Grava o CT-e COMPLETO (procCTe): XML no disco + DocumentoFiscal.

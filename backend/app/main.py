@@ -30,7 +30,7 @@ settings = get_settings()
 # BUILD_COMMIT no build (commit fica "unknown"), este é o sinal confiável pra
 # saber, via GET /version, se o deploy pegou o código novo (cache stale é
 # recorrente). Formato livre: AAAA-MM-DD + resumo curto.
-APP_BUILD_TAG = "2026-06-22-conector-email-imap"
+APP_BUILD_TAG = "2026-06-22-cte-cron"
 
 
 @asynccontextmanager
@@ -156,6 +156,7 @@ app.include_router(documentos.router, prefix=settings.api_v1_prefix)
 app.include_router(dfe_distribuicao.router, prefix=settings.api_v1_prefix)
 app.include_router(dfe_distribuicao.router_cron, prefix=settings.api_v1_prefix)
 app.include_router(cte_distribuicao.router, prefix=settings.api_v1_prefix)
+app.include_router(cte_distribuicao.router_cron, prefix=settings.api_v1_prefix)
 app.include_router(portal.router, prefix=settings.api_v1_prefix)
 app.include_router(prevencao.router, prefix=settings.api_v1_prefix)
 app.include_router(conector_email.router, prefix=settings.api_v1_prefix)
