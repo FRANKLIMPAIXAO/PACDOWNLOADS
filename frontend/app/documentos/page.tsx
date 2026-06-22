@@ -26,7 +26,7 @@ import {
   verificarCanceladas,
 } from "../../lib/documentos";
 import { Empresa, listarEmpresas } from "../../lib/empresas";
-import { dfeDistribuirLote, dfeElegiveis, dfeManifestar, dfeManifestarDoc } from "../../lib/dfe";
+import { dfeDistribuirLote, dfeElegiveis, dfeManifestar, dfeManifestarDoc, cronExecucoes, type CronExecucao } from "../../lib/dfe";
 import { cteDistribuirLote, cteElegiveis } from "../../lib/cte";
 import { nfseElegiveis, nfseSincronizar } from "../../lib/nfse";
 import { conectorEmailProcessar, conectorEmailStatus, conectorEmailExecucoes, type ConectorEmailExecucao } from "../../lib/conector-email";
@@ -70,6 +70,7 @@ function DocumentosContent() {
   const [dfeBusy, setDfeBusy] = useState(false);
   const [dfeMsg, setDfeMsg] = useState<string | null>(null);
   const [relatorioOpen, setRelatorioOpen] = useState(false);
+  const [relatorioCronOpen, setRelatorioCronOpen] = useState(false);
 
   // Conector de SAÍDAS por e-mail (Nível 2): lê a caixa notas@pacgestao.com.br,
   // importa os anexos e roteia por CNPJ. Roda em background no servidor (polling).
@@ -849,6 +850,15 @@ function DocumentosContent() {
         >
           📋 Relatório de e-mails
         </button>
+        <button
+          type="button"
+          className="btn-secondary"
+          onClick={() => setRelatorioCronOpen(true)}
+          title="Relatório dos crons de distribuição automática: DF-e (recebidas NFe) e CT-e (frete)"
+          style={{ alignSelf: "end" }}
+        >
+          📋 Relatório DF-e / CT-e
+        </button>
         <div className="page-actions form-grid" style={{ gridTemplateColumns: "200px 100px 140px 140px 140px" }}>
           <label>
             <span>Empresa</span>
@@ -923,6 +933,10 @@ function DocumentosContent() {
 
       {relatorioOpen ? (
         <RelatorioEmailModal onClose={() => setRelatorioOpen(false)} />
+      ) : null}
+
+      {relatorioCronOpen ? (
+        <RelatorioCronModal onClose={() => setRelatorioCronOpen(false)} />
       ) : null}
 
       {/* Atalhos rápidos de período */}
@@ -1799,6 +1813,102 @@ function RelatorioEmailModal({ onClose }: { onClose: () => void }) {
                     {e.remetentes.length > 0 ? (
                       <div className="muted" style={{ marginTop: 6, fontSize: "0.74rem" }}>
                         De: {e.remetentes.slice(0, 5).join(", ")}{e.remetentes.length > 5 ? "…" : ""}
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          <div className="form-actions">
+            <button type="button" className="btn-primary" onClick={onClose}>Fechar</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RelatorioCronModal({ onClose }: { onClose: () => void }) {
+  const [tipo, setTipo] = useState<"dfe" | "cte">("dfe");
+  const [data, setData] = useState<CronExecucao[] | null>(null);
+  const [erro, setErro] = useState<string | null>(null);
+
+  async function carregar(t: "dfe" | "cte") {
+    setErro(null); setData(null);
+    try {
+      const r = await cronExecucoes(t, 30);
+      setData(r.execucoes);
+    } catch (e) {
+      setErro(e instanceof ApiError ? e.message : "Falha ao carregar o relatório.");
+      setData([]);
+    }
+  }
+
+  useEffect(() => { carregar(tipo); }, [tipo]);
+
+  function quando(iso: string | null): string {
+    if (!iso) return "—";
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return iso;
+    return d.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+  }
+
+  const rotulo = tipo === "dfe" ? "recebidas (NFe)" : "fretes (CT-e)";
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 760 }}>
+        <header className="modal-header">
+          <h2>📋 Relatório — distribuição automática</h2>
+          <button type="button" className="btn-ghost" onClick={onClose}>✕</button>
+        </header>
+        <div className="modal-body" style={{ display: "grid", gap: 12 }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <button type="button" className={tipo === "dfe" ? "btn-primary" : "btn-secondary"} onClick={() => setTipo("dfe")}>⬇ DF-e (recebidas)</button>
+            <button type="button" className={tipo === "cte" ? "btn-primary" : "btn-secondary"} onClick={() => setTipo("cte")}>🚚 CT-e (frete)</button>
+            <button type="button" className="btn-secondary" style={{ marginLeft: "auto" }} onClick={() => carregar(tipo)}>↻ Atualizar</button>
+          </div>
+          <p className="muted" style={{ margin: 0 }}>
+            Cada linha é uma passada do cron (a cada 15 min, round-robin pela carteira). Mostra as
+            empresas processadas e quantos <strong>{rotulo}</strong> entraram. <strong>0 novos</strong> é normal
+            (empresa em dia); <strong>656</strong> = limite da Receita, retentado na próxima volta.
+          </p>
+
+          {erro ? <p className="toast toast-error">{erro}</p> : null}
+
+          {data === null ? (
+            <p className="muted">Carregando…</p>
+          ) : data.length === 0 ? (
+            <p className="muted">Nenhuma passada registrada ainda. Assim que o cron rodar, o histórico aparece aqui.</p>
+          ) : (
+            <div style={{ display: "grid", gap: 10 }}>
+              {data.map((e) => {
+                const entrou = e.novos > 0;
+                const cor = e.erro_msg ? "rgb(220,38,38)" : entrou ? "rgb(16,185,129)" : "rgba(148,163,184,0.6)";
+                const comDoc = (e.detalhe || []).filter((p) => ((p.resumos || 0) + (p.completas || 0)) > 0);
+                return (
+                  <div key={e.id} className="panel" style={{ padding: "10px 14px", borderLeft: `4px solid ${cor}` }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "baseline" }}>
+                      <strong>{quando(e.criado_em)}</strong>
+                      <span style={{ fontSize: "0.85rem" }}>
+                        {e.erro_msg
+                          ? <span style={{ color: "rgb(220,38,38)" }}>⚠ {e.erro_msg}</span>
+                          : <>
+                              {e.processadas} empresa(s) · <strong style={{ color: entrou ? "rgb(16,185,129)" : "inherit" }}>{e.novos}</strong> novo(s)
+                              {e.com_656 ? <span style={{ color: "rgb(234,88,12)" }}> · {e.com_656} no limite (656)</span> : null}
+                            </>
+                        }
+                      </span>
+                    </div>
+                    {comDoc.length > 0 ? (
+                      <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 6 }}>
+                        {comDoc.map((p) => (
+                          <span key={p.empresa_id} style={{ fontSize: "0.78rem", padding: "2px 8px", borderRadius: 6, background: "rgba(16,185,129,0.12)", border: "1px solid rgba(16,185,129,0.35)" }}>
+                            {p.razao_social || `Empresa ${p.empresa_id}`}: <strong>{(p.resumos || 0) + (p.completas || 0)}</strong>
+                          </span>
+                        ))}
                       </div>
                     ) : null}
                   </div>

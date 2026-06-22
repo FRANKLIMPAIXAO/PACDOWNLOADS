@@ -60,3 +60,29 @@ export function dfeManifestarDoc(documentoId: number) {
     { method: "POST" },
   );
 }
+
+// --- Relatório dos crons de distribuição (DF-e recebidas / CT-e frete) ---
+export type CronEmpresaItem = {
+  empresa_id: number;
+  razao_social?: string;
+  resumos?: number;
+  completas?: number;
+  cstat?: string;
+};
+export type CronExecucao = {
+  id: number;
+  criado_em: string | null;
+  tipo: string; // dfe | cte
+  total_elegiveis: number;
+  processadas: number;
+  novos: number;
+  com_656: number;
+  detalhe: CronEmpresaItem[];
+  erro_msg: string | null;
+};
+
+/** Histórico do cron de distribuição. tipo='dfe' (recebidas NFe) | 'cte' (frete). */
+export function cronExecucoes(tipo: "dfe" | "cte", limit = 30) {
+  const base = tipo === "cte" ? "/api/v1/dfe-cte" : "/api/v1/dfe-nfe";
+  return apiFetch<{ execucoes: CronExecucao[] }>(`${base}/cron-execucoes?limit=${limit}`);
+}

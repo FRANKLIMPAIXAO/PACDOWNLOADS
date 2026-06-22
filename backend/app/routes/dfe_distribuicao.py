@@ -38,7 +38,17 @@ def cron_diario(
     if not x_cron_token or not hmac.compare_digest(x_cron_token, esperado):
         # compare_digest = comparação de tempo constante (anti timing-attack)
         raise HTTPException(status_code=401, detail="Token do cron inválido.")
-    return DfeDistribuicaoService(db).cron_diario(chunk=max(1, min(chunk, 5)))
+    resultado = DfeDistribuicaoService(db).cron_diario(chunk=max(1, min(chunk, 5)))
+    from app.services.cron_log import registrar_cron
+    registrar_cron(db, "dfe", resultado)
+    return resultado
+
+
+@router.get("/cron-execucoes")
+def cron_execucoes(limit: int = 30, db: Session = Depends(get_db)) -> dict:
+    """Histórico do cron de DF-e (recebidas NFe) — relatório."""
+    from app.services.cron_log import listar_execucoes
+    return {"execucoes": listar_execucoes(db, "dfe", limit)}
 
 
 class DistribuirLotePayload(BaseModel):

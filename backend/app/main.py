@@ -13,6 +13,7 @@ from app.models.certidao import Certidao  # noqa: F401
 from app.models.cobranca_portal import CobrancaPortal  # noqa: F401
 from app.models.conector_email_execucao import ConectorEmailExecucao  # noqa: F401
 from app.models.consulta_log import ConsultaLog  # noqa: F401
+from app.models.cron_execucao import CronExecucao  # noqa: F401
 from app.models.documento_escritorio import DocumentoEscritorio  # noqa: F401
 from app.models.documento_fiscal import DocumentoFiscal  # noqa: F401
 from app.models.empresa import Empresa  # noqa: F401
@@ -31,7 +32,7 @@ settings = get_settings()
 # BUILD_COMMIT no build (commit fica "unknown"), este é o sinal confiável pra
 # saber, via GET /version, se o deploy pegou o código novo (cache stale é
 # recorrente). Formato livre: AAAA-MM-DD + resumo curto.
-APP_BUILD_TAG = "2026-06-22-relatorio-email"
+APP_BUILD_TAG = "2026-06-22-perf-indices-relatorio-cron"
 
 
 @asynccontextmanager
@@ -59,6 +60,23 @@ async def lifespan(_: FastAPI):
         Base.metadata.create_all(bind=engine)
     except Exception:  # noqa: BLE001
         log.exception("Falha no create_all do startup (seguindo mesmo assim)")
+    # ÍNDICES DE PERFORMANCE (idempotente, sem migration manual). `data_emissao`
+    # não tinha índice e é o filtro/ordenação da lista, do resumo e da agregação
+    # mensal do dashboard → com 14k+ docs virava varredura de tabela inteira em 3
+    # lugares. CREATE INDEX IF NOT EXISTS é no-op após a 1ª vez (Postgres + SQLite).
+    try:
+        from sqlalchemy import text
+        with engine.begin() as conn:
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_docfiscal_data_emissao "
+                "ON documentos_fiscais (data_emissao)"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_docfiscal_empresa_data "
+                "ON documentos_fiscais (empresa_id, data_emissao)"
+            ))
+    except Exception:  # noqa: BLE001 — nunca derrubar o app por causa de índice
+        log.exception("Falha ao criar índices de performance (seguindo mesmo assim)")
     db = SessionLocal()
     try:
         try:
