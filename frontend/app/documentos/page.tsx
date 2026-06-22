@@ -29,6 +29,7 @@ import { Empresa, listarEmpresas } from "../../lib/empresas";
 import { dfeDistribuirLote, dfeElegiveis, dfeManifestar, dfeManifestarDoc } from "../../lib/dfe";
 import { cteDistribuirLote, cteElegiveis } from "../../lib/cte";
 import { nfseElegiveis, nfseSincronizar } from "../../lib/nfse";
+import { conectorEmailProcessar, conectorEmailStatus } from "../../lib/conector-email";
 
 const TIPOS: TipoDocumento[] = ["NFE", "CTE", "NFSE"];
 
@@ -68,6 +69,51 @@ function DocumentosContent() {
   const [syncFocusModalOpen, setSyncFocusModalOpen] = useState(false);
   const [dfeBusy, setDfeBusy] = useState(false);
   const [dfeMsg, setDfeMsg] = useState<string | null>(null);
+
+  // Conector de SAÍDAS por e-mail (Nível 2): lê a caixa notas@pacgestao.com.br,
+  // importa os anexos e roteia por CNPJ. Roda em background no servidor (polling).
+  async function handleLerEmails() {
+    if (!confirm(
+      "Ler a caixa de e-mail (notas@pacgestao.com.br) e importar os XMLs anexados?\n\n" +
+      "Cada nota é roteada por CNPJ para a empresa certa. O que não for de empresa " +
+      "cadastrada é ignorado. Notas duplicadas não entram de novo."
+    )) return;
+    setDfeBusy(true); setError(null);
+    setDfeMsg("📧 Conectando na caixa de e-mail...");
+    try {
+      const { job_id } = await conectorEmailProcessar();
+      const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+      for (let i = 0; i < 300; i++) {
+        await sleep(2000);
+        let job;
+        try { job = await conectorEmailStatus(job_id); } catch { continue; }
+        if (job.status === "concluido" && job.resultado) {
+          const r = job.resultado;
+          setDfeMsg(null);
+          setToast(
+            `✅ E-mail: ${r.emails_lidos} lido(s) · ${r.persistidos} nota(s) importada(s) · ` +
+            `${r.duplicados} já existiam` +
+            (r.nao_cadastrada ? ` · ${r.nao_cadastrada} de CNPJ não cadastrado (ignoradas)` : "") +
+            (r.erros ? ` · ${r.erros} com erro` : ""),
+          );
+          setRefreshTick((t) => t + 1);
+          return;
+        }
+        if (job.status === "erro") {
+          setError(`Falha ao ler e-mails: ${job.erro || "erro desconhecido"}`);
+          setDfeMsg(null);
+          return;
+        }
+        setDfeMsg("📧 Lendo e-mails e importando os anexos...");
+      }
+      setDfeMsg("📧 Ainda processando no servidor — atualize a lista em alguns minutos.");
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Falha ao acionar o conector de e-mail.");
+      setDfeMsg(null);
+    } finally {
+      setDfeBusy(false);
+    }
+  }
 
   // Distribuição Direta DF-e: puxa as RECEBIDAS de toda a carteira (empresas
   // com cert A1, sem Focus) direto da Receita, de graça. Fatia em blocos de 5.
@@ -782,6 +828,16 @@ function DocumentosContent() {
           style={{ alignSelf: "end" }}
         >
           ⬆ Importar XMLs
+        </button>
+        <button
+          type="button"
+          className="btn-primary"
+          onClick={handleLerEmails}
+          disabled={dfeBusy}
+          title="Lê a caixa notas@pacgestao.com.br e importa os XMLs que os clientes enviaram por e-mail (roteia por CNPJ)"
+          style={{ alignSelf: "end", background: "rgb(99,102,241)" }}
+        >
+          {dfeBusy ? "..." : "📧 Ler notas por e-mail"}
         </button>
         <div className="page-actions form-grid" style={{ gridTemplateColumns: "200px 100px 140px 140px 140px" }}>
           <label>

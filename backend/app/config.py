@@ -88,6 +88,26 @@ class Settings(BaseSettings):
     )
     # Base do portal do cliente, usada no link do convite (definir senha).
     portal_url: str = Field(default="https://pacgestao.com.br/portal", alias="PORTAL_URL")
+
+    # --- Conector de SAÍDAS por e-mail (Nível 2 do conector) ---
+    # Caixa única (ex.: notas@pacgestao.com.br) onde o cliente manda os XMLs/ZIP
+    # das próprias notas. O PAC lê por IMAP (TLS), extrai os anexos e joga no
+    # mesmo motor de importação, roteando por CNPJ emitente. Senha SÓ no env
+    # (nunca no código/DB). Quando IMAP_HOST/USER/PASSWORD vazios, o conector
+    # fica desligado (degrada com elegância).
+    imap_host: str = Field(default="", alias="IMAP_HOST")
+    imap_port: int = Field(default=993, alias="IMAP_PORT")
+    imap_user: str = Field(default="", alias="IMAP_USER")
+    imap_password: str = Field(default="", alias="IMAP_PASSWORD")
+    imap_folder: str = Field(default="INBOX", alias="IMAP_FOLDER")
+    # Token pro cron externo disparar a leitura (header X-Cron-Token).
+    conector_email_token: str = Field(default="", alias="CONECTOR_EMAIL_TOKEN")
+    # Teto de e-mails processados por execução (evita rodada eterna).
+    imap_max_emails: int = Field(default=200, alias="IMAP_MAX_EMAILS")
+
+    @property
+    def conector_email_ativo(self) -> bool:
+        return bool(self.imap_host and self.imap_user and self.imap_password)
     first_superuser_email: str = Field(default="admin@pacxml.com.br", alias="FIRST_SUPERUSER_EMAIL")
     first_superuser_password: str = Field(default="admin123", alias="FIRST_SUPERUSER_PASSWORD")
 
