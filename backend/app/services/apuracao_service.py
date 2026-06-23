@@ -125,12 +125,12 @@ class ApuracaoService:
             buckets[nat] = buckets.get(nat, 0.0) + float(r.get("valor") or 0)
         return buckets
 
-    def _atividades_segregadas(self, apur: Apuracao) -> list[dict]:
+    def _atividades_segregadas(self, apur: Apuracao, anexo: str | None = None) -> list[dict]:
         """atividades[] do PGDAS-D a partir dos totais achatados da empresa
         (caminho de estabelecimento único — sem filial). Sem regressão."""
-        return self._buckets_to_atividades(self._buckets_from_flat(apur))
+        return self._buckets_to_atividades(self._buckets_from_flat(apur), anexo)
 
-    def _buckets_to_atividades(self, buckets: dict[str, float]) -> list[dict]:
+    def _buckets_to_atividades(self, buckets: dict[str, float], anexo: str | None = None) -> list[dict]:
         """Monta atividades[] do PGDAS-D segregando por ATIVIDADE e QUALIFICAÇÃO.
 
         A RFB recusa ST/monofásico no idAtividade=1 (erro MSG_ISN_032), porque a
@@ -164,7 +164,14 @@ class ApuracaoService:
                 "exigibilidadesSuspensas": None,
             }
 
-        normal = (buckets.get("NORMAL", 0.0) or 0.0) + (buckets.get("SERVICO", 0.0) or 0.0)
+        # Serviço só é RECEITA do Simples nos Anexos III/IV/V (igual o motor faz em
+        # apuracao_calculator). Em comércio/indústria (I/II) o motor IGNORA serviço
+        # → o payload TAMBÉM tem que ignorar, senão a RFB taxa o serviço como
+        # revenda e diverge (foi o caso AGIMED: RFB 8.848 × PAC 5.141). anexo=None
+        # (legado, sem info) = conservador, NÃO inclui serviço.
+        anx = (anexo or "").upper()
+        servico = (buckets.get("SERVICO", 0.0) or 0.0) if anx in {"III", "IV", "V"} else 0.0
+        normal = (buckets.get("NORMAL", 0.0) or 0.0) + servico
         st = buckets.get("ST", 0.0) or 0.0
         mono = buckets.get("MONOFASICO", 0.0) or 0.0
         mono_st = buckets.get("MONOFASICO_ST", 0.0) or 0.0
@@ -255,7 +262,7 @@ class ApuracaoService:
 
         ordem = [matriz] + [c for c in por_estab if c != matriz]
         return [
-            {"cnpjCompleto": c, "atividades": self._buckets_to_atividades(por_estab.get(c, {}))}
+            {"cnpjCompleto": c, "atividades": self._buckets_to_atividades(por_estab.get(c, {}), empresa.anexo_simples)}
             for c in ordem
         ]
 
@@ -375,10 +382,40 @@ class ApuracaoService:
                     "valor_devido_rfb": previa.get("valor_devido_rfb"),
                     "avisos": previa.get("avisos"),
                 })
+            # Serviço ignorado (Anexo I/II com receita de serviço) NÃO aparece na
+            # divergência (motor e payload ignoram igual) → bloqueio próprio.
+            srv = previa.get("servico_ignorado") or 0
+            if float(srv) > self.TOLERANCIA_DIVERGENCIA:
+                raise HTTPException(status_code=409, detail={
+                    "erro": "servico_ignorado",
+                    "mensagem": (
+                        f"R$ {float(srv):.2f} de SERVIÇO não está sendo declarado — a empresa "
+                        "está como Anexo I/II (comércio). Se ela presta serviço, ajuste o Anexo "
+                        "(III/IV/V) no cadastro; se não, confirme. Revise antes de transmitir."
+                    ),
+                    "servico_ignorado": float(srv),
+                    "avisos": previa.get("avisos"),
+                })
         empresa = self.get_empresa_or_404(apur.empresa_id)
         interna, externa = self._receita_interna_externa(apur)
         receitas_anteriores = self._receitas_brutas_anteriores(apur.empresa_id, apur.ano_mes)
         avisos: list[str] = []
+
+        # SERVIÇO IGNORADO: empresa com receita de serviço mas cadastrada como
+        # comércio/indústria (Anexo I/II) → motor e payload ignoram o serviço.
+        # PAC × RFB até batem (ambos ignoram), mas o DAS pode estar SUBESTIMADO se
+        # a empresa de fato presta serviço (caso AGIMED). A divergência não pega
+        # isso → guarda própria.
+        _anx = (empresa.anexo_simples or "").upper()
+        _servico = self._buckets_from_flat(apur).get("SERVICO", 0.0) or 0.0
+        servico_ignorado = _servico if (_servico > 0.005 and _anx not in {"III", "IV", "V"}) else 0.0
+        if servico_ignorado > 0.005:
+            avisos.append(
+                f"🔴 R$ {servico_ignorado:.2f} de SERVIÇO NÃO está sendo declarado: a empresa "
+                f"está como Anexo {_anx or '(não definido)'} (comércio/indústria), que ignora "
+                "serviço. Se ela presta serviço, ajuste o Anexo (III/IV/V) no cadastro; se não, "
+                "confirme que não é receita tributável. NÃO transmita até resolver."
+            )
 
         def _chamar(estabelecimentos: list[dict] | None, atividades: list[dict] | None):
             return self.provider.pgdas_transmitir_declaracao(
@@ -396,7 +433,7 @@ class ApuracaoService:
         # Empresa com filial → estabelecimentos[] (matriz + filiais). Sem filial →
         # None, e o caminho antigo (atividades achatadas da matriz). Sem regressão.
         estabs = self._estabelecimentos_payload(apur, empresa)
-        atividades = None if estabs else self._atividades_segregadas(apur)
+        atividades = None if estabs else self._atividades_segregadas(apur, empresa.anexo_simples)
         try:
             payload = _chamar(estabs, atividades)
         except IntegraContadorError as exc:
@@ -461,6 +498,7 @@ class ApuracaoService:
             "valores_rfb": valores_rfb,
             "valor_devido_pac": valor_pac,
             "divergencia": divergencia,
+            "servico_ignorado": round(servico_ignorado, 2),
             "raw": dados,
             "apuracao_id": apur.id,
             "status": apur.status.value,
