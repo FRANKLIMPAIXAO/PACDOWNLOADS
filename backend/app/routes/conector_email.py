@@ -88,6 +88,16 @@ def _rodar(job_id: str | None, origem: str) -> None:
             with _LOCK:
                 _JOBS[job_id] = {"status": "erro", "erro": str(exc)[:300]}
     finally:
+        # Rede de segurança: a cada tick do cron, reenvia admissões que não
+        # chegaram no PAC TAREFAS (ex.: Supabase fora no momento do envio). Roda
+        # SEMPRE (mesmo se o e-mail falhou) e nunca derruba o cron.
+        try:
+            from app.services.admissao_service import AdmissaoService
+            r = AdmissaoService(db).reenviar_pendentes(limite=30)
+            if r.get("tentadas"):
+                logger.info("conector-email: reenvio admissoes pendentes %s", r)
+        except Exception:  # noqa: BLE001
+            logger.exception("Falha ao reenviar admissoes pendentes")
         db.close()
         _RODANDO.clear()
 

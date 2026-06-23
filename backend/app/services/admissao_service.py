@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -122,3 +123,23 @@ class AdmissaoService:
             self.db.commit()
             logger.warning("Falha ao enviar admissao %s ao PAC TAREFAS: %s", sol.id, exc)
             return False
+
+    def reenviar_pendentes(self, limite: int = 30) -> dict:
+        """Rede de segurança: re-dispara o webhook das admissões que ainda não
+        chegaram no PAC TAREFAS (ex.: Supabase fora no momento do envio). Chamado
+        pelo cron e pelo botão do escritório. Nunca levanta."""
+        pend = list(self.db.scalars(
+            select(SolicitacaoAdmissao)
+            .where(
+                SolicitacaoAdmissao.enviado_pactarefas.is_(False),
+                SolicitacaoAdmissao.status != "cancelada",
+            )
+            .order_by(SolicitacaoAdmissao.criado_em)
+            .limit(max(1, min(limite, 100)))
+        ).all())
+        enviadas = 0
+        for sol in pend:
+            emp = self.db.get(Empresa, sol.empresa_id)
+            if emp and self.enviar_webhook(sol, emp):
+                enviadas += 1
+        return {"tentadas": len(pend), "enviadas": enviadas}
