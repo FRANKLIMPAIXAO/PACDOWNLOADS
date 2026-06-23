@@ -468,6 +468,35 @@ class ApuracaoService:
         # None, e o caminho antigo (atividades achatadas da matriz). Sem regressão.
         estabs = self._estabelecimentos_payload(apur, empresa)
         atividades = None if estabs else self._atividades_segregadas(apur, empresa.anexo_simples, empresa.anexo_servico)
+
+        def _soma_ativ(es: list[dict] | None, ats: list[dict] | None) -> float:
+            fonte: list[dict] = []
+            if es:
+                for e in es:
+                    fonte.extend(e.get("atividades") or [])
+            elif ats:
+                fonte = ats
+            return round(sum(float(a.get("valorAtividade") or 0) for a in fonte), 2)
+
+        # PRÉ-CHECK: a soma das atividades TEM que bater com a receita interna,
+        # senão a RFB rejeita (MSG_ISN_021 / MSG_E0056). Cata ANTES de gastar
+        # chamada Serpro e mostra os números exatos pra diagnosticar.
+        _soma = _soma_ativ(estabs, atividades)
+        if abs(_soma - round(interna, 2)) > 0.01:
+            raise HTTPException(status_code=400, detail={
+                "erro": "soma_atividades_diverge",
+                "mensagem": (
+                    f"Soma das atividades R$ {_soma:.2f} ≠ receita interna R$ {round(interna, 2):.2f} "
+                    f"(diferença R$ {_soma - round(interna, 2):.2f}). Payload no diagnostico."
+                ),
+                "receita_interna": round(interna, 2),
+                "receita_externa": round(externa, 2),
+                "soma_atividades": _soma,
+                "anexo": empresa.anexo_simples,
+                "anexo_servico": empresa.anexo_servico,
+                "estabelecimentos": estabs,
+                "atividades": atividades,
+            })
         try:
             payload = _chamar(estabs, atividades)
         except IntegraContadorError as exc:
@@ -526,6 +555,16 @@ class ApuracaoService:
             self.db.commit()
             self.db.refresh(apur)
 
+        # DIAGNÓSTICO do payload (pra caçar mismatch de soma — MSG_ISN_021/E0056).
+        def _soma_ativ(es: list[dict] | None, ats: list[dict] | None) -> float:
+            fonte: list[dict] = []
+            if es:
+                for e in es:
+                    fonte.extend(e.get("atividades") or [])
+            elif ats:
+                fonte = ats
+            return round(sum(float(a.get("valorAtividade") or 0) for a in fonte), 2)
+
         return {
             "dry_run": dry_run,
             "valor_devido_rfb": valor_rfb,
@@ -533,6 +572,16 @@ class ApuracaoService:
             "valor_devido_pac": valor_pac,
             "divergencia": divergencia,
             "servico_ignorado": round(servico_ignorado, 2),
+            "diagnostico_payload": {
+                "receita_bruta": round(float(apur.receita_bruta), 2),
+                "receita_interna": round(interna, 2),
+                "receita_externa": round(externa, 2),
+                "soma_atividades": _soma_ativ(estabs, atividades),
+                "anexo": empresa.anexo_simples,
+                "anexo_servico": empresa.anexo_servico,
+                "estabelecimentos": estabs,
+                "atividades": atividades,
+            },
             "raw": dados,
             "apuracao_id": apur.id,
             "status": apur.status.value,
