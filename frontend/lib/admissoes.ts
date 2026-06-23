@@ -30,3 +30,8 @@ export function reenviarPendentes() {
   return apiFetch<{ tentadas: number; enviadas: number }>(
     "/api/v1/admissoes/reenviar-pendentes", { method: "POST" });
 }
+
+/** Exclui uma solicitação de admissão (ex.: teste). Admin-only. */
+export function excluirAdmissao(id: number) {
+  return apiFetch<{ ok: boolean; id: number }>(`/api/v1/admissoes/${id}`, { method: "DELETE" });
+}

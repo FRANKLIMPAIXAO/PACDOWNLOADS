@@ -81,3 +81,39 @@ def reenviar_pendentes(
 ) -> dict:
     """Reenvia TODAS as admissões pendentes de envio. Admin-only."""
     return AdmissaoService(db).reenviar_pendentes(limite=100)
+
+
+@router.delete("/{solicitacao_id}")
+def excluir(
+    solicitacao_id: int,
+    admin: Usuario = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+) -> dict:
+    """EXCLUI uma solicitação de admissão (ex.: teste). Admin-only. Apaga os
+    anexos do disco também. Auditoria: quem excluiu o quê."""
+    import logging
+    from pathlib import Path as _Path
+
+    sol = db.get(SolicitacaoAdmissao, solicitacao_id)
+    if not sol:
+        raise HTTPException(status_code=404, detail="Solicitação não encontrada.")
+    nome, empresa_id = sol.funcionario_nome, sol.empresa_id
+    # apaga os arquivos dos anexos (best-effort — nunca derruba a exclusão)
+    try:
+        anexos = json.loads(sol.anexos) if sol.anexos else []
+    except Exception:  # noqa: BLE001
+        anexos = []
+    for a in anexos:
+        try:
+            p = _Path(a.get("path") or "")
+            if p and p.exists():
+                p.unlink()
+        except OSError:
+            pass
+    db.delete(sol)
+    db.commit()
+    logging.getLogger("pac.admissoes").info(
+        "AUDITORIA admissoes EXCLUSAO: admin=%s id=%s empresa=%s funcionario=%r",
+        admin.email, solicitacao_id, empresa_id, nome,
+    )
+    return {"ok": True, "id": solicitacao_id}

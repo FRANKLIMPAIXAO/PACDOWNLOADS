@@ -8,6 +8,7 @@ import { useAuth } from "../../lib/auth-context";
 import { listarEmpresas, type Empresa } from "../../lib/empresas";
 import {
   AdmissaoOffice,
+  excluirAdmissao,
   listarAdmissoes,
   reenviarAdmissao,
   reenviarPendentes,
@@ -57,6 +58,17 @@ function AdmissoesContent() {
       if (r.enviado) { setToast(`Admissão de ${a.funcionario || a.id} reenviada ao PAC TAREFAS.`); carregar(); }
       else setErro(`Ainda não foi: ${r.erro || "erro desconhecido"}`);
     } catch (e) { setErro(e instanceof ApiError ? e.message : "Falha ao reenviar."); }
+    finally { setBusy(null); }
+  }
+
+  async function excluir(a: AdmissaoOffice) {
+    if (!window.confirm(`Excluir a admissão de "${a.funcionario || a.id}" (${a.empresa || ""})? Esta ação não tem volta.`)) return;
+    setBusy(`del-${a.id}`); setErro(null); setToast(null);
+    try {
+      await excluirAdmissao(a.id);
+      setToast(`Admissão de ${a.funcionario || a.id} excluída.`);
+      setAdms((cur) => (cur || []).filter((x) => x.id !== a.id));
+    } catch (e) { setErro(e instanceof ApiError ? e.message : "Falha ao excluir."); }
     finally { setBusy(null); }
   }
 
@@ -140,10 +152,15 @@ function AdmissoesContent() {
                         ? <span className="pill pill-ok">Sim</span>
                         : <span className="pill pill-warn" title={a.envio_erro || ""}>Pendente</span>}
                     </td>
-                    <td>
+                    <td style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                       {!a.enviado && user?.is_admin ? (
                         <button type="button" className="btn-ghost" onClick={() => reenviarUm(a)} disabled={busy === `um-${a.id}`}>
                           {busy === `um-${a.id}` ? "..." : "↻ Reenviar"}
+                        </button>
+                      ) : null}
+                      {user?.is_admin ? (
+                        <button type="button" className="btn-ghost" style={{ color: "rgb(220,38,38)" }} onClick={() => excluir(a)} disabled={busy === `del-${a.id}`}>
+                          {busy === `del-${a.id}` ? "..." : "🗑 Excluir"}
                         </button>
                       ) : <span className="muted" style={{ fontSize: 12 }}>—</span>}
                     </td>
