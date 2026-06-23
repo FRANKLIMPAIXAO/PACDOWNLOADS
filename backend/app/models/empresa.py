@@ -38,6 +38,10 @@ class Empresa(Base):
     # Anexo: I (comercio), II (industria), III (servicos comuns),
     #        IV (servicos com cessao de mao de obra), V (servicos profissionais)
     anexo_simples: Mapped[str | None] = mapped_column(String(4), nullable=True)
+    # Empresa MISTA: além do comércio/indústria (anexo_simples), também presta
+    # SERVIÇO sob este anexo (III/IV/V). None = não é mista (caminho normal). Quando
+    # setado, o motor calcula DAS = comércio (anexo_simples) + serviço (anexo_servico).
+    anexo_servico: Mapped[str | None] = mapped_column(String(4), nullable=True)
     # Atividade: COMERCIO | INDUSTRIA | SERVICO
     atividade: Mapped[str | None] = mapped_column(String(20), nullable=True)
     # Aliquota ISS do municipio (somente Anexo III/IV/V)

@@ -35,6 +35,7 @@ export type Empresa = {
   // Tributario (Simples)
   ativo: boolean;
   anexo_simples?: string | null;
+  anexo_servico?: string | null;
   atividade?: string | null;
   iss_aliquota?: number | string | null;
   folha_12m?: number | string | null;
@@ -78,6 +79,7 @@ export type EmpresaCreatePayload = {
   uf?: string;
   ativo?: boolean;
   anexo_simples?: string;
+  anexo_servico?: string;
   atividade?: string;
 };
 

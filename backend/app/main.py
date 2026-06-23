@@ -35,7 +35,7 @@ settings = get_settings()
 # BUILD_COMMIT no build (commit fica "unknown"), este é o sinal confiável pra
 # saber, via GET /version, se o deploy pegou o código novo (cache stale é
 # recorrente). Formato livre: AAAA-MM-DD + resumo curto.
-APP_BUILD_TAG = "2026-06-23-pgdasd-servico-anexo"
+APP_BUILD_TAG = "2026-06-23-pgdasd-empresa-mista"
 
 
 @asynccontextmanager
@@ -78,8 +78,14 @@ async def lifespan(_: FastAPI):
                 "CREATE INDEX IF NOT EXISTS ix_docfiscal_empresa_data "
                 "ON documentos_fiscais (empresa_id, data_emissao)"
             ))
+            # Coluna nova em `empresas` (empresa mista: anexo de serviço). ADD IF
+            # NOT EXISTS no startup, ANTES de servir — evita o trauma do is_cliente
+            # (model lê a coluna; se faltar, TODA query de Empresa quebra).
+            conn.execute(text(
+                "ALTER TABLE empresas ADD COLUMN IF NOT EXISTS anexo_servico VARCHAR(4)"
+            ))
     except Exception:  # noqa: BLE001 — nunca derrubar o app por causa de índice
-        log.exception("Falha ao criar índices de performance (seguindo mesmo assim)")
+        log.exception("Falha ao criar índices/colunas de performance (seguindo mesmo assim)")
     db = SessionLocal()
     try:
         try:

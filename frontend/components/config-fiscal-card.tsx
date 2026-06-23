@@ -27,6 +27,7 @@ type Props = {
 export function ConfigFiscalCard({ empresa, onSaved }: Props) {
   const [editing, setEditing] = useState(false);
   const [anexo, setAnexo] = useState(empresa.anexo_simples || "");
+  const [anexoServico, setAnexoServico] = useState(empresa.anexo_servico || "");
   const [atividade, setAtividade] = useState(empresa.atividade || "");
   const [iss, setIss] = useState(empresa.iss_aliquota?.toString() || "");
   const [folha, setFolha] = useState(empresa.folha_12m?.toString() || "");
@@ -46,6 +47,7 @@ export function ConfigFiscalCard({ empresa, onSaved }: Props) {
     try {
       const payload: Record<string, unknown> = {
         anexo_simples: anexo || null,
+        anexo_servico: anexoServico || null,
         atividade: atividade || null,
       };
       if (iss !== "") {
@@ -171,6 +173,16 @@ export function ConfigFiscalCard({ empresa, onSaved }: Props) {
                 <option key={a.value} value={a.value}>{a.label}</option>
               ))}
             </select>
+          </label>
+          <label>
+            <span>Anexo do serviço (empresa mista)</span>
+            <select value={anexoServico} onChange={(e) => setAnexoServico(e.target.value)}>
+              <option value="">— não é mista —</option>
+              <option value="III">III — serviços comuns</option>
+              <option value="IV">IV — serviços c/ cessão de mão de obra</option>
+              <option value="V">V — serviços profissionais</option>
+            </select>
+            <small className="muted">Use só se a empresa vende E presta serviço. O DAS soma comércio + serviço.</small>
           </label>
           <label>
             <span>Alíquota ISS do município (%)</span>

@@ -43,6 +43,8 @@ class EmpresaBase(BaseModel):
     # --- Tributario (Simples) ---
     ativo: bool = True
     anexo_simples: str | None = None
+    # Empresa MISTA: anexo do SERVIÇO (III/IV/V) além do comércio. None = não mista.
+    anexo_servico: str | None = None
     atividade: str | None = None
     iss_aliquota: Decimal | None = None
     folha_12m: Decimal | None = None
@@ -67,6 +69,16 @@ class EmpresaBase(BaseModel):
         v = value.strip().upper()
         if v not in {"I", "II", "III", "IV", "V"}:
             raise ValueError("anexo_simples deve ser I, II, III, IV ou V")
+        return v
+
+    @field_validator("anexo_servico")
+    @classmethod
+    def validate_anexo_servico(cls, value: str | None) -> str | None:
+        if not value:
+            return None
+        v = value.strip().upper()
+        if v not in {"III", "IV", "V"}:
+            raise ValueError("anexo_servico (serviço) deve ser III, IV ou V")
         return v
 
     @field_validator("situacao_cadastral")
@@ -122,6 +134,7 @@ class EmpresaUpdate(BaseModel):
     uf: str | None = None
     ativo: bool | None = None
     anexo_simples: str | None = None
+    anexo_servico: str | None = None
     atividade: str | None = None
     iss_aliquota: Decimal | None = None
     folha_12m: Decimal | None = None

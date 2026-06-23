@@ -369,7 +369,16 @@ class ApuracaoCalculator:
                 receita_normal_calc = total_normal_liquido + (
                     total_servicos if anexo in {"III", "IV", "V"} else Decimal("0")
                 )
-                if anexo in {"I", "II"} and total_servicos > 0:
+                # EMPRESA MISTA: serviço sob anexo PRÓPRIO (III/IV/V), separado do
+                # comércio (anexo). Só quando o cadastro marca `anexo_servico` e o
+                # anexo principal não é de serviço. Senão, caminho normal (sem regressão).
+                anexo_serv = (empresa.anexo_servico or "").upper()
+                servico_misto = (
+                    total_servicos if (anexo_serv in {"III", "IV", "V"}
+                                       and anexo not in {"III", "IV", "V"})
+                    else Decimal("0")
+                )
+                if anexo in {"I", "II"} and total_servicos > 0 and servico_misto <= 0:
                     avisos.append(
                         f"R$ {total_servicos} de servicos ignorados — anexo {anexo} eh "
                         f"comercio/industria. Verifique segregacao por atividade."
@@ -383,6 +392,16 @@ class ApuracaoCalculator:
                     receita_monofasica_st=total_monofasico_st,
                     receita_exportacao=total_exportacao,
                 )
+                if servico_misto > 0:
+                    # DAS do serviço sob o anexo de serviço, somado ao do comércio.
+                    calc_serv = calcular_simples_segregado(
+                        anexo=anexo_serv, rbt12=rbt12, receita_normal=servico_misto,
+                    )
+                    calculo = self._merge_calculos(calculo, calc_serv)
+                    avisos.append(
+                        f"Empresa MISTA: R$ {servico_misto} de serviço tributado pelo "
+                        f"Anexo {anexo_serv} + comércio pelo Anexo {anexo}."
+                    )
                 if calculo.teto_excedido:
                     avisos.append(
                         f"RBT12 R$ {rbt12} excedeu o teto do Simples Nacional (R$ 4.8mi). "
@@ -555,6 +574,32 @@ class ApuracaoCalculator:
         if atividade == "SERVICO":
             return "III"
         return "I"
+
+    @staticmethod
+    def _merge_calculos(a: CalculoSegregado, b: CalculoSegregado) -> CalculoSegregado:
+        """Soma dois CalculoSegregado (empresa MISTA: comércio + serviço). Valor
+        devido e decomposição por tributo somados; alíquota efetiva vira a blended
+        (valor_devido/receita_total). anexo vira 'I+III'."""
+        from dataclasses import replace
+        rt = a.receita_total + b.receita_total
+        vd = (a.valor_devido + b.valor_devido).quantize(Decimal("0.01"))
+        decomp: dict[str, Decimal] = {}
+        for d in (a.decomposicao, b.decomposicao):
+            for k, v in d.items():
+                decomp[k] = decomp.get(k, Decimal("0")) + v
+        decomp = {k: v.quantize(Decimal("0.01")) for k, v in decomp.items() if v > 0}
+        aliq = (vd / rt * Decimal("100")).quantize(Decimal("0.0001")) if rt > 0 else a.aliquota_efetiva
+        return replace(
+            a,
+            anexo=f"{a.anexo}+{b.anexo}",
+            receita_total=rt.quantize(Decimal("0.01")),
+            receita_normal=(a.receita_normal + b.receita_normal).quantize(Decimal("0.01")),
+            valor_devido=vd,
+            valor_normal=(a.valor_normal + b.valor_normal).quantize(Decimal("0.01")),
+            aliquota_efetiva=aliq,
+            teto_excedido=a.teto_excedido or b.teto_excedido,
+            decomposicao=decomp,
+        )
 
     def _documentos_da_competencia(
         self, empresa_id: int, ano: int, mes: int,
