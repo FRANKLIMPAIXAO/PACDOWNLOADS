@@ -125,12 +125,30 @@ class ApuracaoService:
             buckets[nat] = buckets.get(nat, 0.0) + float(r.get("valor") or 0)
         return buckets
 
-    def _atividades_segregadas(self, apur: Apuracao, anexo: str | None = None) -> list[dict]:
+    def _atividades_segregadas(
+        self, apur: Apuracao, anexo: str | None = None, anexo_servico: str | None = None,
+    ) -> list[dict]:
         """atividades[] do PGDAS-D a partir dos totais achatados da empresa
         (caminho de estabelecimento único — sem filial). Sem regressão."""
-        return self._buckets_to_atividades(self._buckets_from_flat(apur), anexo)
+        return self._buckets_to_atividades(self._buckets_from_flat(apur), anexo, anexo_servico)
 
-    def _buckets_to_atividades(self, buckets: dict[str, float], anexo: str | None = None) -> list[dict]:
+    @staticmethod
+    def _id_atividade_servico(anexo_serv: str) -> int:
+        """idAtividade da atividade de SERVIÇO no payload PGDAS-D (empresa mista).
+        Configurável por env (`PGDASD_IDATIV_SERV_III/IV/V`) pra iterar via dry-run
+        sem novo deploy — só Restart. Default = hipótese (3/4/5), corrigida pela
+        resposta da RFB (igual o #92 foi descoberto)."""
+        import os
+        default = {"III": 3, "IV": 4, "V": 5}.get(anexo_serv, 3)
+        try:
+            return int(os.getenv(f"PGDASD_IDATIV_SERV_{anexo_serv}", str(default)))
+        except ValueError:
+            return default
+
+    def _buckets_to_atividades(
+        self, buckets: dict[str, float], anexo: str | None = None,
+        anexo_servico: str | None = None,
+    ) -> list[dict]:
         """Monta atividades[] do PGDAS-D segregando por ATIVIDADE e QUALIFICAÇÃO.
 
         A RFB recusa ST/monofásico no idAtividade=1 (erro MSG_ISN_032), porque a
@@ -203,6 +221,18 @@ class ApuracaoService:
                 "valorAtividade": round(st + mono + mono_st, 2),
                 "receitasAtividade": receitas2,
             })
+        # EMPRESA MISTA — atividade de SERVIÇO (Anexo III/IV/V), separada do
+        # comércio. Sem isto a soma das atividades (só comércio) ≠ receita total
+        # (que inclui serviço) → MSG_ISN_021. O serviço NÃO está em `normal` acima
+        # (anx=I não é serviço), então entra aqui com sua própria idAtividade.
+        anx_serv = (anexo_servico or "").upper()
+        servico_misto = (buckets.get("SERVICO", 0.0) or 0.0)
+        if anx_serv in {"III", "IV", "V"} and anx not in {"III", "IV", "V"} and servico_misto > 0.005:
+            atividades.append({
+                "idAtividade": self._id_atividade_servico(anx_serv),
+                "valorAtividade": round(servico_misto, 2),
+                "receitasAtividade": [_receita(servico_misto, [])],
+            })
         return atividades
 
     @staticmethod
@@ -262,7 +292,7 @@ class ApuracaoService:
 
         ordem = [matriz] + [c for c in por_estab if c != matriz]
         return [
-            {"cnpjCompleto": c, "atividades": self._buckets_to_atividades(por_estab.get(c, {}), empresa.anexo_simples)}
+            {"cnpjCompleto": c, "atividades": self._buckets_to_atividades(por_estab.get(c, {}), empresa.anexo_simples, empresa.anexo_servico)}
             for c in ordem
         ]
 
@@ -407,8 +437,12 @@ class ApuracaoService:
         # a empresa de fato presta serviço (caso AGIMED). A divergência não pega
         # isso → guarda própria.
         _anx = (empresa.anexo_simples or "").upper()
+        _anx_serv = (empresa.anexo_servico or "").upper()
+        _mista = _anx_serv in {"III", "IV", "V"}  # mista declara o serviço → não é "ignorado"
         _servico = self._buckets_from_flat(apur).get("SERVICO", 0.0) or 0.0
-        servico_ignorado = _servico if (_servico > 0.005 and _anx not in {"III", "IV", "V"}) else 0.0
+        servico_ignorado = _servico if (
+            _servico > 0.005 and _anx not in {"III", "IV", "V"} and not _mista
+        ) else 0.0
         if servico_ignorado > 0.005:
             avisos.append(
                 f"🔴 R$ {servico_ignorado:.2f} de SERVIÇO NÃO está sendo declarado: a empresa "
@@ -433,7 +467,7 @@ class ApuracaoService:
         # Empresa com filial → estabelecimentos[] (matriz + filiais). Sem filial →
         # None, e o caminho antigo (atividades achatadas da matriz). Sem regressão.
         estabs = self._estabelecimentos_payload(apur, empresa)
-        atividades = None if estabs else self._atividades_segregadas(apur, empresa.anexo_simples)
+        atividades = None if estabs else self._atividades_segregadas(apur, empresa.anexo_simples, empresa.anexo_servico)
         try:
             payload = _chamar(estabs, atividades)
         except IntegraContadorError as exc:
