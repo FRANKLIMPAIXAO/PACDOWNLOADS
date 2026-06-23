@@ -255,6 +255,29 @@ export function portalMe() {
   return portalFetch<PortalMe>("/api/v1/portal/me");
 }
 
+export type AdmissaoResumo = {
+  id: number;
+  funcionario: string | null;
+  cargo: string | null;
+  data_admissao: string | null;
+  status: string; // nova | em_analise | concluida | cancelada
+  enviado: boolean;
+  criado_em: string | null;
+};
+
+/** Cliente envia uma solicitação de admissão (form eSocial). anexos = base64. */
+export function portalCriarAdmissao(dados: Record<string, unknown>, anexos: { nome: string; base64: string }[]) {
+  return portalFetch<{ id: number; status: string; enviado_pactarefas: boolean; mensagem: string }>(
+    "/api/v1/portal/admissoes",
+    { method: "POST", body: JSON.stringify({ dados, anexos }) },
+  );
+}
+
+/** Acompanhamento: as solicitações de admissão da empresa (status). */
+export function portalAdmissoes() {
+  return portalFetch<{ admissoes: AdmissaoResumo[] }>("/api/v1/portal/admissoes");
+}
+
 /** Troca a empresa ATIVA (cliente multi-empresa). Grava o novo token e devolve-o. */
 export async function portalTrocarEmpresa(empresaId: number): Promise<void> {
   const res = await portalFetch<{ access_token: string }>(

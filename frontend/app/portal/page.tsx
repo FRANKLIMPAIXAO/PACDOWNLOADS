@@ -44,6 +44,7 @@ import {
   type RankItem,
   type UploadSaidasResp,
 } from "../../lib/portal";
+import { PortalAdmissao } from "../../components/portal-admissao";
 
 // ---- Marca PAC ----
 const NAVY = "#16294d";
@@ -201,7 +202,7 @@ function Ranking({ items, cor }: { items: RankItem[]; cor: string }) {
   );
 }
 
-type View = "home" | "notas" | "documentos" | "empresa" | "indicadores" | "manifestar" | "guias" | "certidoes";
+type View = "home" | "notas" | "documentos" | "empresa" | "admissao" | "indicadores" | "manifestar" | "guias" | "certidoes";
 
 export default function PortalPage() {
   const router = useRouter();
@@ -466,6 +467,9 @@ export default function PortalPage() {
       { id: "empresa" as View, label: "Documentos da empresa", icon: "folder", badge: docsEmpresa?.nao_lidos || 0 },
       { id: "documentos" as View, label: "Do escritório", icon: "folder", badge: escritorio?.nao_lidos || 0 },
       { id: "manifestar" as View, label: "Manifestações", icon: "check", badge: aManifestar },
+    ] },
+    { grupo: "Funcionários", itens: [
+      { id: "admissao" as View, label: "Admissão", icon: "check", badge: 0 },
     ] },
   ];
 
@@ -866,6 +870,10 @@ export default function PortalPage() {
                 )}
               </div>
             </>
+          ) : null}
+
+          {view === "admissao" ? (
+            <PortalAdmissao />
           ) : null}
 
           {view === "documentos" ? (

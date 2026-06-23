@@ -108,6 +108,14 @@ class Settings(BaseSettings):
     @property
     def conector_email_ativo(self) -> bool:
         return bool(self.imap_host and self.imap_user and self.imap_password)
+
+    # --- Webhook PAC TAREFAS (PAC Gestão EMPURRA: ex. solicitação de admissão) ---
+    # Quando o cliente envia uma admissão pelo portal, o PAC Gestão faz POST nesta
+    # URL com header X-PAC-Token. Vazio = não envia (fica salvo p/ reenviar depois).
+    pac_tarefas_webhook_url: str = Field(default="", alias="PAC_TAREFAS_WEBHOOK_URL")
+    pac_tarefas_webhook_token: str = Field(default="", alias="PAC_TAREFAS_WEBHOOK_TOKEN")
+    # Base PÚBLICA da API (pros links de anexo que o PAC TAREFAS baixa).
+    api_public_url: str = Field(default="https://api.pacgestao.com.br", alias="API_PUBLIC_URL")
     first_superuser_email: str = Field(default="admin@pacxml.com.br", alias="FIRST_SUPERUSER_EMAIL")
     first_superuser_password: str = Field(default="admin123", alias="FIRST_SUPERUSER_PASSWORD")
 

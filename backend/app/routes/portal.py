@@ -246,6 +246,84 @@ def trocar_empresa(
     return TokenResponse(access_token=create_access_token(cliente.email, emp=empresa_id))
 
 
+# ---------------------------------------------------------------------------
+# Solicitação de ADMISSÃO de funcionário (form eSocial) — cliente preenche no
+# portal; o PAC Gestão guarda e EMPURRA pro PAC TAREFAS (webhook) p/ a equipe.
+# ---------------------------------------------------------------------------
+from pydantic import BaseModel as _BaseModel, Field as _Field  # noqa: E402
+
+
+class AnexoAdmissao(_BaseModel):
+    nome: str
+    base64: str
+
+
+class AdmissaoPayload(_BaseModel):
+    dados: dict = _Field(default_factory=dict, description="Campos do formulário (steps 1-5)")
+    anexos: list[AnexoAdmissao] = _Field(default_factory=list)
+
+
+@router.post("/admissoes")
+def criar_admissao(
+    payload: AdmissaoPayload,
+    cliente: Usuario = Depends(get_current_cliente),
+    db: Session = Depends(get_db),
+) -> dict:
+    """O CLIENTE envia uma solicitação de admissão. Escopo = empresa ATIVA do
+    token. Salva e empurra pro PAC TAREFAS (webhook). Se o webhook falhar, fica
+    salvo (status pendente de envio) pra reenviar — o cliente não perde nada."""
+    from app.services.admissao_service import AdmissaoService
+
+    if not (payload.dados.get("nome") or payload.dados.get("funcionario_nome")):
+        raise HTTPException(status_code=400, detail="Informe ao menos o nome do funcionário.")
+    empresa = db.get(Empresa, cliente.empresa_id)
+    if not empresa:
+        raise HTTPException(status_code=404, detail="Empresa não encontrada.")
+    svc = AdmissaoService(db)
+    sol = svc.criar(
+        empresa, cliente.id, payload.dados,
+        [a.model_dump() for a in payload.anexos],
+    )
+    enviado = svc.enviar_webhook(sol, empresa)
+    return {
+        "id": sol.id,
+        "status": sol.status,
+        "enviado_pactarefas": enviado,
+        # Pro cliente, o importante é que a solicitação foi REGISTRADA. A entrega
+        # ao escritório (webhook) é detalhe interno — se falhar, o dado fica salvo.
+        "mensagem": "Admissão enviada! O escritório vai analisar e dar retorno.",
+    }
+
+
+@router.get("/admissoes")
+def listar_admissoes(
+    cliente: Usuario = Depends(get_current_cliente),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Acompanhamento: as solicitações de admissão DESTA empresa (status)."""
+    from app.models.solicitacao_admissao import SolicitacaoAdmissao
+    sols = list(db.scalars(
+        select(SolicitacaoAdmissao)
+        .where(SolicitacaoAdmissao.empresa_id == cliente.empresa_id)
+        .order_by(desc(SolicitacaoAdmissao.criado_em))
+        .limit(100)
+    ).all())
+    return {
+        "admissoes": [
+            {
+                "id": s.id,
+                "funcionario": s.funcionario_nome,
+                "cargo": s.cargo,
+                "data_admissao": s.data_admissao.isoformat() if s.data_admissao else None,
+                "status": s.status,
+                "enviado": s.enviado_pactarefas,
+                "criado_em": s.criado_em.isoformat() if s.criado_em else None,
+            }
+            for s in sols
+        ],
+    }
+
+
 @router.get("/documentos", response_model=list[DocumentoFiscalRead])
 def portal_documentos(
     tipo_documento: TipoDocumento | None = None,

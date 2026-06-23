@@ -107,3 +107,55 @@ def entregar_documento(payload: EntregarDocumento, db: Session = Depends(get_db)
         "portal_url": f"{portal_base}/portal",
         "mensagem": "Documento entregue na área do cliente.",
     }
+
+
+# ---------------------------------------------------------------------------
+# Solicitações de ADMISSÃO — o PAC TAREFAS baixa os anexos e atualiza o status.
+# (A solicitação em si chega via WEBHOOK; aqui é o suporte: anexos + status.)
+# ---------------------------------------------------------------------------
+@router.get("/admissoes/{solicitacao_id}/anexo/{indice}", dependencies=[Depends(_checar_api_key)])
+def baixar_anexo_admissao(solicitacao_id: int, indice: int, db: Session = Depends(get_db)):
+    """Baixa um anexo de uma solicitação de admissão (link enviado no webhook)."""
+    import json as _json
+
+    from fastapi.responses import FileResponse
+    from app.models.solicitacao_admissao import SolicitacaoAdmissao
+
+    sol = db.get(SolicitacaoAdmissao, solicitacao_id)
+    if not sol:
+        raise HTTPException(status_code=404, detail="Solicitação não encontrada.")
+    try:
+        anexos = _json.loads(sol.anexos) if sol.anexos else []
+    except Exception:  # noqa: BLE001
+        anexos = []
+    if indice < 0 or indice >= len(anexos):
+        raise HTTPException(status_code=404, detail="Anexo não encontrado.")
+    meta = anexos[indice]
+    caminho = Path(meta.get("path") or "")
+    if not caminho or not caminho.exists():
+        raise HTTPException(status_code=404, detail="Arquivo do anexo não está mais disponível.")
+    nome = meta.get("nome") or caminho.name
+    return FileResponse(path=str(caminho), filename=nome, media_type="application/octet-stream")
+
+
+class AtualizarStatusAdmissao(BaseModel):
+    status: str = Field(..., description="nova | em_analise | concluida | cancelada")
+
+
+@router.patch("/admissoes/{solicitacao_id}/status", dependencies=[Depends(_checar_api_key)])
+def atualizar_status_admissao(
+    solicitacao_id: int, payload: AtualizarStatusAdmissao, db: Session = Depends(get_db),
+) -> dict:
+    """O PAC TAREFAS atualiza o status da solicitação (fecha o ciclo p/ o cliente
+    acompanhar no portal)."""
+    from app.models.solicitacao_admissao import SolicitacaoAdmissao
+
+    validos = {"nova", "em_analise", "concluida", "cancelada"}
+    if payload.status not in validos:
+        raise HTTPException(status_code=400, detail=f"Status inválido. Use: {sorted(validos)}")
+    sol = db.get(SolicitacaoAdmissao, solicitacao_id)
+    if not sol:
+        raise HTTPException(status_code=404, detail="Solicitação não encontrada.")
+    sol.status = payload.status
+    db.commit()
+    return {"id": sol.id, "status": sol.status}
