@@ -86,25 +86,36 @@ export type ResultadoTransmissao = {
  * `dryRun=true` (default) → indicadorTransmissao=False: RFB calcula sem entregar.
  * `dryRun=false` → transmite de verdade (gera declaração + recibo).
  */
-export function transmitir(id: number, dryRun = true) {
+export function transmitir(id: number, dryRun = true, forcar = false) {
   return apiFetch<ResultadoTransmissao>(
-    `/api/v1/apuracoes/${id}/transmitir?dry_run=${dryRun ? "true" : "false"}`,
+    `/api/v1/apuracoes/${id}/transmitir?dry_run=${dryRun ? "true" : "false"}&forcar=${forcar ? "true" : "false"}`,
     { method: "POST" },
   );
 }
+
+/** Detalhe estruturado do 409 (trava de divergência PAC × RFB). */
+export type DivergenciaDetalhe = {
+  erro?: string; // divergencia_pac_rfb | sem_comparacao
+  mensagem?: string;
+  divergencia?: number;
+  valor_devido_pac?: number | null;
+  valor_devido_rfb?: number | null;
+  avisos?: string[];
+};
 
 export type TransmitirJob = {
   status: "rodando" | "concluido" | "erro";
   resultado?: ResultadoTransmissao;
   erro?: string;
   code?: number;
+  detalhe?: DivergenciaDetalhe | null;
 };
 
 /** Dispara o dry-run/transmissão em BACKGROUND (não estoura o timeout ~60s do
  * Traefik) e devolve um job_id pra consultar. */
-export function transmitirAsync(id: number, dryRun = true) {
+export function transmitirAsync(id: number, dryRun = true, forcar = false) {
   return apiFetch<{ job_id: string; status: string }>(
-    `/api/v1/apuracoes/${id}/transmitir-async?dry_run=${dryRun ? "true" : "false"}`,
+    `/api/v1/apuracoes/${id}/transmitir-async?dry_run=${dryRun ? "true" : "false"}&forcar=${forcar ? "true" : "false"}`,
     { method: "POST" },
   );
 }
@@ -113,19 +124,20 @@ export function transmitirJob(jobId: string) {
 }
 
 /** Dispara a transmissão em background e faz polling até concluir. Resolve com
- * o ResultadoTransmissao ou lança ApiError com o motivo real. */
+ * o ResultadoTransmissao ou lança ApiError com o motivo real. Na trava de
+ * divergência (409), o ApiError carrega o `detalhe` estruturado em `.detail`. */
 export async function transmitirComPolling(
   id: number,
   dryRun = true,
-  { intervaloMs = 3000, timeoutMs = 180000 }: { intervaloMs?: number; timeoutMs?: number } = {},
+  { intervaloMs = 3000, timeoutMs = 180000, forcar = false }: { intervaloMs?: number; timeoutMs?: number; forcar?: boolean } = {},
 ): Promise<ResultadoTransmissao> {
-  const { job_id } = await transmitirAsync(id, dryRun);
+  const { job_id } = await transmitirAsync(id, dryRun, forcar);
   const inicio = Date.now();
   for (;;) {
     await new Promise((r) => setTimeout(r, intervaloMs));
     const job = await transmitirJob(job_id);
     if (job.status === "concluido" && job.resultado) return job.resultado;
-    if (job.status === "erro") throw new ApiError(job.code || 502, null, job.erro || "Falha na transmissão.");
+    if (job.status === "erro") throw new ApiError(job.code || 502, job.detalhe || null, job.erro || "Falha na transmissão.");
     if (Date.now() - inicio > timeoutMs) {
       throw new ApiError(504, null, "A Receita está demorando muito pra responder. Tente de novo em instantes.");
     }

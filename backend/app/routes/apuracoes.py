@@ -62,6 +62,7 @@ def obter(apuracao_id: int, db: Session = Depends(get_db)):
 def transmitir(
     apuracao_id: int,
     dry_run: bool = True,
+    forcar: bool = False,
     db: Session = Depends(get_db),
 ) -> dict:
     """TRANSDECLARACAO11 — valida (dry-run) ou transmite declaração PGDAS-D.
@@ -70,13 +71,14 @@ def transmitir(
     devolve os valores SEM gerar declaração definitiva. SEGURO pra conferir.
     `?dry_run=false` → transmite de verdade (gera declaração + recibo).
 
+    TRAVA: a transmissão real faz um dry-run antes e SÓ prossegue se PAC × RFB
+    baterem (≤ R$ 1,00). Se divergirem, retorna 409 com os números (não transmite).
+    `?forcar=true` pula a trava (admin assume o risco após revisar).
+
     Devolve {dry_run, valor_devido_rfb, valores_rfb, valor_devido_pac,
     divergencia, status}. Em dry-run o status da apuração NÃO muda.
-
-    Fluxo recomendado: dry-run primeiro, comparar divergencia (RFB × PAC),
-    só transmitir real (dry_run=false) se os valores baterem.
     """
-    return ApuracaoService(db).transmitir(apuracao_id, dry_run=dry_run)
+    return ApuracaoService(db).transmitir(apuracao_id, dry_run=dry_run, forcar=forcar)
 
 
 # ---------------------------------------------------------------------------
@@ -92,16 +94,21 @@ _TRANSM_LOCK = threading.Lock()
 _TRANSM_MAX = 300
 
 
-def _rodar_transmissao(job_id: str, apuracao_id: int, dry_run: bool) -> None:
+def _rodar_transmissao(job_id: str, apuracao_id: int, dry_run: bool, forcar: bool = False) -> None:
     db = SessionLocal()
     try:
-        resultado = ApuracaoService(db).transmitir(apuracao_id, dry_run=dry_run)
+        resultado = ApuracaoService(db).transmitir(apuracao_id, dry_run=dry_run, forcar=forcar)
         plano = jsonable_encoder(resultado)  # serializa igual o endpoint sync
         with _TRANSM_LOCK:
             _TRANSM_JOBS[job_id] = {"status": "concluido", "resultado": plano}
     except HTTPException as exc:
+        det = exc.detail
+        msg = det.get("mensagem") if isinstance(det, dict) else str(det)
         with _TRANSM_LOCK:
-            _TRANSM_JOBS[job_id] = {"status": "erro", "erro": str(exc.detail), "code": exc.status_code}
+            _TRANSM_JOBS[job_id] = {
+                "status": "erro", "erro": msg, "code": exc.status_code,
+                "detalhe": det if isinstance(det, dict) else None,
+            }
     except Exception as exc:  # noqa: BLE001
         logger.exception("Transmissão async falhou (apuração %s)", apuracao_id)
         with _TRANSM_LOCK:
@@ -112,7 +119,7 @@ def _rodar_transmissao(job_id: str, apuracao_id: int, dry_run: bool) -> None:
 
 @router.post("/{apuracao_id}/transmitir-async")
 def transmitir_async(
-    apuracao_id: int, dry_run: bool = True, db: Session = Depends(get_db),
+    apuracao_id: int, dry_run: bool = True, forcar: bool = False, db: Session = Depends(get_db),
 ) -> dict:
     """Inicia o dry-run/transmissão PGDAS-D em background e responde na hora com
     `job_id`. O front consulta GET /apuracoes/transmitir-job/{job_id} até
@@ -124,7 +131,7 @@ def transmitir_async(
             _TRANSM_JOBS.clear()
         _TRANSM_JOBS[job_id] = {"status": "rodando"}
     threading.Thread(
-        target=_rodar_transmissao, args=(job_id, apuracao_id, dry_run), daemon=True,
+        target=_rodar_transmissao, args=(job_id, apuracao_id, dry_run, forcar), daemon=True,
     ).start()
     return {"job_id": job_id, "status": "rodando"}
 

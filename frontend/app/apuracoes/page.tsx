@@ -27,6 +27,7 @@ import {
   statusLabel,
   statusPillClass,
   transmitirComPolling,
+  type DivergenciaDetalhe,
 } from "../../lib/apuracoes";
 import { Empresa, listarEmpresas } from "../../lib/empresas";
 
@@ -93,21 +94,33 @@ function ApuracoesContent() {
   }
 
   // PASSO 2: transmissão REAL — só após confirmar a comparação
-  async function handleTransmitirReal(id: number) {
-    const ok = confirm(
-      "⚠️ TRANSMITIR DE VERDADE pra Receita Federal?\n\n" +
-      "Isso entrega a declaração PGDAS-D oficialmente (gera recibo). " +
-      "Confirme que o valor apurado pela RFB no dry-run está correto antes de prosseguir.\n\n" +
-      "Continuar?",
-    );
-    if (!ok) return;
+  async function handleTransmitirReal(id: number, forcar = false) {
+    if (!forcar) {
+      const ok = confirm(
+        "⚠️ TRANSMITIR DE VERDADE pra Receita Federal?\n\n" +
+        "Isso entrega a declaração PGDAS-D oficialmente (gera recibo). " +
+        "Confirme que o valor apurado pela RFB no dry-run está correto antes de prosseguir.\n\n" +
+        "Continuar?",
+      );
+      if (!ok) return;
+    }
     setBusy(`t-${id}`); setError(null);
     try {
-      await transmitirComPolling(id, false); // real, em background + polling
+      await transmitirComPolling(id, false, { forcar }); // real, em background + polling
       setDryRun(null);
       await reload();
     } catch (err) {
-      if (err instanceof ApiError) setError(err.message);
+      // TRAVA DE SEGURANÇA: o backend bloqueia (409) se PAC × RFB divergirem.
+      if (err instanceof ApiError && err.status === 409) {
+        const det = (err.detail || null) as DivergenciaDetalhe | null;
+        const msg = det?.mensagem || err.message;
+        const forcou = confirm(
+          "🔴 TRAVA DE SEGURANÇA — a declaração NÃO foi transmitida.\n\n" + msg +
+          "\n\nQuer FORÇAR a transmissão mesmo assim, assumindo o risco?",
+        );
+        if (forcou) { await handleTransmitirReal(id, true); return; }
+        setError(msg);
+      } else if (err instanceof ApiError) setError(err.message);
       else setError("Falha ao transmitir.");
     } finally { setBusy(null); }
   }

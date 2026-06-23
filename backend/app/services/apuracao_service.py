@@ -321,13 +321,24 @@ class ApuracaoService:
             out.append({"pa": int(am), "valorInterno": interno, "valorExterno": externo})
         return out
 
-    def transmitir(self, apuracao_id: int, *, dry_run: bool = True) -> dict:
+    # Tolerância de divergência PAC × RFB pra liberar a transmissão real. Centavos
+    # de arredondamento são normais (dry-runs reais bateram a R$0,02-0,03); acima
+    # disso é erro de payload/receita e NÃO se transmite sem revisar.
+    TOLERANCIA_DIVERGENCIA = 1.00
+
+    def transmitir(self, apuracao_id: int, *, dry_run: bool = True, forcar: bool = False) -> dict:
         """Transmite (ou valida via dry-run) a declaração PGDAS-D.
 
         `dry_run=True` (default) → indicadorTransmissao=False: a RFB calcula e
         devolve os valores apurados SEM gerar declaração. Seguro pra conferir
         antes de transmitir de verdade.
         `dry_run=False` → transmite real, marca status=TRANSMITIDA, salva recibo.
+
+        TRAVA DE SEGURANÇA (alto risco fiscal): a transmissão REAL faz um dry-run
+        ANTES e SÓ prossegue se PAC × RFB baterem (divergência ≤ tolerância). Se
+        divergirem, levanta 409 com os números e NÃO transmite — a não ser que
+        `forcar=True` (admin assume, após revisar). Isso protege todos os casos,
+        incluindo o `idAtividade` de serviço ainda não validado por dry-run real.
 
         Retorna dict com {dry_run, valores_rfb, valor_devido_rfb, valor_pac,
         divergencia, apuracao}. Em dry-run NÃO altera o status da apuração.
@@ -337,6 +348,33 @@ class ApuracaoService:
             raise HTTPException(
                 status_code=400, detail="Receita bruta obrigatoria. Calcule a apuracao primeiro.",
             )
+
+        # GUARDA: nunca transmite REAL sem um dry-run que bata com a RFB.
+        if not dry_run and not forcar:
+            previa = self.transmitir(apuracao_id, dry_run=True)
+            div = previa.get("divergencia")
+            if div is None:
+                raise HTTPException(status_code=409, detail={
+                    "erro": "sem_comparacao",
+                    "mensagem": (
+                        "Não dá pra comparar PAC × RFB (apuração sem valor calculado). "
+                        "Calcule a apuração antes de transmitir, ou force assumindo o risco."
+                    ),
+                    "previa": previa,
+                })
+            if abs(float(div)) > self.TOLERANCIA_DIVERGENCIA:
+                raise HTTPException(status_code=409, detail={
+                    "erro": "divergencia_pac_rfb",
+                    "mensagem": (
+                        f"PAC e RFB divergem em R$ {float(div):.2f} "
+                        f"(PAC R$ {previa.get('valor_devido_pac')} × RFB R$ {previa.get('valor_devido_rfb')}). "
+                        "Revise a apuração antes de transmitir — ou force assumindo o risco."
+                    ),
+                    "divergencia": float(div),
+                    "valor_devido_pac": previa.get("valor_devido_pac"),
+                    "valor_devido_rfb": previa.get("valor_devido_rfb"),
+                    "avisos": previa.get("avisos"),
+                })
         empresa = self.get_empresa_or_404(apur.empresa_id)
         interna, externa = self._receita_interna_externa(apur)
         receitas_anteriores = self._receitas_brutas_anteriores(apur.empresa_id, apur.ano_mes)
