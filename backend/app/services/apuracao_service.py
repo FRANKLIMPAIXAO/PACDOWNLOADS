@@ -520,12 +520,30 @@ class ApuracaoService:
                     if not dry_run:
                         apur.status = StatusApuracao.ERRO
                         self.db.commit()
-                    raise HTTPException(status_code=502, detail=f"Integra Contador: {exc2}")
+                    raise HTTPException(status_code=502, detail={
+                        "erro": "integra_contador",
+                        "mensagem": f"Integra Contador: {exc2}",
+                        "diagnostico_payload": {
+                            "receita_interna": round(interna, 2), "receita_externa": round(externa, 2),
+                            "soma_atividades": _soma_ativ(estabs, None),
+                            "anexo": empresa.anexo_simples, "anexo_servico": empresa.anexo_servico,
+                            "estabelecimentos": estabs,
+                        },
+                    })
             else:
                 if not dry_run:
                     apur.status = StatusApuracao.ERRO
                     self.db.commit()
-                raise HTTPException(status_code=502, detail=f"Integra Contador: {exc}")
+                raise HTTPException(status_code=502, detail={
+                    "erro": "integra_contador",
+                    "mensagem": f"Integra Contador: {exc}",
+                    "diagnostico_payload": {
+                        "receita_interna": round(interna, 2), "receita_externa": round(externa, 2),
+                        "soma_atividades": _soma_ativ(estabs, atividades),
+                        "anexo": empresa.anexo_simples, "anexo_servico": empresa.anexo_servico,
+                        "estabelecimentos": estabs, "atividades": atividades,
+                    },
+                })
 
         dados = parse_dados(payload)
         # Valor devido apurado pela RFB. A Serpro NÃO devolve um total — devolve
