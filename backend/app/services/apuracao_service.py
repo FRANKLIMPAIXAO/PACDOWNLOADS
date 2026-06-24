@@ -135,11 +135,22 @@ class ApuracaoService:
     @staticmethod
     def _id_atividade_servico(anexo_serv: str) -> int:
         """idAtividade da atividade de SERVIÇO no payload PGDAS-D (empresa mista).
-        Configurável por env (`PGDASD_IDATIV_SERV_III/IV/V`) pra iterar via dry-run
-        sem novo deploy — só Restart. Default = hipótese (3/4/5), corrigida pela
-        resposta da RFB (igual o #92 foi descoberto)."""
+
+        Domínio do Manual PGDAS-D (item 7 'Prestação de Serviços interno', cada
+        sub-tipo é um idAtividade na ordem; comércio/indústria/locação ocupam 1-8):
+          9  = escritório contábil (ISS fixo)
+          10 = fator R, ISS a outro município
+          11 = fator R, ISS ao próprio município (cobre Anexo III e V via fator R)
+          12 = fator R, com retenção/substituição de ISS
+          13 = Anexo III (sem fator R), ISS a outro município
+          14 = Anexo III (sem fator R), ISS ao próprio município  ← caso comum
+          15 = Anexo III (sem fator R), com retenção de ISS
+          17 = Anexo IV, ISS ao próprio município
+        Default = ISS ao PRÓPRIO município (o mais comum). Ajustável por env
+        `PGDASD_IDATIV_SERV_III/IV/V` (só Restart) p/ os casos de ISS a outro
+        município / com retenção, ou se a RFB indicar outro."""
         import os
-        default = {"III": 3, "IV": 4, "V": 5}.get(anexo_serv, 3)
+        default = {"III": 14, "IV": 17, "V": 11}.get(anexo_serv, 14)
         try:
             return int(os.getenv(f"PGDASD_IDATIV_SERV_{anexo_serv}", str(default)))
         except ValueError:
