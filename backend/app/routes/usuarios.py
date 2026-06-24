@@ -1,13 +1,19 @@
-"""Gestão de usuários — somente administradores.
-
-Endpoints pra o admin do escritório criar/listar/desativar operadores
-(funcionários). Todas as rotas exigem `get_current_admin`.
+"""Gestão de usuários e acessos.
 
 Níveis:
-- admin (is_admin=True): acesso total, incluindo gestão de usuários e
-  exclusão de empresas.
-- operador (is_admin=False): pode usar o sistema (subir cert, rodar robô,
-  ver dados) mas NÃO pode gerenciar usuários nem excluir empresas.
+- admin (is_admin=True): acesso total, incluindo gerenciar a EQUIPE do
+  escritório (criar/promover/desativar usuários) e excluir empresas.
+- operador (is_admin=False): usa o sistema (subir cert, rodar robô, ver
+  dados) E gerencia o ACESSO DO CLIENTE ao portal (convidar/criar/reenviar,
+  vincular empresas, ver o relatório de acessos). NÃO gerencia a equipe nem
+  exclui empresa.
+
+PERMISSÃO POR ROTA: o router exige no mínimo `get_current_user` (usuário do
+escritório — nunca um cliente). As rotas que mexem na EQUIPE/segurança somam
+`Depends(get_current_admin)` explicitamente. Convidar/criar CLIENTE é operação
+do dia a dia (operacional), então fica liberada pro operador — e é segura:
+esses endpoints fixam `is_admin=False, is_cliente=True`, escopado a UMA empresa,
+sem caminho de escalonamento de privilégio.
 """
 import secrets
 
@@ -27,24 +33,38 @@ from app.schemas.auth_schema import (
     UsuarioRead,
     UsuarioUpdate,
 )
-from app.services.auth_service import create_invite_token, get_current_admin, hash_password
+from app.services.auth_service import (
+    create_invite_token,
+    get_current_admin,
+    get_current_user,
+    hash_password,
+)
 from app.services.email_service import enviar_email, html_convite_cliente
 
 
 router = APIRouter(
     prefix="/usuarios",
     tags=["usuarios"],
-    dependencies=[Depends(get_current_admin)],
+    # Mínimo: usuário do escritório (rejeita cliente). Rotas de EQUIPE/segurança
+    # somam Depends(get_current_admin) abaixo; gestão de cliente fica no operador.
+    dependencies=[Depends(get_current_user)],
 )
 
 
 @router.get("", response_model=list[UsuarioRead])
-def listar_usuarios(db: Session = Depends(get_db)) -> list[Usuario]:
+def listar_usuarios(
+    _admin: Usuario = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+) -> list[Usuario]:
+    # ADMIN-only: lista a EQUIPE do escritório (inclui flags is_admin).
     return db.scalars(select(Usuario).order_by(Usuario.id)).all()
 
 
 @router.get("/seguranca-diagnostico")
-def seguranca_diagnostico(db: Session = Depends(get_db)) -> dict:
+def seguranca_diagnostico(
+    _admin: Usuario = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+) -> dict:
     """Diagnóstico de segurança da CONFIG (admin-only). NÃO devolve nenhum valor
     de segredo — só flags booleanas pra detectar config fraca em produção.
     `true` em qualquer "_fraco"/"_default"/"_wildcard" = corrigir no servidor."""
@@ -76,7 +96,12 @@ def seguranca_diagnostico(db: Session = Depends(get_db)) -> dict:
 
 
 @router.post("", response_model=UsuarioRead, status_code=status.HTTP_201_CREATED)
-def criar_usuario(payload: UsuarioAdminCreate, db: Session = Depends(get_db)) -> Usuario:
+def criar_usuario(
+    payload: UsuarioAdminCreate,
+    _admin: Usuario = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+) -> Usuario:
+    # ADMIN-only: cria usuário da EQUIPE (pode setar is_admin) — escalonamento.
     existing = db.scalar(select(Usuario).where(Usuario.email == payload.email))
     if existing:
         raise HTTPException(status_code=400, detail="Já existe um usuário com esse e-mail.")
