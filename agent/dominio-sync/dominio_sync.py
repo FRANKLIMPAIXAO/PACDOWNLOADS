@@ -35,6 +35,7 @@ import json
 import logging
 import os
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -74,6 +75,23 @@ class Config:
         self.pasta_base = Path(os.environ.get("PASTA_BASE", "")).expanduser()
         self.tipos = os.environ.get("TIPOS", "NFE,CTE")
         self.dias_rescan = int(os.environ.get("DIAS_RESCAN", "15"))
+        # COMPETENCIA=AAAA-MM define o mês desejado e deriva data_min/data_max.
+        # ESSENCIAL: sem janela a 1ª carga puxaria TODO o histórico (100k+ XMLs).
+        self.competencia = os.environ.get("COMPETENCIA", "").strip()
+        self.data_min = os.environ.get("DATA_MIN", "").strip()  # override cru
+        self.data_max = os.environ.get("DATA_MAX", "").strip()  # override cru
+        if self.competencia:
+            import calendar
+            try:
+                ano, mes = (int(x) for x in self.competencia.split("-"))
+                self.data_min = self.data_min or f"{ano:04d}-{mes:02d}-01"
+                self.data_max = self.data_max or f"{ano:04d}-{mes:02d}-{calendar.monthrange(ano, mes)[1]:02d}"
+            except (ValueError, TypeError):
+                raise SystemExit(f"COMPETENCIA inválida (use AAAA-MM): {self.competencia!r}")
+        # MODELOS=55 = só Nota Fiscal (exclui cupom NFC-e mod 65). Vazio = todos.
+        self.modelos = os.environ.get("MODELOS", "").strip()
+        # CNPJs (14 díg, csv) a IGNORAR — empresas de altíssimo volume tratadas à parte.
+        self.excluir_cnpjs = os.environ.get("EXCLUIR_CNPJS", "").strip()
         self.layout = os.environ.get("LAYOUT", "arvore").lower()  # arvore | plano
         self.incluir_canceladas = os.environ.get("INCLUIR_CANCELADAS", "true").lower() in ("1", "true", "sim", "yes")
         self.limite_pagina = int(os.environ.get("LIMITE_PAGINA", "2000"))
@@ -105,29 +123,56 @@ class PacSyncClient:
         self.cfg = cfg
         self._c = httpx.Client(base_url=cfg.base_url, timeout=cfg.timeout, follow_redirects=True)
 
+    def _retry(self, fn, *, tentativas: int = 3, espera: float = 3.0) -> httpx.Response:
+        """Repete em falha de REDE (timeout/conexão) ou HTTP 5xx — transitórios.
+        4xx não repete (não adianta). Backoff linear."""
+        ult: Exception | None = None
+        for i in range(1, tentativas + 1):
+            try:
+                r = fn()
+                r.raise_for_status()
+                return r
+            except httpx.TransportError as exc:  # cobre timeout, connect, read
+                ult = exc
+                logger.warning("tentativa %s/%s falhou (rede): %s", i, tentativas, exc)
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code < 500:
+                    raise
+                ult = exc
+                logger.warning("tentativa %s/%s falhou (HTTP %s)", i, tentativas, exc.response.status_code)
+            if i < tentativas:
+                time.sleep(espera * i)
+        assert ult is not None
+        raise ult
+
     def login(self) -> None:
-        r = self._c.post("/api/v1/auth/login", json={"email": self.cfg.email, "password": self.cfg.password})
-        r.raise_for_status()
+        r = self._retry(lambda: self._c.post(
+            "/api/v1/auth/login", json={"email": self.cfg.email, "password": self.cfg.password},
+        ))
         token = r.json()["access_token"]
         self._c.headers["Authorization"] = f"Bearer {token}"
         logger.info("Autenticado no PAC como %s", self.cfg.email)
 
     def manifesto(self, *, desde_id: int = 0, dias: int = 0) -> dict:
-        r = self._c.get(
-            "/api/v1/documentos/sync-manifest",
-            params={
-                "desde_id": desde_id,
-                "dias": dias,
-                "tipos": self.cfg.tipos,
-                "limite": self.cfg.limite_pagina,
-            },
-        )
-        r.raise_for_status()
+        params: dict[str, object] = {
+            "desde_id": desde_id,
+            "dias": dias,
+            "tipos": self.cfg.tipos,
+            "limite": self.cfg.limite_pagina,
+        }
+        if self.cfg.data_min:
+            params["data_min"] = self.cfg.data_min
+        if self.cfg.data_max:
+            params["data_max"] = self.cfg.data_max
+        if self.cfg.modelos:
+            params["modelos"] = self.cfg.modelos
+        if self.cfg.excluir_cnpjs:
+            params["cnpjs_excluir"] = self.cfg.excluir_cnpjs
+        r = self._retry(lambda: self._c.get("/api/v1/documentos/sync-manifest", params=params))
         return r.json()
 
     def baixar_xml(self, doc_id: int) -> bytes:
-        r = self._c.get(f"/api/v1/documentos/{doc_id}/download")
-        r.raise_for_status()
+        r = self._retry(lambda: self._c.get(f"/api/v1/documentos/{doc_id}/download"))
         return r.content
 
     def close(self) -> None:
@@ -290,8 +335,9 @@ def main() -> int:
         logger.info("Cursor zerado (--reset).")
 
     logger.info(
-        "Pasta base: %s | layout=%s | rescan=%sd | canceladas=%s",
-        cfg.pasta_base, cfg.layout, cfg.dias_rescan, cfg.incluir_canceladas,
+        "Pasta: %s | tipos=%s | janela=%s..%s | modelos=%s | excluir=%s | layout=%s | rescan=%sd",
+        cfg.pasta_base, cfg.tipos, cfg.data_min or "(inicio)", cfg.data_max or "(hoje)",
+        cfg.modelos or "(todos)", cfg.excluir_cnpjs or "(nenhum)", cfg.layout, cfg.dias_rescan,
     )
     try:
         stats = sincronizar(

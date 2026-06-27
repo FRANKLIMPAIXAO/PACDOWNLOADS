@@ -541,6 +541,10 @@ def sync_manifest(
     desde_id: int = 0,
     tipos: str = "NFE,CTE",
     dias: int = 0,
+    data_min: str | None = None,
+    data_max: str | None = None,
+    modelos: str | None = None,
+    cnpjs_excluir: str | None = None,
     limite: int = 2000,
     db: Session = Depends(get_db),
 ) -> dict:
@@ -555,12 +559,22 @@ def sync_manifest(
     - `dias`: rescan opcional — inclui TAMBÉM docs criados/completados nos últimos
       N dias. Pega a manifestação TARDIA de RECEBIDA (entra como resumo sem XML e
       só vira XML completo depois da Ciência). 0 = desligado.
+    - `data_min`/`data_max`: AAAA-MM-DD — janela de data_emissao (inclusive).
+      ESSENCIAL pra não baixar anos de histórico: o Domínio só precisa da
+      competência. Vale pros dois modos. Ex.: maio = 2026-05-01 .. 2026-05-31.
+    - `modelos`: csv de modelos da NFe (55=Nota Fiscal, 65=NFC-e/cupom). Filtra
+      pela chave SÓ os docs NFE — CTe/NFSe passam direto. Ex.: `55` = só nota
+      fiscal, exclui os cupons de balcão.
+    - `cnpjs_excluir`: csv de CNPJs (14 díg.) a IGNORAR — pra tirar empresas de
+      altíssimo volume que você trata à parte.
     - `tipos`: csv de NFE/CTE/NFSE (default NFE,CTE).
     - `limite`: teto por página (default 2000, máx 5000).
 
     SÓ retorna doc com XML em disco (`xml_path != ''`) — resumo nunca entra
     (Domínio não importa resumo)."""
     from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import func, or_
 
     tipos_validos = [
         TipoDocumento(t.strip().upper())
@@ -569,6 +583,22 @@ def sync_manifest(
     ]
     if not tipos_validos:
         raise HTTPException(status_code=400, detail=f"tipos inválido: {tipos!r}")
+
+    def _parse_data(valor: str, fim_do_dia: bool) -> "datetime":
+        try:
+            dt = datetime.strptime(valor, "%Y-%m-%d")
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"data inválida (use AAAA-MM-DD): {valor!r}")
+        if fim_do_dia:
+            dt = dt.replace(hour=23, minute=59, second=59)
+        return dt.replace(tzinfo=timezone.utc)
+
+    dt_min = _parse_data(data_min, False) if data_min else None
+    dt_max = _parse_data(data_max, True) if data_max else None
+    modelos_set = {m.strip() for m in (modelos or "").split(",") if m.strip()}
+    cnpjs_excluir_set = {
+        c.strip() for c in (cnpjs_excluir or "").split(",") if c.strip()
+    }
 
     teto = max(1, min(limite, 5000))
     modo_rescan = bool(dias and dias > 0)
@@ -580,6 +610,21 @@ def sync_manifest(
             DocumentoFiscal.xml_path != "",  # exclui resumo (sem XML em disco)
         )
     )
+    if dt_min is not None:
+        stmt = stmt.where(DocumentoFiscal.data_emissao >= dt_min)
+    if dt_max is not None:
+        stmt = stmt.where(DocumentoFiscal.data_emissao <= dt_max)
+    if cnpjs_excluir_set:
+        stmt = stmt.where(Empresa.cnpj.notin_(cnpjs_excluir_set))
+    if modelos_set:
+        # Modelo = posições 21-22 da chave (1-indexed). Filtra SÓ NFE; CTe/NFSe
+        # passam direto (modelo só faz sentido pra NFe 55/65).
+        stmt = stmt.where(
+            or_(
+                DocumentoFiscal.tipo_documento != TipoDocumento.NFE,
+                func.substr(DocumentoFiscal.chave_acesso, 21, 2).in_(modelos_set),
+            )
+        )
     if modo_rescan:
         # RESCAN: docs criados nos últimos N dias (pega manifestação TARDIA de
         # RECEBIDA — entra como resumo de id antigo e só vira XML completo
