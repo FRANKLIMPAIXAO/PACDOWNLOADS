@@ -266,8 +266,12 @@ def sincronizar(cfg: Config, *, dry_run: bool, so_incremental: bool, rescan_dias
             if docs:
                 _processar_lote(cli, cfg, docs, stats, dry_run=dry_run)
             novo_cursor = int(m.get("proximo_desde_id", cursor))
-            if not dry_run and novo_cursor > cursor:
-                cursor = novo_cursor
+            # SEMPRE avança o cursor (inclusive no dry-run) — senão repete a 1ª
+            # página pra sempre e infla a contagem. Só PERSISTE o estado se real.
+            if novo_cursor <= cursor:
+                break  # página vazia / não avançou = fim (evita loop infinito)
+            cursor = novo_cursor
+            if not dry_run:
                 estado["ultimo_id"] = cursor
                 salvar_estado(estado)  # salva a cada página — resiliente a queda
             if not m.get("tem_mais"):
