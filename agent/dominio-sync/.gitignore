@@ -1,0 +1,6 @@
+config.env
+estado.json
+estado.json.tmp
+logs/
+__pycache__/
+*.pyc

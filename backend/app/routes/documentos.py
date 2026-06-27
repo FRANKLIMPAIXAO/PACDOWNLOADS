@@ -536,6 +536,96 @@ def baixar_zip_lote(
     )
 
 
+@router.get("/sync-manifest")
+def sync_manifest(
+    desde_id: int = 0,
+    tipos: str = "NFE,CTE",
+    dias: int = 0,
+    limite: int = 2000,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Manifesto incremental de XMLs COMPLETOS pro agente Domínio-Sync.
+
+    Lista só METADADOS (não o XML) dos documentos prontos pra despejar na pasta
+    que o Domínio monitora. O agente baixa cada XML por
+    `GET /documentos/{id}/download` e grava em `<base>/<CNPJ>/<AAAA-MM>/<TIPO>/`.
+
+    - `desde_id`: cursor — só docs com id > desde_id (incremental barato). O
+      agente avança pra `proximo_desde_id` e pagina até `tem_mais=false`.
+    - `dias`: rescan opcional — inclui TAMBÉM docs criados/completados nos últimos
+      N dias. Pega a manifestação TARDIA de RECEBIDA (entra como resumo sem XML e
+      só vira XML completo depois da Ciência). 0 = desligado.
+    - `tipos`: csv de NFE/CTE/NFSE (default NFE,CTE).
+    - `limite`: teto por página (default 2000, máx 5000).
+
+    SÓ retorna doc com XML em disco (`xml_path != ''`) — resumo nunca entra
+    (Domínio não importa resumo)."""
+    from datetime import datetime, timedelta, timezone
+
+    tipos_validos = [
+        TipoDocumento(t.strip().upper())
+        for t in tipos.split(",")
+        if t.strip().upper() in TipoDocumento.__members__
+    ]
+    if not tipos_validos:
+        raise HTTPException(status_code=400, detail=f"tipos inválido: {tipos!r}")
+
+    teto = max(1, min(limite, 5000))
+    modo_rescan = bool(dias and dias > 0)
+    stmt = (
+        select(DocumentoFiscal, Empresa.cnpj)
+        .join(Empresa, Empresa.id == DocumentoFiscal.empresa_id)
+        .where(
+            DocumentoFiscal.tipo_documento.in_(tipos_validos),
+            DocumentoFiscal.xml_path != "",  # exclui resumo (sem XML em disco)
+        )
+    )
+    if modo_rescan:
+        # RESCAN: docs criados nos últimos N dias (pega manifestação TARDIA de
+        # RECEBIDA — entra como resumo de id antigo e só vira XML completo
+        # depois). Ignora o cursor; dedup é por arquivo no agente. Single-shot,
+        # do mais novo pro mais antigo.
+        corte = datetime.now(timezone.utc) - timedelta(days=dias)
+        stmt = stmt.where(DocumentoFiscal.created_at >= corte).order_by(
+            DocumentoFiscal.id.desc()
+        ).limit(teto)
+    else:
+        # INCREMENTAL: cursor por id, paginável (avança proximo_desde_id).
+        stmt = stmt.where(DocumentoFiscal.id > desde_id).order_by(
+            DocumentoFiscal.id
+        ).limit(teto)
+
+    docs: list[dict] = []
+    max_id = desde_id
+    for doc, cnpj_emp in db.execute(stmt).all():
+        docs.append({
+            "id": doc.id,
+            "empresa_id": doc.empresa_id,
+            "cnpj_empresa": cnpj_emp,
+            "tipo": doc.tipo_documento.value,
+            "chave": doc.chave_acesso,
+            "numero": doc.numero,
+            "serie": doc.serie,
+            "data_emissao": doc.data_emissao.isoformat() if doc.data_emissao else None,
+            "competencia": doc.data_emissao.strftime("%Y-%m") if doc.data_emissao else "sem-data",
+            "origem": doc.origem,
+            "eh_saida": doc.eh_saida,
+            "cancelada": doc.cancelada,
+        })
+        # No rescan o cursor NÃO avança (ids podem ser antigos).
+        if not modo_rescan and doc.id > max_id:
+            max_id = doc.id
+
+    return {
+        "total": len(docs),
+        "modo": "rescan" if modo_rescan else "incremental",
+        "proximo_desde_id": max_id,
+        "tem_mais": len(docs) >= teto,
+        "tipos": [t.value for t in tipos_validos],
+        "documentos": docs,
+    }
+
+
 @router.post("/upload-em-massa")
 async def upload_em_massa(
     arquivo: UploadFile = File(..., description="ZIP com XMLs ou um único XML"),
