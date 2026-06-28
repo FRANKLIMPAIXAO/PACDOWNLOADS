@@ -101,6 +101,9 @@ class Config:
         self.incluir_canceladas = os.environ.get("INCLUIR_CANCELADAS", "true").lower() in ("1", "true", "sim", "yes")
         self.limite_pagina = int(os.environ.get("LIMITE_PAGINA", "2000"))
         self.timeout = float(os.environ.get("TIMEOUT", "60"))
+        # Downloads em paralelo (varejo gera milhares de NFC-e; sequencial é lento
+        # e fica exposto a queda de rede no meio). 8 é seguro pro backend.
+        self.concorrencia = int(os.environ.get("CONCORRENCIA", "8"))
 
     def validar(self) -> None:
         faltando = [
@@ -281,33 +284,45 @@ def gravar_atomico(destino: Path, conteudo: bytes) -> None:
 # --------------------------------------------------------------------------- #
 # Sincronização
 # --------------------------------------------------------------------------- #
+def _baixar_um(
+    cli: PacSyncClient, cfg: Config, doc: dict, mapa: dict[str, tuple[str, str]], *, dry_run: bool
+) -> str:
+    """Baixa UM doc. Retorna a categoria pro stats. Thread-safe: grava em caminho
+    único por chave; o httpx.Client é seguro p/ requests concorrentes."""
+    if doc.get("cancelada") and not cfg.incluir_canceladas:
+        return "puladas_canceladas"
+    destino = caminho_destino(cfg, doc, mapa)
+    if destino.exists():
+        return "ja_existiam"
+    if dry_run:
+        logger.info("[dry-run] baixaria %s", destino)
+        return "baixados"
+    try:
+        conteudo = cli.baixar_xml(doc["id"])
+        if not conteudo:
+            logger.warning("doc %s veio vazio", doc["id"])
+            return "erros"
+        gravar_atomico(destino, conteudo)
+        return "baixados"
+    except httpx.HTTPError as exc:
+        logger.warning("falha ao baixar doc %s: %s", doc["id"], exc)
+        return "erros"
+
+
 def _processar_lote(
     cli: PacSyncClient, cfg: Config, docs: list[dict], stats: dict,
     mapa: dict[str, tuple[str, str]], *, dry_run: bool,
 ) -> None:
-    for doc in docs:
-        if doc.get("cancelada") and not cfg.incluir_canceladas:
-            stats["puladas_canceladas"] += 1
-            continue
-        destino = caminho_destino(cfg, doc, mapa)
-        if destino.exists():
-            stats["ja_existiam"] += 1
-            continue
-        if dry_run:
-            logger.info("[dry-run] baixaria %s", destino)
-            stats["baixados"] += 1
-            continue
-        try:
-            conteudo = cli.baixar_xml(doc["id"])
-            if not conteudo:
-                stats["erros"] += 1
-                logger.warning("doc %s veio vazio", doc["id"])
-                continue
-            gravar_atomico(destino, conteudo)
-            stats["baixados"] += 1
-        except httpx.HTTPError as exc:
-            stats["erros"] += 1
-            logger.warning("falha ao baixar doc %s: %s", doc["id"], exc)
+    # Dry-run: sequencial (só loga). Real: PARALELO (8 por vez) — varejo tem
+    # milhares de NFC-e; sequencial é lento e fica exposto a queda de rede.
+    if dry_run or cfg.concorrencia <= 1:
+        for doc in docs:
+            stats[_baixar_um(cli, cfg, doc, mapa, dry_run=dry_run)] += 1
+        return
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=cfg.concorrencia) as ex:
+        for cat in ex.map(lambda d: _baixar_um(cli, cfg, d, mapa, dry_run=False), docs):
+            stats[cat] += 1
 
 
 def sincronizar(cfg: Config, *, dry_run: bool, so_incremental: bool, rescan_dias: int | None) -> dict:
