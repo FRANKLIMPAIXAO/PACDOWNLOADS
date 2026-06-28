@@ -47,6 +47,9 @@ LOG_PATH = AQUI / "logs" / "dominio_sync.log"
 
 logger = logging.getLogger("dominio_sync")
 
+# CNPJs sem código do Domínio no mapa — pra avisar só 1× cada (não floodar).
+_SEM_MAPA_AVISADOS: set[str] = set()
+
 
 # --------------------------------------------------------------------------- #
 # Config
@@ -92,7 +95,9 @@ class Config:
         self.modelos = os.environ.get("MODELOS", "").strip()
         # CNPJs (14 díg, csv) a IGNORAR — empresas de altíssimo volume tratadas à parte.
         self.excluir_cnpjs = os.environ.get("EXCLUIR_CNPJS", "").strip()
-        self.layout = os.environ.get("LAYOUT", "arvore").lower()  # arvore | plano
+        self.layout = os.environ.get("LAYOUT", "dominio").lower()  # dominio | arvore | plano
+        # Mapa CNPJ -> codigo/apelido do Dominio (CSV: cnpj,codigo,apelido).
+        self.mapa_empresas = os.environ.get("MAPA_EMPRESAS", "empresas_dominio.csv")
         self.incluir_canceladas = os.environ.get("INCLUIR_CANCELADAS", "true").lower() in ("1", "true", "sim", "yes")
         self.limite_pagina = int(os.environ.get("LIMITE_PAGINA", "2000"))
         self.timeout = float(os.environ.get("TIMEOUT", "60"))
@@ -111,8 +116,8 @@ class Config:
                 f"Config faltando: {', '.join(faltando)}. "
                 f"Edite {AQUI / 'config.env'} (copie de config.example.env)."
             )
-        if self.layout not in ("arvore", "plano"):
-            raise SystemExit("LAYOUT deve ser 'arvore' ou 'plano'.")
+        if self.layout not in ("dominio", "arvore", "plano"):
+            raise SystemExit("LAYOUT deve ser 'dominio', 'arvore' ou 'plano'.")
 
 
 # --------------------------------------------------------------------------- #
@@ -200,12 +205,59 @@ def salvar_estado(estado: dict) -> None:
 # --------------------------------------------------------------------------- #
 # Gravação na pasta
 # --------------------------------------------------------------------------- #
-def caminho_destino(cfg: Config, doc: dict) -> Path:
-    """Monta o caminho do XML na pasta. `arvore`: <base>/<CNPJ>/<AAAA-MM>/<TIPO>/<chave>.xml.
-    `plano`: <base>/<CNPJ>_<TIPO>_<chave>.xml (use se o Domínio não varre subpastas)."""
-    cnpj = (doc.get("cnpj_empresa") or "sem-cnpj").strip()
+def carregar_mapa_empresas(cfg: Config) -> dict[str, tuple[str, str]]:
+    """Lê o mapa CNPJ -> (codigo, apelido) do Domínio.
+
+    CSV com cabeçalho `cnpj,codigo,apelido` (aceita ; ou , e BOM do Excel).
+    CNPJ é normalizado pra só dígitos. Sem o arquivo, retorna {} (tudo cai em
+    _SEM_CODIGO até o mapa existir)."""
+    import csv
+    caminho = Path(cfg.mapa_empresas)
+    if not caminho.is_absolute():
+        caminho = AQUI / caminho
+    mapa: dict[str, tuple[str, str]] = {}
+    if not caminho.is_file():
+        logger.warning("Mapa de empresas não encontrado: %s (layout dominio cairá em _SEM_CODIGO)", caminho)
+        return mapa
+    with caminho.open(encoding="utf-8-sig", newline="") as f:
+        amostra = f.read(4096)
+        f.seek(0)
+        delim = ";" if amostra.count(";") > amostra.count(",") else ","
+        for row in csv.DictReader(f, delimiter=delim):
+            low = {(k or "").strip().lower(): (v or "").strip() for k, v in row.items()}
+            cnpj = "".join(ch for ch in low.get("cnpj", "") if ch.isdigit())
+            codigo, apelido = low.get("codigo", ""), low.get("apelido", "")
+            if cnpj and codigo:
+                mapa[cnpj] = (codigo, apelido)
+    logger.info("Mapa do Domínio: %s empresas", len(mapa))
+    return mapa
+
+
+def caminho_destino(cfg: Config, doc: dict, mapa: dict[str, tuple[str, str]]) -> Path:
+    """Monta o caminho do XML na pasta.
+
+    - `dominio` (produção): <base>/<TIPO>/<codigo>-<apelido>/<chave>.xml — XML
+      SOLTO na pasta da empresa. É o que o Domínio importa (rotina por TIPO,
+      pasta nomeada <codigo>-<apelido>). CNPJ fora do mapa vai pra _SEM_CODIGO
+      (não perde a nota). Cada TIPO tem sua pasta = você aponta NFE/CTE/NFSE
+      separados no Domínio.
+    - `arvore`: <base>/<CNPJ>/<AAAA-MM>/<TIPO>/<chave>.xml (organização humana).
+    - `plano`: <base>/<CNPJ>_<TIPO>_<chave>.xml."""
     chave = (doc.get("chave") or f"doc{doc['id']}").strip()
     tipo = doc.get("tipo", "DOC")
+    cnpj = "".join(ch for ch in (doc.get("cnpj_empresa") or "") if ch.isdigit())
+
+    if cfg.layout == "dominio":
+        info = mapa.get(cnpj)
+        if info:
+            codigo, apelido = info
+            return cfg.pasta_base / tipo / f"{codigo}-{apelido}".strip() / f"{chave}.xml"
+        if cnpj not in _SEM_MAPA_AVISADOS:
+            _SEM_MAPA_AVISADOS.add(cnpj)
+            logger.warning("CNPJ %s sem código do Domínio no mapa -> _SEM_CODIGO", cnpj or "?")
+        return cfg.pasta_base / tipo / "_SEM_CODIGO" / (cnpj or "sem-cnpj") / f"{chave}.xml"
+
+    cnpj = cnpj or "sem-cnpj"
     if cfg.layout == "plano":
         return cfg.pasta_base / f"{cnpj}_{tipo}_{chave}.xml"
     comp = doc.get("competencia") or "sem-data"
@@ -223,13 +275,14 @@ def gravar_atomico(destino: Path, conteudo: bytes) -> None:
 # Sincronização
 # --------------------------------------------------------------------------- #
 def _processar_lote(
-    cli: PacSyncClient, cfg: Config, docs: list[dict], stats: dict, *, dry_run: bool
+    cli: PacSyncClient, cfg: Config, docs: list[dict], stats: dict,
+    mapa: dict[str, tuple[str, str]], *, dry_run: bool,
 ) -> None:
     for doc in docs:
         if doc.get("cancelada") and not cfg.incluir_canceladas:
             stats["puladas_canceladas"] += 1
             continue
-        destino = caminho_destino(cfg, doc)
+        destino = caminho_destino(cfg, doc, mapa)
         if destino.exists():
             stats["ja_existiam"] += 1
             continue
@@ -255,6 +308,7 @@ def sincronizar(cfg: Config, *, dry_run: bool, so_incremental: bool, rescan_dias
     stats = {"baixados": 0, "ja_existiam": 0, "erros": 0, "puladas_canceladas": 0}
     try:
         cli.login()
+        mapa = carregar_mapa_empresas(cfg) if cfg.layout == "dominio" else {}
         estado = ler_estado()
         cursor = int(estado.get("ultimo_id", 0))
 
@@ -264,7 +318,7 @@ def sincronizar(cfg: Config, *, dry_run: bool, so_incremental: bool, rescan_dias
             m = cli.manifesto(desde_id=cursor, dias=0)
             docs = m.get("documentos", [])
             if docs:
-                _processar_lote(cli, cfg, docs, stats, dry_run=dry_run)
+                _processar_lote(cli, cfg, docs, stats, mapa, dry_run=dry_run)
             novo_cursor = int(m.get("proximo_desde_id", cursor))
             # SEMPRE avança o cursor (inclusive no dry-run) — senão repete a 1ª
             # página pra sempre e infla a contagem. Só PERSISTE o estado se real.
@@ -283,7 +337,7 @@ def sincronizar(cfg: Config, *, dry_run: bool, so_incremental: bool, rescan_dias
             logger.info("Rescan dos últimos %s dias (manifestação tardia)", dias)
             m = cli.manifesto(desde_id=0, dias=dias)
             docs = m.get("documentos", [])
-            _processar_lote(cli, cfg, docs, stats, dry_run=dry_run)
+            _processar_lote(cli, cfg, docs, stats, mapa, dry_run=dry_run)
             if m.get("tem_mais"):
                 logger.warning(
                     "Rescan truncado em %s docs (LIMITE_PAGINA). Reduza DIAS_RESCAN "

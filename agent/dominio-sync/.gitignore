@@ -4,3 +4,9 @@ estado.json.tmp
 logs/
 __pycache__/
 *.pyc
+# Dados/runtime locais (mapa de empresas do escritório, dumps, pdf render)
+empresas_dominio.csv
+_empresas_pdf/
+_pac_*.json
+_cnpjs_*.json
+run_*.txt
