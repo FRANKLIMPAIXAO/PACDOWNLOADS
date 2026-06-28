@@ -383,6 +383,16 @@ def main() -> int:
         except (AttributeError, ValueError):
             pass
 
+    # Impede o PC de DORMIR durante o download (senão o processo congela e a carga
+    # trava no meio). Process-scoped: reverte sozinho quando o agente termina —
+    # NÃO altera a configuração de energia do Windows.
+    try:
+        if sys.platform == "win32":
+            import ctypes
+            ctypes.windll.kernel32.SetThreadExecutionState(0x80000000 | 0x00000001)
+    except Exception:  # noqa: BLE001
+        pass
+
     ap = argparse.ArgumentParser(description="Agente Domínio-Sync (PAC → pasta → Domínio)")
     ap.add_argument("--dry-run", action="store_true", help="não grava nada, só mostra")
     ap.add_argument("--reset", action="store_true", help="zera o cursor (re-baixa tudo)")
