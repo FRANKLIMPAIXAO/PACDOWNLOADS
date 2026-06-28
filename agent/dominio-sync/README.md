@@ -1,74 +1,68 @@
 # Agente Domínio-Sync
 
-Baixa automaticamente os XMLs do PAC pra uma pasta que o **Domínio** monitora —
-sem clique humano. O Domínio importa sozinho, roteando cada nota pelo CNPJ.
+Baixa automaticamente os XMLs do PAC pras pastas que o **Domínio** monitora —
+sem clique humano. O Domínio importa sozinho via as rotinas automáticas.
 
 ```
-PAC (nuvem) ──API──> este agente (seu servidor) ──grava──> pasta OneDrive
-                                                                 │ espelha
-                                                                 ▼
-                                       máquina do Domínio (pasta monitorada)
-                                       → importação automática por CNPJ
+PAC (nuvem) ──API──> este agente (servidor) ──grava──> pasta OneDrive
+                                                            │ espelha
+                                                            ▼
+                                  máquina do Domínio (pastas monitoradas)
+                                  → importação automática por <código>-<apelido>
 ```
 
-## Por que funciona
+## Como o Domínio acha a empresa (IMPORTANTE)
 
-- O PAC **já tem** os XMLs (NFe via DF-e + robô SEFAZ; CTe via distribuição).
-- O agente puxa **só o que é novo** (cursor incremental) e o que foi **manifestado
-  tardiamente** (rescan dos últimos N dias).
-- **Dedup por arquivo**: nunca regrava um XML que já está na pasta. E o Domínio
-  ainda deduplica por chave — reenvio é inofensivo.
-- **Escrita atômica** (`.tmp` + rename): o monitor do Domínio nunca pega arquivo
-  pela metade.
+O Domínio **não** roteia pelo CNPJ do XML. Ele espera, dentro da pasta monitorada,
+uma subpasta por empresa nomeada **`<código>-<apelido>`** (o *código* é o número
+interno da empresa **no Domínio**), com os **XMLs soltos** lá dentro. E tem uma
+**rotina de importação separada por tipo** (NF-e, NFC-e, CT-e, NFS-e), então cada
+tipo vai pra uma pasta diferente.
+
+Layout que o agente gera (`LAYOUT=dominio`):
+```
+XML-DOMINIO\
+   NFE\   2-LATICINIOS CLAVEAUX\ <chave>.xml   ← NF-e (modelo 55)
+   NFCE\  87-NEVES E MIRANDA\    <chave>.xml   ← NFC-e (modelo 65, cupom)
+   CTE\   39-LG AGRO\            <chave>.xml   ← CT-e
+   NFSE\  6-AGIMED\              <chave>.xml   ← NFS-e (Padrão Nacional / ADN)
+```
+
+### Configurar o Domínio (uma vez) — aponte cada rotina pra sua pasta:
+| Importação no Domínio | Pasta |
+|------------------------|-------|
+| NF-e Arquivo XML | `...\XML-DOMINIO\NFE` |
+| NFC-e Arquivo XML | `...\XML-DOMINIO\NFCE` |
+| CT-e Arquivo XML | `...\XML-DOMINIO\CTE` |
+| NFS-e Arquivo XML — **Padrão Nacional** | `...\XML-DOMINIO\NFSE` |
+
+## O mapa CNPJ → código (`empresas_dominio.csv`)
+
+O PAC só conhece o CNPJ; o *código* é interno do Domínio. O agente lê o arquivo
+`empresas_dominio.csv` (colunas `cnpj,codigo,apelido`) pra nomear as pastas. Gere
+ele da "Relação de Empresas" do Domínio. CNPJ fora do mapa cai em
+`<TIPO>\_SEM_CODIGO\<cnpj>\` (nunca perde a nota — é só adicionar ao mapa).
 
 ## Setup (no servidor que tem o OneDrive)
 
-1. **Python 3.10+** instalado.
-2. Copie esta pasta (`dominio-sync/`) pro servidor.
-3. Instale a dependência:
-   ```
-   pip install -r requirements.txt
-   ```
-4. Copie `config.example.env` → `config.env` e preencha:
-   - `PAC_BASE_URL` = `https://api.pacgestao.com.br`
-   - `PAC_EMAIL` / `PAC_PASSWORD` = um usuário **operador** do PAC (não precisa ser admin).
-   - `PASTA_BASE` = a pasta do OneDrive que o Domínio vai monitorar.
-   - `TIPOS` = `NFE,CTE` (fase 1).
-5. Teste **sem gravar nada**:
-   ```
-   python dominio_sync.py --dry-run
-   ```
-   Ele lista quantos XMLs baixaria. Depois rode de verdade:
-   ```
-   python dominio_sync.py
-   ```
-6. Confira a pasta — os XMLs devem aparecer em `<base>/<CNPJ>/<AAAA-MM>/NFE|CTE/`.
+1. Python 3.10+ e `pip install -r requirements.txt`.
+2. `config.example.env` → `config.env`, preencha PAC_EMAIL/PAC_PASSWORD (operador)
+   e PASTA_BASE (a pasta do OneDrive). Ajuste COMPETENCIA/MODELOS.
+3. Coloque o `empresas_dominio.csv` ao lado do script.
+4. Teste: `python dominio_sync.py --dry-run` → depois `python dominio_sync.py`.
 
-## Configurar o Domínio (uma vez)
+## Recorte (config.env)
 
-Na importação automática de XML do Domínio, aponte a **pasta monitorada** pra
-`PASTA_BASE` (a mesma do `config.env`). Como ele roteia pelo CNPJ de dentro do
-XML, não precisa mapear empresa por empresa.
+| Chave | Efeito |
+|-------|--------|
+| `COMPETENCIA=2026-06` | mês desejado (deriva data_min/max) |
+| `MODELOS=55,65` | 55=NF-e, 65=NFC-e (cupom). Só `55` = sem cupons |
+| `TIPOS=NFE,CTE,NFSE` | tipos de documento |
+| `EXCLUIR_CNPJS=...` | CNPJs a ignorar (ex.: empresa de altíssimo volume) |
+| `DIAS_RESCAN=15` | rescan p/ manifestação tardia de recebida |
 
-> Se o seu Domínio **não varrer subpastas**, troque no `config.env`
-> `LAYOUT=plano` — aí o agente joga todos os XMLs direto na pasta monitorada
-> (nome `CNPJ_TIPO_chave.xml`).
-
-## Agendar (Agendador de Tarefas do Windows)
-
-Crie uma tarefa básica que roda a cada 1–2 horas:
-
-- **Programa/script:** `python`
-- **Argumentos:** `dominio_sync.py`
-- **Iniciar em:** o caminho desta pasta (ex.: `C:\dev\dominio-sync`)
-- Marque "Executar estando o usuário conectado ou não".
-
-Ou via PowerShell (ajuste os caminhos):
-```powershell
-$acao = New-ScheduledTaskAction -Execute "python" -Argument "dominio_sync.py" -WorkingDirectory "C:\dominio-sync"
-$gatilho = New-ScheduledTaskTrigger -Once -At 7am -RepetitionInterval (New-TimeSpan -Hours 1)
-Register-ScheduledTask -TaskName "PAC Dominio-Sync" -Action $acao -Trigger $gatilho -RunLevel Highest
-```
+> Ao trocar de competência/modelos, rode uma vez com `--reset` (zera o cursor) pra
+> varrer o novo recorte do zero. O dedup é por arquivo — não re-baixa o que já tem.
 
 ## Comandos
 
@@ -76,28 +70,23 @@ Register-ScheduledTask -TaskName "PAC Dominio-Sync" -Action $acao -Trigger $gati
 |---------|-----------|
 | `python dominio_sync.py` | Incremental + rescan (uso normal / agendado) |
 | `python dominio_sync.py --dry-run` | Mostra o que baixaria, sem gravar |
-| `python dominio_sync.py --reset` | Zera o cursor e re-baixa tudo (1ª carga / backfill) |
-| `python dominio_sync.py --so-incremental` | Pula o rescan (rodada rápida) |
-| `python dominio_sync.py --rescan-dias 30` | Rescan de 30 dias nesta rodada |
+| `python dominio_sync.py --reset` | Zera o cursor (re-varre o recorte) |
+| `python reorg.py [--mover]` | Move XMLs do layout antigo (arvore) pro novo |
 
-## Arquivos
+## Agendar (Agendador de Tarefas do Windows)
 
-- `config.env` — suas credenciais e a pasta (NÃO comitar; tem senha).
-- `estado.json` — cursor (`ultimo_id`) e stats da última rodada.
-- `logs/dominio_sync.log` — histórico de execução.
+```powershell
+$acao = New-ScheduledTaskAction -Execute "python" -Argument "dominio_sync.py" -WorkingDirectory "C:\dominio-sync"
+$gatilho = New-ScheduledTaskTrigger -Once -At 7am -RepetitionInterval (New-TimeSpan -Hours 1)
+Register-ScheduledTask -TaskName "PAC Dominio-Sync" -Action $acao -Trigger $gatilho -RunLevel Highest
+```
 
-## Como o PAC entrega (backend)
+## Backend (PAC)
 
-`GET /api/v1/documentos/sync-manifest` (exige login):
-- `desde_id` — cursor incremental (id > desde_id).
-- `dias` — rescan: docs criados nos últimos N dias (pega manifestação tardia).
-- `tipos` — `NFE,CTE,NFSE`.
-- Só retorna doc com **XML completo** (`xml_path != ''`) — resumo nunca entra.
+`GET /api/v1/documentos/sync-manifest` (login): `desde_id`, `dias` (rescan),
+`data_min`/`data_max`, `modelos` (55/65), `cnpjs_excluir`, `tipos`. Só devolve doc
+com XML completo. O XML vem por `GET /api/v1/documentos/{id}/download`.
 
-O XML em si vem por `GET /api/v1/documentos/{id}/download`.
-
-## Roadmap
-
-- **Fase 1 (agora):** NFe + CTe → pasta → Domínio importa.
-- **Fase 2:** somar NFSe (ADN), após confirmar que o Domínio aceita o XML.
-- **Fase 3:** painel no PAC com "última sincronização / XMLs por empresa".
+## Arquivos locais (gitignored)
+`config.env` (senha) · `empresas_dominio.csv` (mapa) · `estado.json` (cursor) ·
+`logs/`.

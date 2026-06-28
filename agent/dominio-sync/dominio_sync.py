@@ -247,15 +247,22 @@ def caminho_destino(cfg: Config, doc: dict, mapa: dict[str, tuple[str, str]]) ->
     tipo = doc.get("tipo", "DOC")
     cnpj = "".join(ch for ch in (doc.get("cnpj_empresa") or "") if ch.isdigit())
 
+    # O Domínio importa NF-e (mod 55) e NFC-e (mod 65) por ROTINAS SEPARADAS, então
+    # cada uma vai pra sua pasta. No PAC ambas são tipo "NFE"; o modelo está nas
+    # posições 21-22 da chave (44 díg). CTe/NFSe seguem com a própria pasta.
+    pasta_tipo = tipo
+    if tipo == "NFE" and len(chave) >= 22 and chave[20:22] == "65":
+        pasta_tipo = "NFCE"
+
     if cfg.layout == "dominio":
         info = mapa.get(cnpj)
         if info:
             codigo, apelido = info
-            return cfg.pasta_base / tipo / f"{codigo}-{apelido}".strip() / f"{chave}.xml"
+            return cfg.pasta_base / pasta_tipo / f"{codigo}-{apelido}".strip() / f"{chave}.xml"
         if cnpj not in _SEM_MAPA_AVISADOS:
             _SEM_MAPA_AVISADOS.add(cnpj)
             logger.warning("CNPJ %s sem código do Domínio no mapa -> _SEM_CODIGO", cnpj or "?")
-        return cfg.pasta_base / tipo / "_SEM_CODIGO" / (cnpj or "sem-cnpj") / f"{chave}.xml"
+        return cfg.pasta_base / pasta_tipo / "_SEM_CODIGO" / (cnpj or "sem-cnpj") / f"{chave}.xml"
 
     cnpj = cnpj or "sem-cnpj"
     if cfg.layout == "plano":
