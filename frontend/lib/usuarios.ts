@@ -15,6 +15,14 @@ export function listarUsuarios() {
   return apiFetch<UsuarioAdmin[]>("/api/v1/usuarios");
 }
 
+/** Usuário troca a PRÓPRIA senha (1º acesso com provisória, ou voluntário). */
+export function trocarSenha(senhaAtual: string, novaSenha: string) {
+  return apiFetch<{ ok: boolean }>("/api/v1/auth/trocar-senha", {
+    method: "POST",
+    body: JSON.stringify({ senha_atual: senhaAtual, nova_senha: novaSenha }),
+  });
+}
+
 export type SegurancaDiag = {
   ambiente: string;
   is_production: boolean;

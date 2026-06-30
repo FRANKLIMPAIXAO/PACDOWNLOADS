@@ -55,8 +55,15 @@ class UsuarioRead(BaseModel):
     is_admin: bool
     is_cliente: bool = False
     empresa_id: int | None = None
+    senha_provisoria: bool = False
 
     model_config = {"from_attributes": True}
+
+
+class TrocarSenha(BaseModel):
+    """Usuário troca a PRÓPRIA senha (1º acesso ou voluntário)."""
+    senha_atual: str
+    nova_senha: str
 
 
 class ConviteResposta(BaseModel):

@@ -113,6 +113,7 @@ def criar_usuario(
         senha_hash=hash_password(payload.password),
         ativo=True,
         is_admin=payload.is_admin,
+        senha_provisoria=True,  # admin define a provisória; o usuário troca no 1º acesso
     )
     db.add(user)
     db.commit()
@@ -250,6 +251,8 @@ def atualizar_usuario(
         if len(payload.password) < 6:
             raise HTTPException(status_code=400, detail="Senha precisa de ao menos 6 caracteres.")
         user.senha_hash = hash_password(payload.password)
+        # Reset pelo admin = senha PROVISÓRIA → força o usuário a trocar no próximo acesso.
+        user.senha_provisoria = True
 
     db.commit()
     db.refresh(user)

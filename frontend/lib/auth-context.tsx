@@ -16,6 +16,7 @@ export type Usuario = {
   nome: string;
   email: string;
   is_admin: boolean;
+  senha_provisoria?: boolean;
 };
 
 type TokenResponse = { access_token: string; token_type: string };
@@ -27,6 +28,7 @@ type AuthContextValue = {
   login: (email: string, password: string) => Promise<void>;
   register: (nome: string, email: string, password: string) => Promise<void>;
   logout: () => void;
+  refreshUser: () => Promise<void>;
 };
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -92,8 +94,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
   }, []);
 
+  // Re-busca o usuário no /auth/me (ex.: após trocar a senha provisória, pra
+  // limpar a flag e liberar o app).
+  const refreshUser = useCallback(async () => {
+    const u = await apiFetch<Usuario>("/api/v1/auth/me");
+    setUser(u);
+  }, []);
+
   return (
-    <AuthContext.Provider value={{ user, token, loading, login, register, logout }}>
+    <AuthContext.Provider value={{ user, token, loading, login, register, logout, refreshUser }}>
       {children}
     </AuthContext.Provider>
   );

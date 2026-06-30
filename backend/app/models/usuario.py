@@ -15,6 +15,11 @@ class Usuario(Base):
     senha_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     ativo: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Senha PROVISÓRIA: admin criou/resetou e o usuário tem que TROCAR no 1º acesso.
+    # Enquanto True, o front bloqueia o uso até definir a senha dele.
+    senha_provisoria: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
     # --- Portal do cliente (multi-tenant) ---
     # is_cliente=True → usuário é um CLIENTE (dono da empresa), NÃO equipe do
     # escritório. Vê SÓ a empresa dele (empresa_id) e SÓ pelo /portal — o

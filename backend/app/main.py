@@ -35,7 +35,7 @@ settings = get_settings()
 # BUILD_COMMIT no build (commit fica "unknown"), este é o sinal confiável pra
 # saber, via GET /version, se o deploy pegou o código novo (cache stale é
 # recorrente). Formato livre: AAAA-MM-DD + resumo curto.
-APP_BUILD_TAG = "2026-06-24-dominio-sync-filtros"
+APP_BUILD_TAG = "2026-06-28-senha-provisoria"
 
 
 @asynccontextmanager
@@ -83,6 +83,12 @@ async def lifespan(_: FastAPI):
             # (model lê a coluna; se faltar, TODA query de Empresa quebra).
             conn.execute(text(
                 "ALTER TABLE empresas ADD COLUMN IF NOT EXISTS anexo_servico VARCHAR(4)"
+            ))
+            # Senha provisória (trocar no 1º acesso). ADD IF NOT EXISTS no startup,
+            # ANTES de servir — senão o model lê coluna inexistente e derruba TUDO.
+            conn.execute(text(
+                "ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS senha_provisoria "
+                "BOOLEAN NOT NULL DEFAULT FALSE"
             ))
     except Exception:  # noqa: BLE001 — nunca derrubar o app por causa de índice
         log.exception("Falha ao criar índices/colunas de performance (seguindo mesmo assim)")
