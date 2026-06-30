@@ -35,7 +35,7 @@ settings = get_settings()
 # BUILD_COMMIT no build (commit fica "unknown"), este é o sinal confiável pra
 # saber, via GET /version, se o deploy pegou o código novo (cache stale é
 # recorrente). Formato livre: AAAA-MM-DD + resumo curto.
-APP_BUILD_TAG = "2026-06-28-senha-provisoria"
+APP_BUILD_TAG = "2026-06-28-senha-provisoria-ddl-isolado"
 
 
 @asynccontextmanager
@@ -67,31 +67,24 @@ async def lifespan(_: FastAPI):
     # não tinha índice e é o filtro/ordenação da lista, do resumo e da agregação
     # mensal do dashboard → com 14k+ docs virava varredura de tabela inteira em 3
     # lugares. CREATE INDEX IF NOT EXISTS é no-op após a 1ª vez (Postgres + SQLite).
-    try:
-        from sqlalchemy import text
-        with engine.begin() as conn:
-            conn.execute(text(
-                "CREATE INDEX IF NOT EXISTS ix_docfiscal_data_emissao "
-                "ON documentos_fiscais (data_emissao)"
-            ))
-            conn.execute(text(
-                "CREATE INDEX IF NOT EXISTS ix_docfiscal_empresa_data "
-                "ON documentos_fiscais (empresa_id, data_emissao)"
-            ))
-            # Coluna nova em `empresas` (empresa mista: anexo de serviço). ADD IF
-            # NOT EXISTS no startup, ANTES de servir — evita o trauma do is_cliente
-            # (model lê a coluna; se faltar, TODA query de Empresa quebra).
-            conn.execute(text(
-                "ALTER TABLE empresas ADD COLUMN IF NOT EXISTS anexo_servico VARCHAR(4)"
-            ))
-            # Senha provisória (trocar no 1º acesso). ADD IF NOT EXISTS no startup,
-            # ANTES de servir — senão o model lê coluna inexistente e derruba TUDO.
-            conn.execute(text(
-                "ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS senha_provisoria "
-                "BOOLEAN NOT NULL DEFAULT FALSE"
-            ))
-    except Exception:  # noqa: BLE001 — nunca derrubar o app por causa de índice
-        log.exception("Falha ao criar índices/colunas de performance (seguindo mesmo assim)")
+    # CADA DDL em SUA PRÓPRIA transação + try/except. CRÍTICO: se rodarem juntas
+    # num só `begin()` e UMA falha, a transação inteira faz rollback e as colunas
+    # NÃO são criadas — foi o que derrubou o login (model lê `senha_provisoria`,
+    # coluna inexistente → 500 em TODA query de Usuario). Isolado, uma falha não
+    # contamina as outras. ADD IF NOT EXISTS ANTES de servir (trauma do is_cliente).
+    from sqlalchemy import text
+    _ddl_startup = [
+        "CREATE INDEX IF NOT EXISTS ix_docfiscal_data_emissao ON documentos_fiscais (data_emissao)",
+        "CREATE INDEX IF NOT EXISTS ix_docfiscal_empresa_data ON documentos_fiscais (empresa_id, data_emissao)",
+        "ALTER TABLE empresas ADD COLUMN IF NOT EXISTS anexo_servico VARCHAR(4)",
+        "ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS senha_provisoria BOOLEAN NOT NULL DEFAULT FALSE",
+    ]
+    for _stmt in _ddl_startup:
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(_stmt))
+        except Exception:  # noqa: BLE001 — nunca derrubar o app por DDL de startup
+            log.exception("Falha no DDL de startup (seguindo): %s", _stmt)
     db = SessionLocal()
     try:
         try:
