@@ -35,7 +35,7 @@ settings = get_settings()
 # BUILD_COMMIT no build (commit fica "unknown"), este é o sinal confiável pra
 # saber, via GET /version, se o deploy pegou o código novo (cache stale é
 # recorrente). Formato livre: AAAA-MM-DD + resumo curto.
-APP_BUILD_TAG = "2026-06-28-senha-provisoria-ddl-isolado"
+APP_BUILD_TAG = "2026-06-28-senha-provisoria-lock-timeout"
 
 
 @asynccontextmanager
@@ -82,6 +82,11 @@ async def lifespan(_: FastAPI):
     for _stmt in _ddl_startup:
         try:
             with engine.begin() as conn:
+                # lock_timeout: se uma conexão `idle in transaction` estiver
+                # segurando lock na tabela, o ALTER FALHA RÁPIDO (4s) em vez de
+                # pendurar o startup inteiro (foi o que causou o crash loop — o
+                # app nunca ficava pronto e o Easypanel reiniciava em loop).
+                conn.execute(text("SET LOCAL lock_timeout = '4s'"))
                 conn.execute(text(_stmt))
         except Exception:  # noqa: BLE001 — nunca derrubar o app por DDL de startup
             log.exception("Falha no DDL de startup (seguindo): %s", _stmt)
