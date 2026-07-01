@@ -54,6 +54,26 @@ def listar_empresas(db: Session = Depends(get_db)) -> list[Empresa]:
     return db.scalars(select(Empresa).order_by(Empresa.razao_social)).all()
 
 
+@router.post("/marcar-so-servico-sem-ie")
+def marcar_so_servico_sem_ie(
+    _admin: Usuario = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Pré-marca `so_servico=True` nas empresas ATIVAS SEM inscrição estadual —
+    indício forte de prestadora só-serviço (emite NFSe, não NF-e/NFC-e), então o
+    Robô SEFAZ PULA. SÓ marca (nunca DESmarca) — o usuário revisa e ajusta na tela.
+    Rodar 1× após o deploy; devolve a lista marcada pra conferência."""
+    isentas = {"", "ISENTO", "ISENTA", "0", "NAO CONTRIBUINTE", "NÃO CONTRIBUINTE"}
+    marcadas = []
+    for e in db.scalars(select(Empresa).where(Empresa.ativo.is_(True))).all():
+        ie = (e.inscricao_estadual or "").strip().upper()
+        if ie in isentas and not e.so_servico:
+            e.so_servico = True
+            marcadas.append({"id": e.id, "cnpj": e.cnpj, "razao_social": e.razao_social})
+    db.commit()
+    return {"marcadas": len(marcadas), "empresas": marcadas}
+
+
 @router.get("/{empresa_id}", response_model=EmpresaRead)
 def obter_empresa(empresa_id: int, db: Session = Depends(get_db)) -> Empresa:
     empresa = db.get(Empresa, empresa_id)

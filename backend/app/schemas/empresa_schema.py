@@ -46,6 +46,8 @@ class EmpresaBase(BaseModel):
     # Empresa MISTA: anexo do SERVIÇO (III/IV/V) além do comércio. None = não mista.
     anexo_servico: str | None = None
     atividade: str | None = None
+    # True = só serviço (NFSe) → Robô SEFAZ pula (não emite NF-e/NFC-e).
+    so_servico: bool = False
     iss_aliquota: Decimal | None = None
     folha_12m: Decimal | None = None
 
@@ -136,6 +138,7 @@ class EmpresaUpdate(BaseModel):
     anexo_simples: str | None = None
     anexo_servico: str | None = None
     atividade: str | None = None
+    so_servico: bool | None = None
     iss_aliquota: Decimal | None = None
     folha_12m: Decimal | None = None
 

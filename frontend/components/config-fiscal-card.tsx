@@ -31,6 +31,7 @@ export function ConfigFiscalCard({ empresa, onSaved }: Props) {
   const [atividade, setAtividade] = useState(empresa.atividade || "");
   const [iss, setIss] = useState(empresa.iss_aliquota?.toString() || "");
   const [folha, setFolha] = useState(empresa.folha_12m?.toString() || "");
+  const [soServico, setSoServico] = useState(empresa.so_servico ?? false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -49,6 +50,7 @@ export function ConfigFiscalCard({ empresa, onSaved }: Props) {
         anexo_simples: anexo || null,
         anexo_servico: anexoServico || null,
         atividade: atividade || null,
+        so_servico: soServico,
       };
       if (iss !== "") {
         const v = Number(iss.replace(",", "."));
@@ -91,6 +93,11 @@ export function ConfigFiscalCard({ empresa, onSaved }: Props) {
             ) : (
               <span className="pill pill-muted">N/A — não é Simples</span>
             )}
+            {empresa.so_servico ? (
+              <span className="pill pill-info" title="Só serviço — o Robô SEFAZ não roda nela">
+                🧾 Só serviço (robô pula)
+              </span>
+            ) : null}
             <button type="button" className="btn-secondary" onClick={() => setEditing(true)}>
               Editar
             </button>
@@ -205,6 +212,22 @@ export function ConfigFiscalCard({ empresa, onSaved }: Props) {
             />
           </label>
         </div>
+        <label style={{ display: "flex", gap: 8, alignItems: "flex-start", marginTop: 4 }}>
+          <input
+            type="checkbox"
+            checked={soServico}
+            onChange={(e) => setSoServico(e.target.checked)}
+            style={{ marginTop: 3 }}
+          />
+          <span>
+            <strong>Só serviço — não roda no Robô SEFAZ</strong>
+            <br />
+            <small className="muted">
+              Marque se a empresa presta SÓ serviço (emite NFSe, não NF-e/NFC-e). O
+              Robô SEFAZ pula ela (a nota vem pela NFSe/ADN) — economiza tempo e captcha.
+            </small>
+          </span>
+        </label>
         {error ? <p className="toast toast-error">{error}</p> : null}
         <div className="form-actions">
           <button type="button" className="btn-secondary" onClick={() => setEditing(false)}>

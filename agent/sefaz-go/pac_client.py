@@ -27,6 +27,7 @@ class EmpresaPAC:
     tem_certificado_a1: bool
     cert_a1_validade_ate: str | None
     ativo: bool
+    so_servico: bool = False  # True = só serviço (NFSe) → robô pula (não emite NF-e)
 
 
 @dataclass(slots=True)
@@ -89,11 +90,14 @@ class PacClient:
                 tem_certificado_a1=bool(e.get("tem_certificado_a1")),
                 cert_a1_validade_ate=e.get("cert_a1_validade_ate"),
                 ativo=bool(e.get("ativo", True)),
+                so_servico=bool(e.get("so_servico", False)),
             )
             for e in data
         ]
         if somente_com_cert:
             empresas = [e for e in empresas if e.ativo and e.tem_certificado_a1]
+        # NÃO filtra so_servico aqui — o skip é só no BATCH da carteira (feito no
+        # pac_sefaz_agent), pra `--empresa X` explícito ainda poder rodar override.
         return empresas
 
     # --- Certificado ---

@@ -44,6 +44,12 @@ class Empresa(Base):
     anexo_servico: Mapped[str | None] = mapped_column(String(4), nullable=True)
     # Atividade: COMERCIO | INDUSTRIA | SERVICO
     atividade: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # True = SÓ presta serviço (emite NFSe, NÃO emite NF-e/NFC-e) → o Robô SEFAZ
+    # PULA (economiza tempo/2Captcha; a nota dela vem pela NFSe/ADN). Pré-marcado
+    # pra quem não tem inscrição estadual; o usuário revisa.
+    so_servico: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
     # Aliquota ISS do municipio (somente Anexo III/IV/V)
     iss_aliquota: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), nullable=True)
     # Folha 12m (para calculo do Fator R no Anexo V)

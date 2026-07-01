@@ -37,6 +37,7 @@ export type Empresa = {
   anexo_simples?: string | null;
   anexo_servico?: string | null;
   atividade?: string | null;
+  so_servico?: boolean;
   iss_aliquota?: number | string | null;
   folha_12m?: number | string | null;
   // Metadados

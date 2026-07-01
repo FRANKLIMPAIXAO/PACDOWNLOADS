@@ -1597,6 +1597,17 @@ async def main_async(args: argparse.Namespace) -> int:
             }
             empresas = [e for e in empresas if e.id in ids_alvo]
             log.info("Reprocessando subconjunto: %d empresa(s) %s", len(empresas), sorted(ids_alvo))
+        else:
+            # BATCH da carteira: pula prestadora SÓ-SERVIÇO (emite NFSe, não
+            # NF-e/NFC-e → captura vem pelo ADN). `--empresa X` explícito NÃO
+            # cai aqui, então override manual segue funcionando.
+            so_serv = [e for e in empresas if e.so_servico]
+            if so_serv:
+                log.info(
+                    "Pulando %d prestadora(s) só-serviço: %s",
+                    len(so_serv), ", ".join(e.razao_social for e in so_serv),
+                )
+                empresas = [e for e in empresas if not e.so_servico]
         if not empresas:
             log.error("Nenhuma empresa elegível (ativa + com cert A1).")
             return 1

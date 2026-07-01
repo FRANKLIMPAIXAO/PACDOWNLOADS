@@ -35,7 +35,7 @@ settings = get_settings()
 # BUILD_COMMIT no build (commit fica "unknown"), este é o sinal confiável pra
 # saber, via GET /version, se o deploy pegou o código novo (cache stale é
 # recorrente). Formato livre: AAAA-MM-DD + resumo curto.
-APP_BUILD_TAG = "2026-06-28-senha-provisoria-lock-timeout"
+APP_BUILD_TAG = "2026-06-29-robo-pula-so-servico"
 
 
 @asynccontextmanager
@@ -78,6 +78,7 @@ async def lifespan(_: FastAPI):
         "CREATE INDEX IF NOT EXISTS ix_docfiscal_empresa_data ON documentos_fiscais (empresa_id, data_emissao)",
         "ALTER TABLE empresas ADD COLUMN IF NOT EXISTS anexo_servico VARCHAR(4)",
         "ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS senha_provisoria BOOLEAN NOT NULL DEFAULT FALSE",
+        "ALTER TABLE empresas ADD COLUMN IF NOT EXISTS so_servico BOOLEAN NOT NULL DEFAULT FALSE",
     ]
     for _stmt in _ddl_startup:
         try:
