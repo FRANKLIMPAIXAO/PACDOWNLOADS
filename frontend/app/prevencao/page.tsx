@@ -4,6 +4,7 @@ import Link from "next/link";
 import { ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 
 import { DataTable } from "../../components/data-table";
+import { MensagensCarteira } from "../../components/mensagens-carteira";
 import { ProtectedRoute } from "../../components/protected-route";
 import { SituacaoFiscalCarteira } from "../../components/situacao-fiscal-carteira";
 import { ApiError } from "../../lib/api";
@@ -25,7 +26,10 @@ export default function PrevencaoPage() {
   );
 }
 
+type Aba = "fiscal" | "mensagens" | "cnds";
+
 function PrevencaoContent() {
+  const [aba, setAba] = useState<Aba>("fiscal");
   const [cnds, setCnds] = useState<CndDashboardLinha[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -97,48 +101,82 @@ function PrevencaoContent() {
     <ScoreBar key={`sc-${c.empresa_id}`} score={c.score} />,
   ]);
 
+  const abas: { k: Aba; label: string }[] = [
+    { k: "fiscal", label: "📊 Situação Fiscal" },
+    { k: "mensagens", label: "✉️ Mensagens" },
+    { k: "cnds", label: "📄 CNDs" },
+  ];
+
   return (
     <>
       <header className="page-header">
         <div>
           <h2>Prevenção</h2>
-          <p className="muted">Saúde fiscal da carteira — triagem por exceção + controle de CNDs.</p>
-        </div>
-        <div className="page-actions">
-          <button type="button" className="btn-primary" onClick={handleRenovarTodas} disabled={renovandoTodas}>
-            {renovandoTodas ? "Renovando..." : "🤖 Robô SEFAZ — renovar CNDs vencendo"}
-          </button>
+          <p className="muted">Saúde fiscal da carteira — situação, mensagens do e-CAC e CNDs.</p>
         </div>
       </header>
+
+      {/* Abas (estilo Jettax) */}
+      <div style={{ display: "flex", gap: 4, marginBottom: 18, borderBottom: "1px solid var(--border)" }}>
+        {abas.map((t) => (
+          <button
+            key={t.k}
+            type="button"
+            onClick={() => setAba(t.k)}
+            style={{
+              background: "none",
+              border: "none",
+              borderBottom: aba === t.k ? "2px solid var(--primary)" : "2px solid transparent",
+              color: aba === t.k ? "var(--text)" : "var(--muted-strong)",
+              fontWeight: aba === t.k ? 600 : 400,
+              padding: "8px 14px",
+              cursor: "pointer",
+              fontSize: "0.95rem",
+            }}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
 
       {error ? <p className="toast toast-error">{error}</p> : null}
       {toast ? <p className="toast">{toast}</p> : null}
 
-      {/* Situação fiscal consolidada da carteira — triagem por exceção (estilo Jettax). */}
-      <SituacaoFiscalCarteira />
+      {aba === "fiscal" ? <SituacaoFiscalCarteira /> : null}
 
-      <header className="page-header" style={{ marginTop: 8 }}>
-        <div>
-          <h3>Controle de CNDs</h3>
-          <p className="muted">
-            Federal · FGTS · Trabalhista · Estadual · Municipal — clique numa empresa para gerenciar.
-          </p>
-        </div>
-      </header>
-      {totais ? (
-        <p className="muted" style={{ marginTop: -6, marginBottom: 8, fontSize: "0.86rem" }}>
-          {totais.pendencia} com pendência · {totais.vencidas} vencidas · {totais.aVencer} a vencer · {totais.validas} válidas
-        </p>
+      {aba === "mensagens" ? <MensagensCarteira /> : null}
+
+      {aba === "cnds" ? (
+        <>
+          <header className="page-header" style={{ alignItems: "center" }}>
+            <div>
+              <h3 style={{ margin: 0 }}>Controle de CNDs</h3>
+              <p className="muted" style={{ margin: 0 }}>
+                Federal · FGTS · Trabalhista · Estadual · Municipal — clique numa empresa para gerenciar.
+              </p>
+            </div>
+            <div className="page-actions">
+              <button type="button" className="btn-primary" onClick={handleRenovarTodas} disabled={renovandoTodas}>
+                {renovandoTodas ? "Renovando..." : "🤖 Robô SEFAZ — renovar CNDs vencendo"}
+              </button>
+            </div>
+          </header>
+          {totais ? (
+            <p className="muted" style={{ marginTop: -6, marginBottom: 8, fontSize: "0.86rem" }}>
+              {totais.pendencia} com pendência · {totais.vencidas} vencidas · {totais.aVencer} a vencer · {totais.validas} válidas
+            </p>
+          ) : null}
+          {cnds === null ? (
+            <section className="panel"><p className="muted">Carregando CNDs…</p></section>
+          ) : (
+            <DataTable
+              headers={["Empresa", ...tiposTabela.map((t) => t.label), "Score"]}
+              rows={cndRows}
+              subtitle={`${cnds.length} empresa(s).`}
+            />
+          )}
+        </>
       ) : null}
-      {cnds === null ? (
-        <section className="panel"><p className="muted">Carregando CNDs…</p></section>
-      ) : (
-        <DataTable
-          headers={["Empresa", ...tiposTabela.map((t) => t.label), "Score"]}
-          rows={cndRows}
-          subtitle={`${cnds.length} empresa(s).`}
-        />
-      )}
     </>
   );
 }

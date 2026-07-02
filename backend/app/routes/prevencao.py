@@ -124,6 +124,158 @@ def status_atualizacao_sitfis(job_id: str) -> dict:
         return dict(job)
 
 
+# --- Caixa Postal (mensagens e-CAC) da carteira: sync background + agregação ---
+_MSG_JOBS: dict[str, dict] = {}
+_MSG_LOCK = threading.Lock()
+
+
+def _msg_job_rodando() -> str | None:
+    with _MSG_LOCK:
+        for jid, j in _MSG_JOBS.items():
+            if j.get("status") == "rodando":
+                return jid
+    return None
+
+
+def _rodar_sync_mensagens(job_id: str) -> None:
+    """Sincroniza a Caixa Postal (mensagens e-CAC) de TODAS as ativas via Integra
+    (MSGCONTRIBUINTE61), sequencial. Resiliente: erro numa empresa não para o lote."""
+    from app.services.integra_contador_service import IntegraContadorService
+
+    db = SessionLocal()
+    try:
+        empresas = db.scalars(
+            select(Empresa).where(Empresa.ativo.is_(True)).order_by(Empresa.razao_social)
+        ).all()
+        svc = IntegraContadorService(db)
+        with _MSG_LOCK:
+            _MSG_JOBS[job_id]["total"] = len(empresas)
+        for emp in empresas:
+            with _MSG_LOCK:
+                _MSG_JOBS[job_id]["atual"] = emp.razao_social
+            try:
+                svc.sync_caixa_postal(emp.id)
+                with _MSG_LOCK:
+                    _MSG_JOBS[job_id]["sucesso"] += 1
+            except Exception as exc:  # noqa: BLE001 — uma falha não para o lote
+                logger.warning("Sync caixa postal falhou empresa %s: %s", emp.id, exc)
+                with _MSG_LOCK:
+                    _MSG_JOBS[job_id]["falhas"] += 1
+                    erros = _MSG_JOBS[job_id]["erros"]
+                    if len(erros) < 50:
+                        erros.append({"empresa": emp.razao_social, "erro": str(exc)[:200]})
+            finally:
+                with _MSG_LOCK:
+                    _MSG_JOBS[job_id]["feitas"] += 1
+        with _MSG_LOCK:
+            _MSG_JOBS[job_id]["status"] = "concluido"
+            _MSG_JOBS[job_id]["atual"] = None
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Sync mensagens da carteira falhou")
+        with _MSG_LOCK:
+            _MSG_JOBS[job_id]["status"] = "erro"
+            _MSG_JOBS[job_id]["erro_geral"] = str(exc)[:300]
+    finally:
+        db.close()
+
+
+@router.post("/atualizar-mensagens")
+def atualizar_mensagens() -> dict:
+    """Dispara em BACKGROUND a sincronização da Caixa Postal (e-CAC) de toda a
+    carteira via Integra Contador. CUSTA chamadas Integra. 1 job por vez.
+    Front faz polling em /atualizar-mensagens/status/{job_id}."""
+    rodando = _msg_job_rodando()
+    if rodando:
+        return {"job_id": rodando, "ja_rodando": True}
+    job_id = uuid.uuid4().hex
+    with _MSG_LOCK:
+        _MSG_JOBS[job_id] = {
+            "status": "rodando", "total": 0, "feitas": 0,
+            "sucesso": 0, "falhas": 0, "atual": None, "erros": [],
+            "iniciado_em": datetime.now(timezone.utc).isoformat(),
+        }
+    threading.Thread(target=_rodar_sync_mensagens, args=(job_id,), daemon=True).start()
+    return {"job_id": job_id, "ja_rodando": False}
+
+
+@router.get("/atualizar-mensagens/status/{job_id}")
+def status_atualizar_mensagens(job_id: str) -> dict:
+    with _MSG_LOCK:
+        job = _MSG_JOBS.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job não encontrado (pode ter reiniciado).")
+        return dict(job)
+
+
+def _classificar_mensagem(assunto: str) -> str:
+    """Classifica a mensagem e-CAC por TIPO pelo assunto (estilo Jettax)."""
+    a = (assunto or "").lower()
+    if "exclus" in a:
+        return "Termo de Exclusão SN"
+    if "intima" in a:
+        return "Termo de Intimação"
+    if "malha" in a:
+        return "Malha Fiscal"
+    if "pronampe" in a:
+        return "Pronampe"
+    if "parcela" in a:
+        return "Parcelamento"
+    return "e-CAC (outras)"
+
+
+@router.get("/mensagens-resumo")
+def mensagens_resumo(db: Session = Depends(get_db)) -> dict:
+    """Agrega as mensagens da Caixa Postal (e-CAC) de TODA a carteira, classificadas
+    por TIPO. Alimenta a aba Mensagens do /prevencao (cards + lista filtrável)."""
+    from app.models.mensagem_ecac import MensagemEcac
+
+    rows = db.execute(
+        select(
+            MensagemEcac.empresa_id, Empresa.razao_social, Empresa.cnpj,
+            MensagemEcac.assunto, MensagemEcac.indicador_leitura,
+            MensagemEcac.indicador_relevancia, MensagemEcac.data_envio,
+            MensagemEcac.isn_msg,
+        )
+        .join(Empresa, Empresa.id == MensagemEcac.empresa_id)
+        .order_by(MensagemEcac.data_envio.desc().nullslast())
+    ).all()
+
+    tipos: dict[str, dict] = {}
+    itens: list[dict] = []
+    for empresa_id, razao, cnpj, assunto, leitura, relev, data_envio, isn in rows:
+        tipo = _classificar_mensagem(assunto or "")
+        d = tipos.setdefault(
+            tipo,
+            {"tipo": tipo, "total": 0, "nao_lidas": 0, "relevantes_nao_lidas": 0, "_emp": set()},
+        )
+        d["total"] += 1
+        d["_emp"].add(empresa_id)
+        nao_lida = leitura != "1"
+        if nao_lida:
+            d["nao_lidas"] += 1
+            if relev == "1":
+                d["relevantes_nao_lidas"] += 1
+        if len(itens) < 400:  # amostra (mais recentes) pra lista; front filtra
+            itens.append({
+                "empresa_id": empresa_id, "empresa": razao, "cnpj": cnpj, "tipo": tipo,
+                "assunto": assunto, "nao_lida": nao_lida, "relevante": relev == "1",
+                "data_envio": data_envio.isoformat() if data_envio else None, "isn_msg": isn,
+            })
+
+    resumo = []
+    for d in tipos.values():
+        d["empresas"] = len(d.pop("_emp"))
+        resumo.append(d)
+    resumo.sort(key=lambda x: (x["relevantes_nao_lidas"], x["nao_lidas"], x["total"]), reverse=True)
+    return {
+        "total_mensagens": sum(d["total"] for d in resumo),
+        "total_nao_lidas": sum(d["nao_lidas"] for d in resumo),
+        "total_relevantes_nao_lidas": sum(d["relevantes_nao_lidas"] for d in resumo),
+        "por_tipo": resumo,
+        "mensagens": itens,
+    }
+
+
 def _tipo_omissao(pendencia: str) -> str | None:
     """Se a pendência é uma OMISSÃO de declaração, devolve o tipo canônico
     (DCTFWeb, DASN, DEFIS…). Senão (débito, parcelamento, inscrição), None.
