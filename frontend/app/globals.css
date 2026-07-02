@@ -158,8 +158,8 @@ a { color: inherit; text-decoration: none; }
 
 .metric::before {
   content: ""; position: absolute; top: 0; left: 0; right: 0; height: 3px;
-  background: linear-gradient(90deg, var(--accent-emerald), var(--accent-cyan));
-  opacity: 0.85;
+  background: linear-gradient(90deg, var(--pac-orange), var(--pac-orange-2));
+  opacity: 0.9;
 }
 
 .metric span {
@@ -172,9 +172,11 @@ a { color: inherit; text-decoration: none; }
 }
 .metric p { margin: 0; color: var(--muted); font-size: 0.82rem; }
 
+/* Variantes semanticas dos topos: laranja da marca por padrao; verde só para
+   sucesso, ambar para atenção, rosa/vermelho para risco. Sem arco-íris. */
 .metric--emerald::before { background: linear-gradient(90deg, var(--accent-emerald), var(--accent-emerald-2)); }
-.metric--cyan::before    { background: linear-gradient(90deg, var(--accent-cyan), var(--accent-cyan-2)); }
-.metric--violet::before  { background: linear-gradient(90deg, var(--accent-violet), var(--accent-pink)); }
+.metric--cyan::before    { background: linear-gradient(90deg, var(--pac-orange), var(--pac-orange-2)); }
+.metric--violet::before  { background: linear-gradient(90deg, var(--pac-orange), var(--pac-orange-2)); }
 .metric--amber::before   { background: linear-gradient(90deg, var(--accent-amber), var(--accent-amber-2)); }
 .metric--rose::before    { background: linear-gradient(90deg, var(--accent-rose), var(--accent-rose-2)); }
 
@@ -187,14 +189,20 @@ a { color: inherit; text-decoration: none; }
 .card-link {
   position: relative; display: block; padding: 22px 20px 20px;
   border-radius: 16px; border: 1px solid var(--border);
-  background: linear-gradient(135deg, var(--gradient-from, var(--accent-violet)), var(--gradient-to, var(--accent-pink)));
+  /* Superfície navy uniforme (era gradiente colorido por card = arco-íris). */
+  background: linear-gradient(135deg, var(--gradient-from, #1c2e50), var(--gradient-to, #14243f));
   color: var(--text-strong); overflow: hidden;
   transition: transform 0.18s ease, box-shadow 0.18s ease;
   min-height: 132px;
 }
 .card-link::before {
+  content: ""; position: absolute; top: 0; left: 0; right: 0; height: 3px;
+  background: linear-gradient(90deg, var(--pac-orange), var(--pac-orange-2));
+  opacity: 0.9; pointer-events: none;
+}
+.card-link::after {
   content: ""; position: absolute; inset: 0;
-  background: radial-gradient(circle at 100% 0%, rgba(255,255,255,0.18), transparent 50%);
+  background: radial-gradient(circle at 100% 0%, rgba(232,135,30,0.10), transparent 55%);
   pointer-events: none;
 }
 .card-link:hover { transform: translateY(-2px); box-shadow: 0 18px 42px rgba(0,0,0,0.4); }
@@ -205,14 +213,17 @@ a { color: inherit; text-decoration: none; }
   font-size: 1.65rem; font-weight: 700; letter-spacing: -0.03em; opacity: 0.96;
 }
 
-.card-link--emerald   { --gradient-from: #059669; --gradient-to: #14b8a6; }
-.card-link--cyan      { --gradient-from: #0891b2; --gradient-to: #0ea5e9; }
-.card-link--violet    { --gradient-from: #7c3aed; --gradient-to: #a855f7; }
-.card-link--pink      { --gradient-from: #db2777; --gradient-to: #ec4899; }
-.card-link--amber     { --gradient-from: #d97706; --gradient-to: #f59e0b; }
-.card-link--rose      { --gradient-from: #be123c; --gradient-to: #ef4444; }
-.card-link--indigo    { --gradient-from: #4f46e5; --gradient-to: #6366f1; }
-.card-link--teal      { --gradient-from: #0d9488; --gradient-to: #14b8a6; }
+/* Todos os cards navegáveis compartilham a mesma superfície navy — a distinção
+   por cor saturada (arco-íris) foi removida. As classes seguem existindo pra
+   não quebrar quem as referencia; apenas variam sutilmente a profundidade. */
+.card-link--emerald   { --gradient-from: #1c2e50; --gradient-to: #14243f; }
+.card-link--cyan      { --gradient-from: #1c2e50; --gradient-to: #14243f; }
+.card-link--violet    { --gradient-from: #1e3054; --gradient-to: #16263f; }
+.card-link--pink      { --gradient-from: #1e3054; --gradient-to: #16263f; }
+.card-link--amber     { --gradient-from: #20314f; --gradient-to: #172740; }
+.card-link--rose      { --gradient-from: #20314f; --gradient-to: #172740; }
+.card-link--indigo    { --gradient-from: #1c2e50; --gradient-to: #14243f; }
+.card-link--teal      { --gradient-from: #1c2e50; --gradient-to: #14243f; }
 
 /* --- Hero --- */
 
@@ -222,8 +233,8 @@ a { color: inherit; text-decoration: none; }
   display: grid; gap: 16px; align-content: space-between;
   padding: 28px; border-radius: 18px; border: 1px solid var(--border);
   background:
-    radial-gradient(circle at 0% 100%, rgba(16, 185, 129, 0.18), transparent 50%),
-    radial-gradient(circle at 100% 0%, rgba(6, 182, 212, 0.18), transparent 50%),
+    radial-gradient(circle at 0% 100%, rgba(232, 135, 30, 0.18), transparent 50%),
+    radial-gradient(circle at 100% 0%, rgba(20, 40, 74, 0.35), transparent 50%),
     var(--surface);
 }
 
@@ -236,9 +247,9 @@ a { color: inherit; text-decoration: none; }
 .badge {
   display: inline-flex; width: fit-content; padding: 5px 11px;
   border-radius: 999px;
-  background: rgba(16, 185, 129, 0.15);
-  border: 1px solid rgba(16, 185, 129, 0.3);
-  color: var(--accent-emerald);
+  background: rgba(232, 135, 30, 0.15);
+  border: 1px solid rgba(232, 135, 30, 0.32);
+  color: var(--pac-orange-2);
   font-size: 0.74rem; font-weight: 700;
   text-transform: uppercase; letter-spacing: 0.08em;
 }
@@ -246,7 +257,7 @@ a { color: inherit; text-decoration: none; }
 .cta {
   display: inline-flex; align-items: center; gap: 8px; width: fit-content;
   padding: 11px 18px; border-radius: 12px;
-  background: linear-gradient(135deg, var(--accent-emerald), var(--accent-cyan));
+  background: linear-gradient(135deg, var(--pac-orange), var(--pac-orange-2));
   color: white; font-weight: 600; font-size: 0.94rem;
   border: none; cursor: pointer; font-family: inherit;
   transition: filter 0.15s ease, transform 0.15s ease;
@@ -293,7 +304,7 @@ a { color: inherit; text-decoration: none; }
 
 .btn-primary {
   appearance: none; border: none;
-  background: linear-gradient(135deg, var(--accent-emerald), var(--accent-cyan));
+  background: linear-gradient(135deg, var(--pac-orange), var(--pac-orange-2));
   color: white; padding: 9px 16px; border-radius: 10px;
   font: inherit; font-size: 0.9rem; font-weight: 600;
   cursor: pointer; transition: filter 0.15s ease, transform 0.15s ease;
@@ -323,7 +334,7 @@ a { color: inherit; text-decoration: none; }
   color: var(--text-strong); text-decoration: none; font-weight: 600;
   transition: color 0.15s ease;
 }
-.row-link:hover { color: var(--accent-emerald); }
+.row-link:hover { color: var(--pac-orange-2); }
 
 /* --- Forms --- */
 
@@ -348,8 +359,8 @@ a { color: inherit; text-decoration: none; }
 
 .form-grid input:focus, .form-grid select:focus, .form-grid textarea:focus,
 .form-stack input:focus, .form-stack select:focus, .form-stack textarea:focus {
-  outline: none; border-color: var(--accent-emerald);
-  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.18);
+  outline: none; border-color: var(--pac-orange);
+  box-shadow: 0 0 0 3px rgba(232, 135, 30, 0.2);
 }
 
 .form-grid input[type="file"] { padding: 6px 8px; }
@@ -410,8 +421,8 @@ a { color: inherit; text-decoration: none; }
   background: var(--bg-1); color: var(--text);
 }
 .auth-form input:focus {
-  outline: none; border-color: var(--accent-emerald);
-  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.18);
+  outline: none; border-color: var(--pac-orange);
+  box-shadow: 0 0 0 3px rgba(232, 135, 30, 0.2);
 }
 
 .auth-form .cta { justify-content: center; width: 100%; border: none; cursor: pointer; font: inherit; font-size: 0.96rem; }
@@ -423,7 +434,7 @@ a { color: inherit; text-decoration: none; }
 }
 
 .auth-footer { margin-top: 4px; text-align: center; color: var(--muted); font-size: 0.88rem; }
-.auth-footer a { color: var(--accent-emerald); text-decoration: underline; }
+.auth-footer a { color: var(--pac-orange-2); text-decoration: underline; }
 
 .empty-state { padding: 36px; text-align: center; color: var(--muted); }
 
@@ -490,8 +501,8 @@ a { color: inherit; text-decoration: none; }
 }
 
 .calendar-day.today {
-  border-color: var(--accent-emerald);
-  box-shadow: 0 0 0 1px rgba(16, 185, 129, 0.4) inset;
+  border-color: var(--pac-orange);
+  box-shadow: 0 0 0 1px rgba(232, 135, 30, 0.4) inset;
 }
 
 .calendar-day .calendar-day-num {
@@ -502,7 +513,7 @@ a { color: inherit; text-decoration: none; }
 }
 
 .calendar-day.today .calendar-day-num {
-  color: var(--accent-emerald);
+  color: var(--pac-orange-2);
 }
 
 .calendar-day:hover { background: var(--surface-strong); }
