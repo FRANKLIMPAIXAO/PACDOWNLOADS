@@ -29,8 +29,12 @@
   --accent-rose-2: #f43f5e;
   --accent-pink: #ec4899;
 
-  --primary: var(--accent-emerald);
-  --primary-strong: #059669;
+  /* Marca PAC — laranja (mark) sobre o navy (o fundo já é navy escuro). */
+  --pac-orange: #ec8b1c;
+  --pac-orange-2: #f5a63e;
+  --pac-navy: #14284a;
+  --primary: var(--pac-orange);
+  --primary-strong: #d1770f;
 
   --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.4);
   --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.5);
@@ -43,9 +47,9 @@ html, body {
   margin: 0;
   padding: 0;
   background:
-    radial-gradient(circle at 0% 0%, rgba(139, 92, 246, 0.12), transparent 40%),
-    radial-gradient(circle at 100% 0%, rgba(6, 182, 212, 0.10), transparent 40%),
-    radial-gradient(circle at 50% 100%, rgba(16, 185, 129, 0.08), transparent 40%),
+    radial-gradient(circle at 0% 0%, rgba(236, 139, 28, 0.10), transparent 42%),
+    radial-gradient(circle at 100% 0%, rgba(30, 58, 100, 0.35), transparent 46%),
+    radial-gradient(circle at 50% 120%, rgba(236, 139, 28, 0.06), transparent 45%),
     var(--bg-0);
   color: var(--text);
   font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
@@ -55,7 +59,7 @@ html, body {
 }
 
 a { color: inherit; text-decoration: none; }
-::selection { background: rgba(16, 185, 129, 0.25); color: var(--text-strong); }
+::selection { background: rgba(236, 139, 28, 0.28); color: var(--text-strong); }
 
 .shell { min-height: 100vh; padding: 24px; }
 .frame { max-width: 1440px; margin: 0 auto; display: grid; gap: 20px; }
@@ -74,8 +78,8 @@ a { color: inherit; text-decoration: none; }
 .brand { display: flex; align-items: center; gap: 12px; }
 
 .brand-logo {
-  width: 36px; height: 36px;
-  filter: drop-shadow(0 0 16px rgba(16, 185, 129, 0.35));
+  width: 38px; height: 38px;
+  filter: drop-shadow(0 0 16px rgba(236, 139, 28, 0.4));
   flex-shrink: 0;
 }
 

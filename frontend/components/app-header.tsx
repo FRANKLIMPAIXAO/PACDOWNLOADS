@@ -25,11 +25,11 @@ export function AppHeader() {
   return (
     <header className="topbar">
       <div className="brand">
-        {/* Logo SVG em /public/logo.svg */}
-        <img src="/logo.svg" alt="PAC Download" className="brand-logo" />
+        {/* Marca PAC — mark laranja em /public/logo.svg */}
+        <img src="/logo.svg" alt="PAC" className="brand-logo" />
         <div>
-          <h1>PAC Download</h1>
-          <p>Central fiscal para escritorios contabeis</p>
+          <h1>PAC Gestão</h1>
+          <p>Inteligência Tributária</p>
         </div>
       </div>
       <div className="topbar-right">
