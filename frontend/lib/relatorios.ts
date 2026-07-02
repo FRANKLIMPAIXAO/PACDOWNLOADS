@@ -10,8 +10,9 @@ export type ResumoMensal = {
   gerado_em: string;
 };
 
-export function obterResumoMensal() {
-  return apiFetch<ResumoMensal>("/api/v1/relatorios/resumo-mensal");
+export function obterResumoMensal(competencia?: string) {
+  const qs = competencia ? `?competencia=${encodeURIComponent(competencia)}` : "";
+  return apiFetch<ResumoMensal>(`/api/v1/relatorios/resumo-mensal${qs}`);
 }
 
 async function abrirArquivoAutenticado(path: string, filename: string): Promise<void> {
@@ -30,17 +31,21 @@ async function abrirArquivoAutenticado(path: string, filename: string): Promise<
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
-export function gerarExcelGeral() {
+export function gerarExcelGeral(competencia?: string) {
+  const qs = competencia ? `?competencia=${encodeURIComponent(competencia)}` : "";
+  const sufixo = competencia ? `_${competencia}` : "";
   return abrirArquivoAutenticado(
-    "/api/v1/relatorios/geral/excel",
-    "relatorio_geral.xlsx",
+    `/api/v1/relatorios/geral/excel${qs}`,
+    `relatorio_geral${sufixo}.xlsx`,
   );
 }
 
-export function gerarExcelEmpresa(empresaId: number, nome: string) {
+export function gerarExcelEmpresa(empresaId: number, nome: string, competencia?: string) {
   const safe = nome.replace(/[^a-zA-Z0-9]+/g, "_");
+  const qs = competencia ? `?competencia=${encodeURIComponent(competencia)}` : "";
+  const sufixo = competencia ? `_${competencia}` : "";
   return abrirArquivoAutenticado(
-    `/api/v1/relatorios/empresa/${empresaId}/excel`,
-    `relatorio_${safe}.xlsx`,
+    `/api/v1/relatorios/empresa/${empresaId}/excel${qs}`,
+    `relatorio_${safe}${sufixo}.xlsx`,
   );
 }

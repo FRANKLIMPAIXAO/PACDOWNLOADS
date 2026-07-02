@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from openpyxl import Workbook
@@ -16,27 +17,68 @@ from app.models.empresa import Empresa
 HEADER_FILL = PatternFill("solid", fgColor="1F2937")
 HEADER_FONT = Font(color="FFFFFF", bold=True)
 
+# Brasil não tem horário de verão desde 2019 → offset fixo -03:00. Usado tanto
+# pra normalizar datas do Excel quanto pros limites de competência.
+BR_TZ = timezone(timedelta(hours=-3))
+
+
+def _sanitize_cell(value):
+    """openpyxl NÃO aceita datetime timezone-aware — o save() estoura
+    `TypeError: Excel does not support timezones in datetimes`. Em produção
+    (Postgres/Supabase) as colunas DateTime(timezone=True) voltam tz-aware, então
+    QUALQUER célula com data derruba o relatório (500 → 'não baixou o Excel').
+    Aqui convertemos pra naive na hora horária de Brasília (o horário exibido
+    fica igual ao local). Em SQLite (dev) já vem naive e passa direto."""
+    if isinstance(value, datetime) and value.tzinfo is not None:
+        return value.astimezone(BR_TZ).replace(tzinfo=None)
+    return value
+
 
 class ExcelReportService:
     def __init__(self, db: Session) -> None:
         self.db = db
 
-    def gerar_excel_empresa(self, empresa_id: int, destination: Path) -> str:
+    def gerar_excel_empresa(
+        self,
+        empresa_id: int,
+        destination: Path,
+        data_min: datetime | None = None,
+        data_max: datetime | None = None,
+    ) -> str:
         empresa = self.db.get(Empresa, empresa_id)
         if not empresa:
             raise ValueError("Empresa nao encontrada")
-        docs = self.db.scalars(
-            select(DocumentoFiscal).where(DocumentoFiscal.empresa_id == empresa_id).order_by(DocumentoFiscal.created_at.desc())
-        ).all()
-        errors = self.db.scalars(
-            select(ConsultaLog).where(ConsultaLog.empresa_id == empresa_id, ConsultaLog.status == "erro")
-        ).all()
+        stmt = select(DocumentoFiscal).where(DocumentoFiscal.empresa_id == empresa_id)
+        stmt = self._aplicar_periodo(stmt, DocumentoFiscal.data_emissao, data_min, data_max)
+        docs = self.db.scalars(stmt.order_by(DocumentoFiscal.data_emissao.desc())).all()
+        estmt = select(ConsultaLog).where(ConsultaLog.empresa_id == empresa_id, ConsultaLog.status == "erro")
+        estmt = self._aplicar_periodo(estmt, ConsultaLog.created_at, data_min, data_max)
+        errors = self.db.scalars(estmt).all()
         return self._build_workbook(docs, errors, destination, empresa.razao_social)
 
-    def gerar_excel_geral(self, destination: Path) -> str:
-        docs = self.db.scalars(select(DocumentoFiscal).order_by(DocumentoFiscal.created_at.desc())).all()
-        errors = self.db.scalars(select(ConsultaLog).where(ConsultaLog.status == "erro")).all()
+    def gerar_excel_geral(
+        self,
+        destination: Path,
+        data_min: datetime | None = None,
+        data_max: datetime | None = None,
+    ) -> str:
+        stmt = self._aplicar_periodo(select(DocumentoFiscal), DocumentoFiscal.data_emissao, data_min, data_max)
+        docs = self.db.scalars(stmt.order_by(DocumentoFiscal.data_emissao.desc())).all()
+        estmt = self._aplicar_periodo(
+            select(ConsultaLog).where(ConsultaLog.status == "erro"), ConsultaLog.created_at, data_min, data_max
+        )
+        errors = self.db.scalars(estmt).all()
         return self._build_workbook(docs, errors, destination, "Geral")
+
+    @staticmethod
+    def _aplicar_periodo(stmt, coluna, data_min: datetime | None, data_max: datetime | None):
+        """Filtra por competência [data_min, data_max) quando informado. Sem
+        limites, retorna tudo (comportamento antigo)."""
+        if data_min is not None:
+            stmt = stmt.where(coluna >= data_min)
+        if data_max is not None:
+            stmt = stmt.where(coluna < data_max)
+        return stmt
 
     def _build_workbook(
         self,
@@ -110,7 +152,8 @@ class ExcelReportService:
             cell.fill = HEADER_FILL
             cell.font = HEADER_FONT
         for row in rows:
-            sheet.append(row)
+            # _sanitize_cell tira o tzinfo — senão o save() estoura em produção.
+            sheet.append([_sanitize_cell(value) for value in row])
         sheet.auto_filter.ref = sheet.dimensions
         self._autosize(sheet)
 

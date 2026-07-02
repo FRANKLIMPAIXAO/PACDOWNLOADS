@@ -21,27 +21,50 @@ export default function RelatoriosPage() {
   );
 }
 
+// Competência corrente no formato YYYY-MM (para o <input type="month">).
+function competenciaAtual(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+// "2026-07" → "julho/2026" para os rótulos.
+function competenciaLabel(c: string): string {
+  const [ano, mes] = c.split("-");
+  const nomes = [
+    "janeiro", "fevereiro", "março", "abril", "maio", "junho",
+    "julho", "agosto", "setembro", "outubro", "novembro", "dezembro",
+  ];
+  const idx = Number(mes) - 1;
+  return idx >= 0 && idx < 12 ? `${nomes[idx]}/${ano}` : c;
+}
+
 function RelatoriosContent() {
+  const [competencia, setCompetencia] = useState<string>(competenciaAtual);
   const [resumo, setResumo] = useState<ResumoMensal | null>(null);
   const [empresas, setEmpresas] = useState<Empresa[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
+  // Empresas carregam uma vez; o resumo recarrega a cada troca de competência.
   useEffect(() => {
-    Promise.all([obterResumoMensal(), listarEmpresas()])
-      .then(([r, e]) => { setResumo(r); setEmpresas(e); })
-      .catch((err) => {
-        if (err instanceof ApiError) setError(err.message);
-        else setError("Falha ao carregar relatorios.");
-      });
+    listarEmpresas()
+      .then(setEmpresas)
+      .catch((err) => setError(err instanceof ApiError ? err.message : "Falha ao carregar empresas."));
   }, []);
+
+  useEffect(() => {
+    setResumo(null);
+    obterResumoMensal(competencia)
+      .then(setResumo)
+      .catch((err) => setError(err instanceof ApiError ? err.message : "Falha ao carregar resumo."));
+  }, [competencia]);
 
   async function handleGeral() {
     setBusy("geral"); setToast(null); setError(null);
     try {
-      await gerarExcelGeral();
-      setToast("relatorio_geral.xlsx baixado.");
+      await gerarExcelGeral(competencia);
+      setToast(`Relatório geral de ${competenciaLabel(competencia)} baixado.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Falha ao gerar.");
     } finally {
@@ -52,8 +75,8 @@ function RelatoriosContent() {
   async function handleEmpresa(empresa: Empresa) {
     setBusy(`emp-${empresa.id}`); setToast(null); setError(null);
     try {
-      await gerarExcelEmpresa(empresa.id, empresa.razao_social);
-      setToast(`Relatorio de ${empresa.razao_social} baixado.`);
+      await gerarExcelEmpresa(empresa.id, empresa.razao_social, competencia);
+      setToast(`Relatório de ${empresa.razao_social} (${competenciaLabel(competencia)}) baixado.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Falha ao gerar.");
     } finally {
@@ -81,19 +104,29 @@ function RelatoriosContent() {
     <>
       <header className="page-header">
         <div>
-          <h2>Relatorios</h2>
+          <h2>Relatórios</h2>
           <p className="muted">
-            Excel consolidado por empresa e periodo. Inclui NF-e, CT-e, NFSe e trilha de erros.
+            Excel consolidado por empresa e competência. Inclui NF-e, CT-e, NFSe e trilha de erros.
           </p>
         </div>
-        <div className="page-actions">
+        <div className="page-actions" style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: "0.85rem", color: "var(--muted-strong)" }}>
+            Competência
+            <input
+              type="month"
+              value={competencia}
+              onChange={(e) => setCompetencia(e.target.value || competenciaAtual())}
+              className="btn-secondary"
+              style={{ padding: "7px 10px", fontSize: "0.88rem", cursor: "pointer" }}
+            />
+          </label>
           <button
             type="button"
             className="btn-primary"
             onClick={handleGeral}
             disabled={busy === "geral"}
           >
-            {busy === "geral" ? "Gerando..." : "Baixar relatorio geral"}
+            {busy === "geral" ? "Gerando..." : "Baixar relatório geral"}
           </button>
         </div>
       </header>
@@ -101,33 +134,37 @@ function RelatoriosContent() {
       {toast ? <p className="toast">{toast}</p> : null}
       {error ? <p className="toast toast-error">{error}</p> : null}
 
+      <p className="muted" style={{ marginTop: -6, marginBottom: 12, fontSize: "0.86rem" }}>
+        Mostrando <strong>{competenciaLabel(competencia)}</strong> — documentos por data de emissão.
+      </p>
+
       <section className="grid">
         <article className="metric metric--cyan">
-          <span>XMLs no mes</span>
+          <span>XMLs na competência</span>
           <strong>{resumo?.total_xmls_mes ?? "—"}</strong>
-          <p>baixados desde o dia 1</p>
+          <p>emitidos em {competenciaLabel(competencia)}</p>
         </article>
         <article className="metric metric--emerald">
           <span>NF-e</span>
           <strong>{resumo?.total_nfe ?? "—"}</strong>
-          <p>recebidas no periodo</p>
+          <p>no período</p>
         </article>
         <article className="metric metric--violet">
           <span>CT-e</span>
           <strong>{resumo?.total_cte ?? "—"}</strong>
-          <p>recebidas no periodo</p>
+          <p>no período</p>
         </article>
         <article className="metric metric--amber">
           <span>NFSe</span>
           <strong>{resumo?.total_nfse ?? "—"}</strong>
-          <p>recebidas no periodo</p>
+          <p>no período</p>
         </article>
       </section>
 
       <section className="panel info-card">
         <h3>Por empresa</h3>
         <p className="muted">
-          Excel com aba dedicada para NF-e, CT-e e NFSe da empresa selecionada.
+          Excel de <strong>{competenciaLabel(competencia)}</strong> com aba dedicada para NF-e, CT-e e NFSe da empresa.
         </p>
         {empresas === null ? (
           <p className="muted">Carregando...</p>
