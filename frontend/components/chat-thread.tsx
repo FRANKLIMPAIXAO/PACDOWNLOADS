@@ -2,9 +2,9 @@
 
 import { FormEvent, useEffect, useRef, useState } from "react";
 
-// Mensagem única — mesmo formato do backend (escritório e portal).
+// Mensagem única — formato normalizado pelo backend (PacChat usa id string/uuid).
 export type ChatMensagem = {
-  id: number;
+  id: string | number;
   autor: "escritorio" | "cliente";
   autor_nome: string | null;
   corpo: string;

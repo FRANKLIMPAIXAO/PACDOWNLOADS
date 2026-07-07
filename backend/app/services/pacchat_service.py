@@ -1,0 +1,89 @@
+"""Cliente do PacChat — a conversa com a PAC vive no backend do PacChat (Supabase
+Edge Function), NÃO no PacGestão. Este serviço é a PONTE: o portal do cliente
+chama o PacGestão (autenticado, escopado pela empresa do token), o PacGestão
+resolve o CNPJ e fala com o PacChat usando o X-PAC-Token.
+
+SEGURANÇA: o token (o MESMO das admissões) SÓ existe no backend — nunca vai pro
+navegador. Todo request é escopado pelo CNPJ do cliente logado (derivado do
+empresa_id do token, nunca do input), então um cliente não lê a conversa de outro.
+"""
+from __future__ import annotations
+
+import logging
+
+import httpx
+
+from app.config import get_settings
+
+logger = logging.getLogger("pac.pacchat")
+
+
+class PacChatError(Exception):
+    """Falha ao falar com o PacChat (config ausente, rede, HTTP não-2xx)."""
+
+
+def _map_autor(autor_tipo: str | None) -> str:
+    """PacChat usa 'interno' (PAC) / 'cliente'. No portal, 'interno' aparece como
+    'escritorio' (bolha à esquerda) e 'cliente' como as bolhas do próprio cliente."""
+    return "escritorio" if autor_tipo == "interno" else "cliente"
+
+
+def map_mensagem(m: dict) -> dict:
+    """Mensagem do PacChat → formato do ChatThread do portal."""
+    return {
+        "id": m.get("id"),
+        "autor": _map_autor(m.get("autor_tipo")),
+        "autor_nome": m.get("autor_nome"),
+        "corpo": m.get("corpo") or "",
+        "created_at": m.get("created_date"),
+    }
+
+
+class PacChatService:
+    def __init__(self) -> None:
+        s = get_settings()
+        self.url = (s.pacchat_api_url or "").rstrip("/")
+        # Reaproveita o token das admissões (mesmo X-PAC-Token, conforme o spec).
+        self.token = s.pac_tarefas_webhook_token or ""
+
+    @property
+    def configurado(self) -> bool:
+        return bool(self.url and self.token)
+
+    def _call(self, acao: str, cnpj: str, **extra) -> dict:
+        if not self.configurado:
+            raise PacChatError(
+                "PacChat não configurado (defina PAC_TAREFAS_WEBHOOK_TOKEN e PACCHAT_API_URL)."
+            )
+        body = {"acao": acao, "cnpj": cnpj, **{k: v for k, v in extra.items() if v is not None}}
+        try:
+            r = httpx.post(
+                self.url,
+                json=body,
+                headers={"X-PAC-Token": self.token, "Content-Type": "application/json"},
+                timeout=20,
+            )
+        except httpx.HTTPError as exc:
+            # NUNCA logar o corpo/token — só a ação e o erro de transporte.
+            logger.warning("PacChat %s falhou (rede): %s", acao, exc)
+            raise PacChatError(f"Não foi possível falar com o PacChat: {exc}") from exc
+        if r.status_code >= 400:
+            logger.warning("PacChat %s HTTP %s", acao, r.status_code)
+            raise PacChatError(f"PacChat respondeu {r.status_code}.")
+        try:
+            return r.json()
+        except ValueError as exc:
+            raise PacChatError("Resposta inválida do PacChat.") from exc
+
+    # --- Ações (conforme o spec do PacChat) ---
+    def conversas(self, cnpj: str) -> dict:
+        return self._call("conversas", cnpj)
+
+    def mensagens(self, cnpj: str, conversa_id: str | None = None, desde: str | None = None) -> dict:
+        return self._call("mensagens", cnpj, conversa_id=conversa_id, desde=desde)
+
+    def enviar(self, cnpj: str, texto: str, autor_nome: str | None = None, conversa_id: str | None = None) -> dict:
+        return self._call("enviar", cnpj, texto=texto, autor_nome=autor_nome, conversa_id=conversa_id)
+
+    def marcar_lido(self, cnpj: str, conversa_id: str | None = None) -> dict:
+        return self._call("marcar_lido", cnpj, conversa_id=conversa_id)

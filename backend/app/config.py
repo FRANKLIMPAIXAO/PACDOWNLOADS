@@ -114,6 +114,14 @@ class Settings(BaseSettings):
     # URL com header X-PAC-Token. Vazio = não envia (fica salvo p/ reenviar depois).
     pac_tarefas_webhook_url: str = Field(default="", alias="PAC_TAREFAS_WEBHOOK_URL")
     pac_tarefas_webhook_token: str = Field(default="", alias="PAC_TAREFAS_WEBHOOK_TOKEN")
+    # --- PacChat (chat com a PAC vive no backend do PacChat/Supabase) ---
+    # O portal do cliente CONSOME esta Edge Function pelo BACKEND (nunca no
+    # navegador — o token não pode vazar). Autentica com X-PAC-Token = o MESMO
+    # token das admissões (pac_tarefas_webhook_token). Escopo pelo CNPJ do cliente.
+    pacchat_api_url: str = Field(
+        default="https://flfeppcduzrrskojwkjn.functions.supabase.co/pacchat-api",
+        alias="PACCHAT_API_URL",
+    )
     # Base PÚBLICA da API (pros links de anexo que o PAC TAREFAS baixa).
     api_public_url: str = Field(default="https://api.pacgestao.com.br", alias="API_PUBLIC_URL")
     first_superuser_email: str = Field(default="admin@pacxml.com.br", alias="FIRST_SUPERUSER_EMAIL")

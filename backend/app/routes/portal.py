@@ -32,7 +32,6 @@ from app.models.cobranca_portal import CobrancaPortal
 from app.models.documento_escritorio import DocumentoEscritorio
 from app.models.documento_fiscal import DocumentoFiscal, TipoDocumento
 from app.models.empresa import Empresa
-from app.models.mensagem_chat import MensagemChat
 from app.models.portal_acesso_log import PortalAcessoLog
 from app.models.guia_das import GuiaDAS
 from app.models.guia_dctfweb import GuiaDctfweb
@@ -1063,12 +1062,27 @@ def portal_baixar_dctfweb(
 
 
 # ---------------------------------------------------------------------------
-# Conversa (chat) com o ESCRITÓRIO — estilo WhatsApp. A conversa é da EMPRESA do
-# cliente (empresa_id do TOKEN, nunca do request). O outro lado (escritório) fica
-# em routes/mensagens.py. `autor='cliente'` é FIXO aqui — o cliente não consegue
-# gravar mensagem como se fosse o escritório.
+# Conversa (chat) com a PAC — a conversa VIVE no PacChat (Supabase). Aqui o
+# PacGestão é só PONTE: escopa pelo CNPJ da empresa do TOKEN (nunca do request) e
+# fala com o PacChat pelo BACKEND com o X-PAC-Token (o token NUNCA vai pro
+# navegador). O outro lado (equipe PAC) atende dentro do próprio PacChat.
 # ---------------------------------------------------------------------------
-from app.routes.mensagens import MensagemCreate, serializar_mensagem  # noqa: E402
+from pydantic import BaseModel as _MsgBase, Field as _MsgField  # noqa: E402
+
+from app.services.pacchat_service import PacChatError, PacChatService, map_mensagem  # noqa: E402
+
+
+class _MensagemPortal(_MsgBase):
+    corpo: str = _MsgField(..., min_length=1, max_length=5000)
+
+
+def _cnpj_cliente(cliente: Usuario, db: Session) -> str:
+    """CNPJ da empresa ATIVA do cliente — a chave que o PacChat usa. Derivado do
+    token (empresa_id), nunca do input. 404 se a empresa sumiu."""
+    empresa = db.get(Empresa, cliente.empresa_id)
+    if not empresa or not empresa.cnpj:
+        raise HTTPException(status_code=404, detail="Empresa do cliente sem CNPJ.")
+    return empresa.cnpj
 
 
 @router.get("/mensagens")
@@ -1076,19 +1090,24 @@ def portal_mensagens(
     cliente: Usuario = Depends(get_current_cliente),
     db: Session = Depends(get_db),
 ) -> dict:
-    """Conversa da empresa do cliente. Marca as mensagens do ESCRITÓRIO como lidas
-    pelo cliente (quem abre a thread zera o não-lido do outro lado)."""
-    msgs = list(db.scalars(
-        select(MensagemChat)
-        .where(MensagemChat.empresa_id == cliente.empresa_id)
-        .order_by(MensagemChat.id)
-    ).all())
-    pendentes = [m for m in msgs if m.autor == "escritorio" and not m.lida_cliente]
-    if pendentes:
-        for m in pendentes:
-            m.lida_cliente = True
-        db.commit()
-    return {"mensagens": [serializar_mensagem(m) for m in msgs]}
+    """Conversa (única) do cliente no PacChat. Pega a conversa mais recente, lista
+    as mensagens e marca como lida (silencia o lembrete de WhatsApp). Resiliente:
+    se o PacChat estiver fora, devolve vazio + `erro` (não quebra o portal)."""
+    cnpj = _cnpj_cliente(cliente, db)
+    svc = PacChatService()
+    try:
+        convs = (svc.conversas(cnpj).get("conversas") or [])
+        if not convs:
+            return {"mensagens": [], "conversa_id": None}
+        conversa_id = convs[0].get("id")  # a mais recente (o PacChat já ordena)
+        msgs = svc.mensagens(cnpj, conversa_id=conversa_id).get("mensagens") or []
+        try:
+            svc.marcar_lido(cnpj, conversa_id=conversa_id)  # zera a campainha
+        except PacChatError:
+            pass  # marcar-lido é best-effort; não falha a leitura
+        return {"mensagens": [map_mensagem(m) for m in msgs], "conversa_id": conversa_id}
+    except PacChatError as exc:
+        return {"mensagens": [], "conversa_id": None, "erro": str(exc)}
 
 
 @router.get("/mensagens/nao-lidas")
@@ -1096,38 +1115,33 @@ def portal_mensagens_nao_lidas(
     cliente: Usuario = Depends(get_current_cliente),
     db: Session = Depends(get_db),
 ) -> dict:
-    """Nº de mensagens do escritório ainda não lidas pelo cliente (badge)."""
-    total = db.scalar(
-        select(func.count()).select_from(MensagemChat).where(
-            MensagemChat.empresa_id == cliente.empresa_id,
-            MensagemChat.autor == "escritorio",
-            MensagemChat.lida_cliente.is_(False),
-        )
-    ) or 0
-    return {"total": int(total)}
+    """Nº de conversas com mensagem da PAC ainda não vista pelo cliente (badge)."""
+    cnpj = _cnpj_cliente(cliente, db)
+    try:
+        convs = PacChatService().conversas(cnpj).get("conversas") or []
+    except PacChatError:
+        return {"total": 0}
+    return {"total": sum(1 for c in convs if c.get("nao_lida"))}
 
 
 @router.post("/mensagens", status_code=201)
 def portal_enviar_mensagem(
-    payload: MensagemCreate,
+    payload: _MensagemPortal,
     cliente: Usuario = Depends(get_current_cliente),
     db: Session = Depends(get_db),
 ) -> dict:
-    """O cliente envia uma mensagem pro escritório. `autor='cliente'` fixo; nasce
-    lida pelo cliente (foi ele que escreveu), não lida pelo escritório."""
+    """O cliente envia uma mensagem pra PAC via PacChat. `autor_nome` = nome do
+    cliente + empresa (pra equipe saber quem falou)."""
     corpo = payload.corpo.strip()
     if not corpo:
         raise HTTPException(status_code=400, detail="Mensagem vazia.")
-    m = MensagemChat(
-        empresa_id=cliente.empresa_id,
-        autor="cliente",
-        autor_usuario_id=cliente.id,
-        autor_nome=cliente.nome,
-        corpo=corpo,
-        lida_escritorio=False,
-        lida_cliente=True,
-    )
-    db.add(m)
-    db.commit()
-    db.refresh(m)
-    return serializar_mensagem(m)
+    empresa = db.get(Empresa, cliente.empresa_id)
+    if not empresa or not empresa.cnpj:
+        raise HTTPException(status_code=404, detail="Empresa do cliente sem CNPJ.")
+    autor_nome = f"{cliente.nome} ({empresa.razao_social})" if empresa.razao_social else cliente.nome
+    try:
+        resp = PacChatService().enviar(empresa.cnpj, corpo, autor_nome=autor_nome)
+    except PacChatError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+    m = resp.get("mensagem") or {}
+    return map_mensagem(m) if m else {"ok": True, "conversa_id": resp.get("conversa_id")}

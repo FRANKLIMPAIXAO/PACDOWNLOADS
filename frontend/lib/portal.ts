@@ -515,9 +515,11 @@ export async function portalBaixarArquivo(documentoId: number, tipo: "xml" | "pd
 import type { ChatMensagem } from "../components/chat-thread";
 export type { ChatMensagem };
 
-/** Mensagens da conversa da empresa do cliente (marca as do escritório como lidas). */
+/** Mensagens da conversa do cliente (via PacChat). `erro` != null = PacChat fora. */
 export function portalMensagens() {
-  return portalFetch<{ mensagens: ChatMensagem[] }>("/api/v1/portal/mensagens");
+  return portalFetch<{ mensagens: ChatMensagem[]; conversa_id?: string | null; erro?: string }>(
+    "/api/v1/portal/mensagens",
+  );
 }
 
 /** Nº de mensagens do escritório não lidas pelo cliente (badge). */

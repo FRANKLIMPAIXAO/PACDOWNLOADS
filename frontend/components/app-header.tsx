@@ -47,7 +47,6 @@ export function AppHeader() {
           <Link href="/dctfweb">DCTFWeb</Link>
           <Link href="/fgts">FGTS</Link>
           <Link href="/cobrancas">💰 Cobranças</Link>
-          <Link href="/conversas">💬 Conversas</Link>
           <Link href="/docs-cliente">📨 Docs do cliente</Link>
           <Link href="/admissoes">👤 Admissões</Link>
           {user?.is_admin ? <Link href="/usuarios">👥 Usuários</Link> : null}
