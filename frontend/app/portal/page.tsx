@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { ApiError } from "../../lib/api";
@@ -241,14 +241,65 @@ export default function PortalPage() {
   const [mensagens, setMensagens] = useState<ChatMensagem[]>([]);
   const [chatNaoLidas, setChatNaoLidas] = useState(0);
   const [chatLoading, setChatLoading] = useState(false);
+  // Campainha: refs pra detectar mensagem NOVA da PAC entre um polling e outro.
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const prevNaoLidasRef = useRef<number | null>(null);
+  const lastEscritorioIdRef = useRef<string | number | null>(null);
+
+  // "Ding-dong" curto via Web Audio — sem arquivo externo (CSP-safe). Só toca
+  // após o usuário já ter interagido com a página (política de autoplay).
+  const tocarSino = useCallback(() => {
+    try {
+      if (typeof window === "undefined") return;
+      const AC = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (!AC) return;
+      if (!audioCtxRef.current) audioCtxRef.current = new AC();
+      const ctx = audioCtxRef.current;
+      if (ctx.state === "suspended") ctx.resume().catch(() => {});
+      const t0 = ctx.currentTime;
+      ([[880, 0], [1174.7, 0.13]] as [number, number][]).forEach(([freq, dt]) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = "sine";
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0.0001, t0 + dt);
+        gain.gain.exponentialRampToValueAtTime(0.28, t0 + dt + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dt + 0.28);
+        osc.connect(gain); gain.connect(ctx.destination);
+        osc.start(t0 + dt); osc.stop(t0 + dt + 0.3);
+      });
+    } catch { /* som é bônus — nunca quebra */ }
+  }, []);
 
   const carregarMensagens = useCallback((comSpinner = false) => {
     if (comSpinner) setChatLoading(true);
     portalMensagens()
-      .then((r) => { setMensagens(r.mensagens); setChatNaoLidas(0); })
+      .then((r) => {
+        setMensagens(r.mensagens);
+        setChatNaoLidas(0);
+        prevNaoLidasRef.current = 0; // abriu/leu a conversa → zera a base do sino
+        // Última mensagem da PAC. Se mudou num POLL (não na abertura), toca o sino.
+        const ultEsc = [...r.mensagens].reverse().find((m) => m.autor === "escritorio");
+        const novoId = ultEsc ? ultEsc.id : null;
+        if (!comSpinner && lastEscritorioIdRef.current !== null && novoId !== null && novoId !== lastEscritorioIdRef.current) {
+          tocarSino();
+        }
+        lastEscritorioIdRef.current = novoId;
+      })
       .catch(() => { /* seção opcional */ })
       .finally(() => { if (comSpinner) setChatLoading(false); });
-  }, []);
+  }, [tocarSino]);
+
+  // Poll do não-lido FORA da conversa: se subiu, chegou mensagem → toca o sino.
+  const checarNaoLidas = useCallback(() => {
+    portalMensagensNaoLidas()
+      .then((r) => {
+        if (prevNaoLidasRef.current !== null && r.total > prevNaoLidasRef.current) tocarSino();
+        prevNaoLidasRef.current = r.total;
+        setChatNaoLidas(r.total);
+      })
+      .catch(() => { /* opcional */ });
+  }, [tocarSino]);
 
   const carregarEscritorio = useCallback(() => {
     portalDocumentosEscritorio().then(setEscritorio).catch(() => { /* seção é opcional */ });
@@ -270,17 +321,16 @@ export default function PortalPage() {
     carregarEscritorio();
     carregarEmpresa();
     carregarFiscal();
-    portalMensagensNaoLidas().then((r) => setChatNaoLidas(r.total)).catch(() => { /* opcional */ });
-  }, [router, carregarEscritorio, carregarEmpresa, carregarFiscal]);
+    checarNaoLidas();
+  }, [router, carregarEscritorio, carregarEmpresa, carregarFiscal, checarNaoLidas]);
 
-  // Abriu a conversa → carrega e zera o badge. Fora dela, faz polling do não-lido.
+  // Abriu a conversa → carrega e zera o badge. Fora dela, faz polling do não-lido
+  // (a cada 15s) — se subir, toca a campainha.
   useEffect(() => {
     if (view === "conversa") { carregarMensagens(true); return; }
-    const t = setInterval(() => {
-      portalMensagensNaoLidas().then((r) => setChatNaoLidas(r.total)).catch(() => { /* opcional */ });
-    }, 20000);
+    const t = setInterval(checarNaoLidas, 15000);
     return () => clearInterval(t);
-  }, [view, carregarMensagens]);
+  }, [view, carregarMensagens, checarNaoLidas]);
 
   // Enquanto a conversa está aberta, puxa mensagens novas a cada 12s.
   useEffect(() => {
