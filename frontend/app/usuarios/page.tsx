@@ -13,6 +13,7 @@ import {
   atualizarUsuario,
   clientesAcesso,
   criarUsuario,
+  definirAtivoCliente,
   definirEmpresasCliente,
   listarEmpresasCliente,
   listarUsuarios,
@@ -61,6 +62,29 @@ function UsuariosContent() {
 
   function recarregarAcessos() {
     clientesAcesso().then((r) => setAcessos(r.clientes)).catch(() => setAcessos([]));
+  }
+
+  async function toggleAtivoCliente(c: ClienteAcesso) {
+    setError(null); setToast(null);
+    let motivo: string | undefined;
+    if (c.ativo) {
+      // Inativando: pergunta o motivo (inadimplente / saiu do escritório...).
+      const r = window.prompt(
+        `Inativar o acesso de ${c.nome} ao portal?\nEle não conseguirá mais entrar (o token cai na hora).\n\nMotivo (opcional):`,
+        "Inadimplente",
+      );
+      if (r === null) return; // cancelou
+      motivo = r.trim() || undefined;
+    } else {
+      if (!window.confirm(`Reativar o acesso de ${c.nome} ao portal?`)) return;
+    }
+    try {
+      await definirAtivoCliente(c.id, !c.ativo, motivo);
+      setToast(c.ativo ? `Acesso de ${c.nome} inativado.` : `Acesso de ${c.nome} reativado.`);
+      recarregarAcessos();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Falha ao atualizar o acesso do cliente.");
+    }
   }
 
   useEffect(() => {
@@ -285,6 +309,9 @@ function UsuariosContent() {
                   <td>
                     {c.nome}{!c.ativo ? <span className="pill pill-warn" style={{ marginLeft: 6 }}>inativo</span> : null}
                     <div className="muted" style={{ fontSize: 12 }}>{c.email}</div>
+                    {!c.ativo && c.motivo_inativacao ? (
+                      <div style={{ fontSize: 11, color: "rgb(239,68,68)" }}>🚫 {c.motivo_inativacao}</div>
+                    ) : null}
                   </td>
                   <td style={{ display: "flex", flexWrap: "wrap", gap: 4, maxWidth: 320 }}>
                     {c.empresas.map((e) => (
@@ -293,8 +320,17 @@ function UsuariosContent() {
                   </td>
                   <td style={{ color: c.ultimo_acesso ? undefined : "rgb(245,158,11)" }}>{dataHora(c.ultimo_acesso)}</td>
                   <td>{c.total_acessos}</td>
-                  <td>
+                  <td style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
                     <button type="button" className="btn-ghost" onClick={() => setGerenciar(c)}>🏢 Empresas</button>
+                    <button
+                      type="button"
+                      className="btn-ghost"
+                      style={{ color: c.ativo ? "rgb(239,68,68)" : "rgb(16,185,129)" }}
+                      onClick={() => toggleAtivoCliente(c)}
+                      title={c.ativo ? "Cortar o acesso deste cliente ao portal" : "Liberar o acesso deste cliente ao portal"}
+                    >
+                      {c.ativo ? "🚫 Inativar" : "✅ Ativar"}
+                    </button>
                   </td>
                 </tr>
               ))}

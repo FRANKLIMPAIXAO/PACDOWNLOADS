@@ -24,11 +24,15 @@ import {
   portalManifestarDoc,
   portalManifestarLote,
   portalMe,
+  portalMensagens,
+  portalMensagensNaoLidas,
+  portalEnviarMensagem,
   portalTrocarEmpresa,
   portalResumo,
   portalSyncGuias,
   portalUploadSaidas,
   portalStatusUploadSaidas,
+  type ChatMensagem,
   type DocEscritorio,
   type DocsEscritorio,
   type DocEmpresa,
@@ -45,6 +49,7 @@ import {
   type UploadSaidasResp,
 } from "../../lib/portal";
 import { PortalAdmissao } from "../../components/portal-admissao";
+import { ChatThread } from "../../components/chat-thread";
 
 // ---- Marca PAC ----
 const NAVY = "#16294d";
@@ -151,6 +156,7 @@ const ICONS: Record<string, React.ReactNode> = {
   truck: <><path d="M1 3h15v13H1zM16 8h4l3 3v5h-7z" /><circle cx="5.5" cy="18.5" r="2" /><circle cx="18.5" cy="18.5" r="2" /></>,
   receipt: <><path d="M6 2v20l2-1.5L10 22l2-1.5L14 22l2-1.5L18 22V2l-2 1.5L14 2l-2 1.5L10 2 8 3.5z" /><path d="M9 8h6M9 12h6" /></>,
   shield: <><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z" /><path d="M9 12l2 2 4-4" /></>,
+  chat: <><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /><path d="M8 9h8M8 13h5" /></>,
 };
 function Icon({ name, size = 18 }: { name: string; size?: number }) {
   return (
@@ -202,7 +208,7 @@ function Ranking({ items, cor }: { items: RankItem[]; cor: string }) {
   );
 }
 
-type View = "home" | "notas" | "documentos" | "empresa" | "admissao" | "indicadores" | "manifestar" | "guias" | "certidoes";
+type View = "home" | "notas" | "documentos" | "empresa" | "admissao" | "indicadores" | "manifestar" | "guias" | "certidoes" | "conversa";
 
 export default function PortalPage() {
   const router = useRouter();
@@ -231,6 +237,18 @@ export default function PortalPage() {
   const [uploadBusy, setUploadBusy] = useState(false);
   const [uploadResult, setUploadResult] = useState<UploadSaidasResp | null>(null);
   const [uploadProg, setUploadProg] = useState<{ feitas: number; total: number } | null>(null);
+  // Conversa com o escritório
+  const [mensagens, setMensagens] = useState<ChatMensagem[]>([]);
+  const [chatNaoLidas, setChatNaoLidas] = useState(0);
+  const [chatLoading, setChatLoading] = useState(false);
+
+  const carregarMensagens = useCallback((comSpinner = false) => {
+    if (comSpinner) setChatLoading(true);
+    portalMensagens()
+      .then((r) => { setMensagens(r.mensagens); setChatNaoLidas(0); })
+      .catch(() => { /* seção opcional */ })
+      .finally(() => { if (comSpinner) setChatLoading(false); });
+  }, []);
 
   const carregarEscritorio = useCallback(() => {
     portalDocumentosEscritorio().then(setEscritorio).catch(() => { /* seção é opcional */ });
@@ -252,7 +270,29 @@ export default function PortalPage() {
     carregarEscritorio();
     carregarEmpresa();
     carregarFiscal();
+    portalMensagensNaoLidas().then((r) => setChatNaoLidas(r.total)).catch(() => { /* opcional */ });
   }, [router, carregarEscritorio, carregarEmpresa, carregarFiscal]);
+
+  // Abriu a conversa → carrega e zera o badge. Fora dela, faz polling do não-lido.
+  useEffect(() => {
+    if (view === "conversa") { carregarMensagens(true); return; }
+    const t = setInterval(() => {
+      portalMensagensNaoLidas().then((r) => setChatNaoLidas(r.total)).catch(() => { /* opcional */ });
+    }, 20000);
+    return () => clearInterval(t);
+  }, [view, carregarMensagens]);
+
+  // Enquanto a conversa está aberta, puxa mensagens novas a cada 12s.
+  useEffect(() => {
+    if (view !== "conversa") return;
+    const t = setInterval(() => carregarMensagens(false), 12000);
+    return () => clearInterval(t);
+  }, [view, carregarMensagens]);
+
+  async function enviarMensagemPortal(corpo: string) {
+    await portalEnviarMensagem(corpo);
+    carregarMensagens(false);
+  }
 
   async function recalcularGuia(g: PortalGuiaDAS, confirmar = false) {
     setGuiaBusy(`recalc-${g.id}`); setErro(null); setAviso(null);
@@ -470,6 +510,9 @@ export default function PortalPage() {
     ] },
     { grupo: "Funcionários", itens: [
       { id: "admissao" as View, label: "Admissão", icon: "check", badge: 0 },
+    ] },
+    { grupo: "Atendimento", itens: [
+      { id: "conversa" as View, label: "Falar com o escritório", icon: "chat", badge: chatNaoLidas },
     ] },
   ];
 
@@ -874,6 +917,23 @@ export default function PortalPage() {
 
           {view === "admissao" ? (
             <PortalAdmissao />
+          ) : null}
+
+          {view === "conversa" ? (
+            <>
+              {tituloSecao("chat", "Falar com o escritório")}
+              <p style={{ color: GRAY, fontSize: 13, margin: "0 0 12px" }}>
+                Tire dúvidas, envie recados e receba retorno do escritório. As mensagens ficam registradas aqui.
+              </p>
+              <ChatThread
+                mensagens={mensagens}
+                meuLado="cliente"
+                onEnviar={enviarMensagemPortal}
+                carregando={chatLoading}
+                altura={520}
+                vazioLabel="Nenhuma mensagem ainda. Mande a primeira pro escritório 👇"
+              />
+            </>
           ) : null}
 
           {view === "documentos" ? (

@@ -318,6 +318,38 @@ def definir_empresas_cliente(
     return {"primaria_id": user.empresa_id, "adicionais": sorted(novos), "total": len(novos) + 1}
 
 
+class ClienteAtivoSet(BaseModel):
+    ativo: bool
+    motivo: str | None = Field(default=None, max_length=255)
+
+
+@router.patch("/cliente/{usuario_id}/ativo", response_model=UsuarioRead)
+def definir_ativo_cliente(
+    usuario_id: int,
+    payload: ClienteAtivoSet,
+    db: Session = Depends(get_db),
+) -> Usuario:
+    """Ativa/INATIVA o acesso de um CLIENTE ao portal (operacional — liberado pro
+    operador, não só admin). Uso: cortar acesso de cliente inadimplente ou que saiu
+    do escritório, e religar depois.
+
+    SEGURANÇA: só mexe em usuário `is_cliente=True`. Um usuário da EQUIPE
+    (is_cliente=False) nunca é tocado por aqui — isso continua sendo admin-only via
+    PATCH /usuarios/{id}. Assim o operador não desliga colega nem escala privilégio.
+
+    Efeito imediato: `authenticate_user` e `_user_from_token` filtram `ativo=True`,
+    então inativar BLOQUEIA o login novo E derruba os tokens já emitidos na hora."""
+    user = db.get(Usuario, usuario_id)
+    if not user or not user.is_cliente:
+        raise HTTPException(status_code=404, detail="Acesso de cliente não encontrado.")
+    user.ativo = payload.ativo
+    # Guarda o motivo ao inativar; limpa ao reativar.
+    user.motivo_inativacao = (payload.motivo or "").strip() or None if not payload.ativo else None
+    db.commit()
+    db.refresh(user)
+    return user
+
+
 @router.get("/clientes-acesso")
 def clientes_acesso(db: Session = Depends(get_db)) -> dict:
     """Relatório de CONTROLE: lista os acessos de cliente com último login e total
@@ -358,6 +390,7 @@ def clientes_acesso(db: Session = Depends(get_db)) -> dict:
             "nome": c.nome,
             "email": c.email,
             "ativo": c.ativo,
+            "motivo_inativacao": c.motivo_inativacao,
             "empresas": [{"id": i, "razao_social": _nome(i)} for i in emp_ids if i is not None],
             "ultimo_acesso": ult.isoformat() if ult else None,
             "total_acessos": int(totais.get(c.id, 0)),

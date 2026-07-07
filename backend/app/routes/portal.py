@@ -32,6 +32,7 @@ from app.models.cobranca_portal import CobrancaPortal
 from app.models.documento_escritorio import DocumentoEscritorio
 from app.models.documento_fiscal import DocumentoFiscal, TipoDocumento
 from app.models.empresa import Empresa
+from app.models.mensagem_chat import MensagemChat
 from app.models.portal_acesso_log import PortalAcessoLog
 from app.models.guia_das import GuiaDAS
 from app.models.guia_dctfweb import GuiaDctfweb
@@ -1059,3 +1060,74 @@ def portal_baixar_dctfweb(
         media_type="application/pdf",
         filename=f"DCTFWeb_{g.ano_pa}{g.mes_pa or ''}.pdf",
     )
+
+
+# ---------------------------------------------------------------------------
+# Conversa (chat) com o ESCRITÓRIO — estilo WhatsApp. A conversa é da EMPRESA do
+# cliente (empresa_id do TOKEN, nunca do request). O outro lado (escritório) fica
+# em routes/mensagens.py. `autor='cliente'` é FIXO aqui — o cliente não consegue
+# gravar mensagem como se fosse o escritório.
+# ---------------------------------------------------------------------------
+from app.routes.mensagens import MensagemCreate, serializar_mensagem  # noqa: E402
+
+
+@router.get("/mensagens")
+def portal_mensagens(
+    cliente: Usuario = Depends(get_current_cliente),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Conversa da empresa do cliente. Marca as mensagens do ESCRITÓRIO como lidas
+    pelo cliente (quem abre a thread zera o não-lido do outro lado)."""
+    msgs = list(db.scalars(
+        select(MensagemChat)
+        .where(MensagemChat.empresa_id == cliente.empresa_id)
+        .order_by(MensagemChat.id)
+    ).all())
+    pendentes = [m for m in msgs if m.autor == "escritorio" and not m.lida_cliente]
+    if pendentes:
+        for m in pendentes:
+            m.lida_cliente = True
+        db.commit()
+    return {"mensagens": [serializar_mensagem(m) for m in msgs]}
+
+
+@router.get("/mensagens/nao-lidas")
+def portal_mensagens_nao_lidas(
+    cliente: Usuario = Depends(get_current_cliente),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Nº de mensagens do escritório ainda não lidas pelo cliente (badge)."""
+    total = db.scalar(
+        select(func.count()).select_from(MensagemChat).where(
+            MensagemChat.empresa_id == cliente.empresa_id,
+            MensagemChat.autor == "escritorio",
+            MensagemChat.lida_cliente.is_(False),
+        )
+    ) or 0
+    return {"total": int(total)}
+
+
+@router.post("/mensagens", status_code=201)
+def portal_enviar_mensagem(
+    payload: MensagemCreate,
+    cliente: Usuario = Depends(get_current_cliente),
+    db: Session = Depends(get_db),
+) -> dict:
+    """O cliente envia uma mensagem pro escritório. `autor='cliente'` fixo; nasce
+    lida pelo cliente (foi ele que escreveu), não lida pelo escritório."""
+    corpo = payload.corpo.strip()
+    if not corpo:
+        raise HTTPException(status_code=400, detail="Mensagem vazia.")
+    m = MensagemChat(
+        empresa_id=cliente.empresa_id,
+        autor="cliente",
+        autor_usuario_id=cliente.id,
+        autor_nome=cliente.nome,
+        corpo=corpo,
+        lida_escritorio=False,
+        lida_cliente=True,
+    )
+    db.add(m)
+    db.commit()
+    db.refresh(m)
+    return serializar_mensagem(m)

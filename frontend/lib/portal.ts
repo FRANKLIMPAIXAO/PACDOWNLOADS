@@ -510,3 +510,25 @@ export async function portalBaixarArquivo(documentoId: number, tipo: "xml" | "pd
   a.remove();
   window.URL.revokeObjectURL(url);
 }
+
+// --- Conversa (chat) com o escritório ---
+import type { ChatMensagem } from "../components/chat-thread";
+export type { ChatMensagem };
+
+/** Mensagens da conversa da empresa do cliente (marca as do escritório como lidas). */
+export function portalMensagens() {
+  return portalFetch<{ mensagens: ChatMensagem[] }>("/api/v1/portal/mensagens");
+}
+
+/** Nº de mensagens do escritório não lidas pelo cliente (badge). */
+export function portalMensagensNaoLidas() {
+  return portalFetch<{ total: number }>("/api/v1/portal/mensagens/nao-lidas");
+}
+
+/** O cliente envia uma mensagem pro escritório. */
+export function portalEnviarMensagem(corpo: string) {
+  return portalFetch<ChatMensagem>("/api/v1/portal/mensagens", {
+    method: "POST",
+    body: JSON.stringify({ corpo }),
+  });
+}

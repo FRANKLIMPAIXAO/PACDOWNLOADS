@@ -18,6 +18,7 @@ from app.models.cron_execucao import CronExecucao  # noqa: F401
 from app.models.documento_escritorio import DocumentoEscritorio  # noqa: F401
 from app.models.documento_fiscal import DocumentoFiscal  # noqa: F401
 from app.models.empresa import Empresa  # noqa: F401
+from app.models.mensagem_chat import MensagemChat  # noqa: F401
 from app.models.mensagem_ecac import MensagemEcac  # noqa: F401
 from app.models.portal_acesso_log import PortalAcessoLog  # noqa: F401
 from app.models.procuracao import Procuracao  # noqa: F401
@@ -25,7 +26,7 @@ from app.models.receita_mensal import ReceitaMensal  # noqa: F401
 from app.models.situacao_fiscal import SituacaoFiscal  # noqa: F401
 from app.models.solicitacao_admissao import SolicitacaoAdmissao  # noqa: F401
 from app.models.usuario import Usuario
-from app.routes import admissoes, agenda, apuracoes, auth, certidoes, cobrancas, conector_email, cte_distribuicao, dashboard, dfe_distribuicao, docs_escritorio, documentos, empresas, guias_das, guias_dctfweb, guias_fgts, integra, integracao, nfse_adn, parcelamentos_pgfn, parcelamentos_simples, portal, prevencao, receitas_mensais, relatorios, robo, robo_sefaz, usuarios
+from app.routes import admissoes, agenda, apuracoes, auth, certidoes, cobrancas, conector_email, cte_distribuicao, dashboard, dfe_distribuicao, docs_escritorio, documentos, empresas, guias_das, guias_dctfweb, guias_fgts, integra, integracao, mensagens, nfse_adn, parcelamentos_pgfn, parcelamentos_simples, portal, prevencao, receitas_mensais, relatorios, robo, robo_sefaz, usuarios
 from app.services.auth_service import hash_password
 
 
@@ -35,7 +36,7 @@ settings = get_settings()
 # BUILD_COMMIT no build (commit fica "unknown"), este é o sinal confiável pra
 # saber, via GET /version, se o deploy pegou o código novo (cache stale é
 # recorrente). Formato livre: AAAA-MM-DD + resumo curto.
-APP_BUILD_TAG = "2026-07-02-relatorios-competencia-tzfix"
+APP_BUILD_TAG = "2026-07-06-chat-cliente-inativar"
 
 
 @asynccontextmanager
@@ -79,6 +80,7 @@ async def lifespan(_: FastAPI):
         "ALTER TABLE empresas ADD COLUMN IF NOT EXISTS anexo_servico VARCHAR(4)",
         "ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS senha_provisoria BOOLEAN NOT NULL DEFAULT FALSE",
         "ALTER TABLE empresas ADD COLUMN IF NOT EXISTS so_servico BOOLEAN NOT NULL DEFAULT FALSE",
+        "ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS motivo_inativacao VARCHAR(255)",
     ]
     for _stmt in _ddl_startup:
         try:
@@ -191,6 +193,7 @@ app.include_router(dfe_distribuicao.router_cron, prefix=settings.api_v1_prefix)
 app.include_router(cte_distribuicao.router, prefix=settings.api_v1_prefix)
 app.include_router(cte_distribuicao.router_cron, prefix=settings.api_v1_prefix)
 app.include_router(portal.router, prefix=settings.api_v1_prefix)
+app.include_router(mensagens.router, prefix=settings.api_v1_prefix)
 app.include_router(prevencao.router, prefix=settings.api_v1_prefix)
 app.include_router(conector_email.router, prefix=settings.api_v1_prefix)
 app.include_router(conector_email.router_cron, prefix=settings.api_v1_prefix)

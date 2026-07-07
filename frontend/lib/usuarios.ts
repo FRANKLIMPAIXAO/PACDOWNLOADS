@@ -124,6 +124,7 @@ export type ClienteAcesso = {
   nome: string;
   email: string;
   ativo: boolean;
+  motivo_inativacao?: string | null;
   empresas: { id: number; razao_social: string | null }[];
   ultimo_acesso: string | null;
   total_acessos: number;
@@ -132,4 +133,13 @@ export type ClienteAcesso = {
 /** Relatório de controle: quais clientes acessam o portal e com que frequência. */
 export function clientesAcesso() {
   return apiFetch<{ clientes: ClienteAcesso[] }>("/api/v1/usuarios/clientes-acesso");
+}
+
+/** Ativa/INATIVA o acesso de um CLIENTE ao portal (operador). Inativar bloqueia o
+ * login e derruba o token na hora. `motivo` só quando inativa (ex.: inadimplente). */
+export function definirAtivoCliente(usuarioId: number, ativo: boolean, motivo?: string) {
+  return apiFetch<UsuarioAdmin>(`/api/v1/usuarios/cliente/${usuarioId}/ativo`, {
+    method: "PATCH",
+    body: JSON.stringify({ ativo, motivo: motivo || null }),
+  });
 }
