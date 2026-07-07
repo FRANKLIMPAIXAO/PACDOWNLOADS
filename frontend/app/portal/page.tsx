@@ -27,6 +27,7 @@ import {
   portalMensagens,
   portalMensagensNaoLidas,
   portalEnviarMensagem,
+  portalEnviarArquivo,
   portalTrocarEmpresa,
   portalResumo,
   portalSyncGuias,
@@ -341,6 +342,11 @@ export default function PortalPage() {
 
   async function enviarMensagemPortal(corpo: string) {
     await portalEnviarMensagem(corpo);
+    carregarMensagens(false);
+  }
+
+  async function enviarArquivoPortal(file: Blob, nome: string, texto?: string) {
+    await portalEnviarArquivo(file, nome, texto);
     carregarMensagens(false);
   }
 
@@ -979,6 +985,7 @@ export default function PortalPage() {
                 mensagens={mensagens}
                 meuLado="cliente"
                 onEnviar={enviarMensagemPortal}
+                onEnviarArquivo={enviarArquivoPortal}
                 carregando={chatLoading}
                 altura={520}
                 vazioLabel="Nenhuma mensagem ainda. Mande a primeira pro escritório 👇"

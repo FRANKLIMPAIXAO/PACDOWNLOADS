@@ -19,7 +19,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Literal
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy import desc, func, select
 
@@ -1141,6 +1141,51 @@ def portal_enviar_mensagem(
     autor_nome = f"{cliente.nome} ({empresa.razao_social})" if empresa.razao_social else cliente.nome
     try:
         resp = PacChatService().enviar(empresa.cnpj, corpo, autor_nome=autor_nome)
+    except PacChatError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+    m = resp.get("mensagem") or {}
+    return map_mensagem(m) if m else {"ok": True, "conversa_id": resp.get("conversa_id")}
+
+
+# Teto do anexo/áudio do chat — cobre PDF/imagem/nota de voz com folga e barra
+# abuso (o base64 infla ~33%, então o POST ao PacChat fica < ~27 MB).
+MAX_ANEXO_CHAT = 20 * 1024 * 1024
+
+
+@router.post("/mensagens/anexo", status_code=201)
+async def portal_enviar_anexo(
+    arquivo: UploadFile = File(..., description="Imagem, áudio, vídeo ou documento"),
+    texto: str | None = Form(None),
+    cliente: Usuario = Depends(get_current_cliente),
+    db: Session = Depends(get_db),
+) -> dict:
+    """O cliente manda um ANEXO ou ÁUDIO pra PAC. Recebe multipart (mais leve que
+    base64 no JSON), converte pra base64 e repassa ao PacChat, que sobe pro Storage
+    e devolve a `midia_url`. Escopo pelo CNPJ da empresa do TOKEN, nunca do request."""
+    import base64
+
+    empresa = db.get(Empresa, cliente.empresa_id)
+    if not empresa or not empresa.cnpj:
+        raise HTTPException(status_code=404, detail="Empresa do cliente sem CNPJ.")
+    if not arquivo.filename:
+        raise HTTPException(status_code=400, detail="Arquivo sem nome.")
+    conteudo = await arquivo.read()
+    if not conteudo:
+        raise HTTPException(status_code=400, detail="Arquivo vazio.")
+    if len(conteudo) > MAX_ANEXO_CHAT:
+        raise HTTPException(status_code=400, detail="Arquivo grande demais (máx 20 MB).")
+    b64 = base64.b64encode(conteudo).decode("ascii")
+    mime = arquivo.content_type or "application/octet-stream"
+    autor_nome = f"{cliente.nome} ({empresa.razao_social})" if empresa.razao_social else cliente.nome
+    try:
+        resp = PacChatService().enviar(
+            empresa.cnpj,
+            texto=(texto.strip() if texto and texto.strip() else None),
+            autor_nome=autor_nome,
+            arquivo_base64=b64,
+            nome_arquivo=arquivo.filename,
+            mimetype=mime,
+        )
     except PacChatError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
     m = resp.get("mensagem") or {}

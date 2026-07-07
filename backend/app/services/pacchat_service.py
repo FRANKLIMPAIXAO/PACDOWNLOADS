@@ -29,12 +29,17 @@ def _map_autor(autor_tipo: str | None) -> str:
 
 
 def map_mensagem(m: dict) -> dict:
-    """Mensagem do PacChat → formato do ChatThread do portal."""
+    """Mensagem do PacChat → formato do ChatThread do portal. Inclui mídia
+    (anexo/áudio): `tipo` (texto/imagem/video/audio/documento) + `midia_url`
+    (URL pública pronta) + `midia_nome`."""
     return {
         "id": m.get("id"),
         "autor": _map_autor(m.get("autor_tipo")),
         "autor_nome": m.get("autor_nome"),
         "corpo": m.get("corpo") or "",
+        "tipo": m.get("tipo") or "texto",
+        "midia_url": m.get("midia_url"),
+        "midia_nome": m.get("midia_nome"),
         "created_at": m.get("created_date"),
     }
 
@@ -82,8 +87,24 @@ class PacChatService:
     def mensagens(self, cnpj: str, conversa_id: str | None = None, desde: str | None = None) -> dict:
         return self._call("mensagens", cnpj, conversa_id=conversa_id, desde=desde)
 
-    def enviar(self, cnpj: str, texto: str, autor_nome: str | None = None, conversa_id: str | None = None) -> dict:
-        return self._call("enviar", cnpj, texto=texto, autor_nome=autor_nome, conversa_id=conversa_id)
+    def enviar(
+        self,
+        cnpj: str,
+        texto: str | None = None,
+        autor_nome: str | None = None,
+        conversa_id: str | None = None,
+        arquivo_base64: str | None = None,
+        nome_arquivo: str | None = None,
+        mimetype: str | None = None,
+    ) -> dict:
+        """Envia texto e/ou anexo. Pra mídia, manda o arquivo em base64 (o PacChat
+        sobe pro Storage e devolve a midia_url). `_call` descarta os None, então
+        mensagem só-texto vai sem os campos de mídia e vice-versa."""
+        return self._call(
+            "enviar", cnpj,
+            texto=texto, autor_nome=autor_nome, conversa_id=conversa_id,
+            arquivo_base64=arquivo_base64, nome_arquivo=nome_arquivo, mimetype=mimetype,
+        )
 
     def marcar_lido(self, cnpj: str, conversa_id: str | None = None) -> dict:
         return self._call("marcar_lido", cnpj, conversa_id=conversa_id)

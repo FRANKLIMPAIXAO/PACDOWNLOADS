@@ -534,3 +534,31 @@ export function portalEnviarMensagem(corpo: string) {
     body: JSON.stringify({ corpo }),
   });
 }
+
+/** Envia um ANEXO/ÁUDIO (multipart). Fetch próprio: com FormData o browser define
+ * o Content-Type (boundary) — não pode forçar application/json. */
+export async function portalEnviarArquivo(file: Blob, nome: string, texto?: string): Promise<ChatMensagem> {
+  const token = getPortalToken();
+  const fd = new FormData();
+  fd.append("arquivo", file, nome);
+  if (texto) fd.append("texto", texto);
+  let resp: Response;
+  try {
+    resp = await fetch(`${API_BASE_URL}/api/v1/portal/mensagens/anexo`, {
+      method: "POST",
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: fd,
+    });
+  } catch (err) {
+    throw new ApiError(0, null, `Falha de rede: ${(err as Error).message}`);
+  }
+  const text = await resp.text();
+  let payload: unknown = null;
+  if (text) { try { payload = JSON.parse(text); } catch { payload = text; } }
+  if (!resp.ok) {
+    const detail = payload && typeof payload === "object" && "detail" in payload
+      ? (payload as { detail: unknown }).detail : payload;
+    throw new ApiError(resp.status, detail, typeof detail === "string" ? detail : `Erro ${resp.status}`);
+  }
+  return payload as ChatMensagem;
+}
