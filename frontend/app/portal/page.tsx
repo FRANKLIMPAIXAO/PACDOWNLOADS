@@ -242,6 +242,9 @@ export default function PortalPage() {
   const [mensagens, setMensagens] = useState<ChatMensagem[]>([]);
   const [chatNaoLidas, setChatNaoLidas] = useState(0);
   const [chatLoading, setChatLoading] = useState(false);
+  // Mobile: menu-gaveta + altura do chat ocupando ~a tela toda no celular.
+  const [menuAberto, setMenuAberto] = useState(false);
+  const [chatAltura, setChatAltura] = useState(540);
   // Campainha: refs pra detectar mensagem NOVA da PAC entre um polling e outro.
   const audioCtxRef = useRef<AudioContext | null>(null);
   const prevNaoLidasRef = useRef<number | null>(null);
@@ -324,6 +327,18 @@ export default function PortalPage() {
     carregarFiscal();
     checarNaoLidas();
   }, [router, carregarEscritorio, carregarEmpresa, carregarFiscal, checarNaoLidas]);
+
+  // Chat quase em tela cheia no celular (acompanha o teclado ao abrir); altura
+  // confortável fixa no desktop.
+  useEffect(() => {
+    function calcAltura() {
+      const h = window.innerHeight, w = window.innerWidth;
+      setChatAltura(w <= 820 ? Math.max(360, h - 150) : 560);
+    }
+    calcAltura();
+    window.addEventListener("resize", calcAltura);
+    return () => window.removeEventListener("resize", calcAltura);
+  }, []);
 
   // Abriu a conversa → carrega e zera o badge. Fora dela, faz polling do não-lido
   // (a cada 15s) — se subir, toca a campainha.
@@ -540,6 +555,7 @@ export default function PortalPage() {
     if (v === "manifestar" && origem === "emitida") setOrigem("");
     setErro(null); setAviso(null);
     setView(v);
+    setMenuAberto(false); // fecha a gaveta no celular ao navegar
   }
 
   const cert = docsEmpresa?.certificado ?? null;
@@ -653,7 +669,9 @@ export default function PortalPage() {
 
   return (
     <div className="pac-portal">
-      <aside className="pac-sidebar">
+      {/* Backdrop da gaveta (só aparece no celular quando o menu está aberto) */}
+      {menuAberto ? <div className="pac-backdrop" onClick={() => setMenuAberto(false)} /> : null}
+      <aside className={`pac-sidebar${menuAberto ? " open" : ""}`}>
         <div className="pac-logo" onClick={() => irPara("home")} title="Início">
           <img src="/pac-logo-branco.svg" alt="PAC Inteligência Tributária" />
         </div>
@@ -685,7 +703,15 @@ export default function PortalPage() {
 
       <div className="pac-main">
         <header className="pac-topbar">
-          <div>
+          <button
+            type="button"
+            className="pac-hamburger"
+            onClick={() => setMenuAberto((v) => !v)}
+            aria-label="Menu"
+          >
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round"><path d="M3 6h18M3 12h18M3 18h18" /></svg>
+          </button>
+          <div style={{ flex: 1, minWidth: 0 }}>
             <div className="pac-topbar-empresa">{me?.empresa?.razao_social || "Portal do Cliente"}</div>
             <div className="pac-topbar-cnpj">{me?.empresa?.cnpj ? `CNPJ ${me.empresa.cnpj}` : ""}</div>
           </div>
@@ -987,7 +1013,7 @@ export default function PortalPage() {
                 onEnviar={enviarMensagemPortal}
                 onEnviarArquivo={enviarArquivoPortal}
                 carregando={chatLoading}
-                altura={520}
+                altura={chatAltura}
                 vazioLabel="Nenhuma mensagem ainda. Mande a primeira pro escritório 👇"
               />
             </>
@@ -1262,7 +1288,9 @@ export default function PortalPage() {
           font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif; letter-spacing: -0.01em; }
 
         .pac-sidebar { width: 208px; flex-shrink: 0; background: ${NAVY}; color: #c4d0e4;
-          display: flex; flex-direction: column; gap: 16px; padding: 16px 12px; }
+          display: flex; flex-direction: column; gap: 16px; padding: 16px 12px; overflow-y: auto; }
+        .pac-hamburger { display: none; align-items: center; justify-content: center; background: transparent;
+          border: none; color: ${NAVY}; cursor: pointer; padding: 4px; margin-right: 6px; flex-shrink: 0; }
         .pac-logo { display: flex; align-items: center; padding: 6px 6px 2px; cursor: pointer; }
         .pac-logo img { height: 34px; display: block; }
         .pac-nav { display: flex; flex-direction: column; gap: 14px; }
@@ -1335,14 +1363,26 @@ export default function PortalPage() {
         .pac-toast-ok { background: #e6f6ef; color: #0f6e56; border: 1px solid #b7e3d2; }
         .pac-toast-err { background: #fdeaea; color: #a32d2d; border: 1px solid #f3c2c2; }
 
+        /* Celular/tablet: a lateral vira GAVETA (drawer) que desliza da esquerda,
+           acionada pelo ☰ na barra de cima. Conteúdo ocupa a largura toda. */
         @media (max-width: 820px) {
-          .pac-sidebar { width: 56px; padding: 14px 6px; }
-          .pac-navlabel, .pac-navgroup-label, .pac-user-name { display: none; }
-          .pac-navitem { justify-content: center; padding: 10px 0; }
-          .pac-navitem.active { box-shadow: inset 0 -2px 0 ${ORANGE}; }
-          .pac-badge { position: absolute; top: 3px; right: 4px; padding: 0 5px; }
-          .pac-logo { justify-content: center; padding: 4px 0; }
-          .pac-logo img { height: 24px; }
+          .pac-hamburger { display: inline-flex; }
+          .pac-sidebar {
+            position: fixed; top: 0; left: 0; bottom: 0; width: 260px; z-index: 60;
+            transform: translateX(-100%); transition: transform .22s ease;
+            box-shadow: 2px 0 24px rgba(0,0,0,0.35); padding-top: env(safe-area-inset-top, 0px);
+          }
+          .pac-sidebar.open { transform: translateX(0); }
+          .pac-backdrop { position: fixed; inset: 0; background: rgba(10,16,30,0.5); z-index: 55; }
+          .pac-content { padding: 14px 12px; }
+          .pac-topbar { padding: 10px 12px; padding-top: max(10px, env(safe-area-inset-top, 0px)); }
+          .pac-kpis { grid-template-columns: 1fr 1fr; }
+          .pac-atalhos { grid-template-columns: 1fr; }
+        }
+        /* Telas bem estreitas: KPIs numa coluna só. */
+        @media (max-width: 460px) {
+          .pac-kpis { grid-template-columns: 1fr; }
+          .pac-topbar-empresa { font-size: 13px; }
         }
       `}</style>
     </div>
