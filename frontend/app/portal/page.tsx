@@ -250,16 +250,24 @@ export default function PortalPage() {
   const prevNaoLidasRef = useRef<number | null>(null);
   const lastEscritorioIdRef = useRef<string | number | null>(null);
 
-  // "Ding-dong" curto via Web Audio — sem arquivo externo (CSP-safe). Só toca
-  // após o usuário já ter interagido com a página (política de autoplay).
+  // Garante um AudioContext "running" (destravado). No celular ele nasce
+  // suspenso e só liga a partir de um gesto do usuário (ver efeito abaixo).
+  const garantirAudio = useCallback((): AudioContext | null => {
+    if (typeof window === "undefined") return null;
+    const AC = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AC) return null;
+    if (!audioCtxRef.current) { try { audioCtxRef.current = new AC(); } catch { return null; } }
+    const ctx = audioCtxRef.current;
+    if (ctx.state === "suspended") ctx.resume().catch(() => {});
+    return ctx;
+  }, []);
+
+  // "Ding-dong" curto via Web Audio (sem arquivo, CSP-safe) + vibração no Android.
   const tocarSino = useCallback(() => {
+    try { navigator.vibrate?.(180); } catch { /* iOS não tem vibrate */ }
     try {
-      if (typeof window === "undefined") return;
-      const AC = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-      if (!AC) return;
-      if (!audioCtxRef.current) audioCtxRef.current = new AC();
-      const ctx = audioCtxRef.current;
-      if (ctx.state === "suspended") ctx.resume().catch(() => {});
+      const ctx = garantirAudio();
+      if (!ctx) return;
       const t0 = ctx.currentTime;
       ([[880, 0], [1174.7, 0.13]] as [number, number][]).forEach(([freq, dt]) => {
         const osc = ctx.createOscillator();
@@ -267,13 +275,30 @@ export default function PortalPage() {
         osc.type = "sine";
         osc.frequency.value = freq;
         gain.gain.setValueAtTime(0.0001, t0 + dt);
-        gain.gain.exponentialRampToValueAtTime(0.28, t0 + dt + 0.02);
-        gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dt + 0.28);
+        gain.gain.exponentialRampToValueAtTime(0.34, t0 + dt + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dt + 0.3);
         osc.connect(gain); gain.connect(ctx.destination);
-        osc.start(t0 + dt); osc.stop(t0 + dt + 0.3);
+        osc.start(t0 + dt); osc.stop(t0 + dt + 0.32);
       });
     } catch { /* som é bônus — nunca quebra */ }
-  }, []);
+  }, [garantirAudio]);
+
+  // DESTRAVA o áudio no 1º gesto do usuário (política de autoplay do celular).
+  // Sem isso, o bip de mensagem nova não toca no iOS/Android (contexto suspenso).
+  useEffect(() => {
+    const desbloquear = () => {
+      const ctx = garantirAudio();
+      if (!ctx) return;
+      try {
+        const o = ctx.createOscillator(); const g = ctx.createGain();
+        g.gain.value = 0; o.connect(g); g.connect(ctx.destination);
+        o.start(); o.stop(ctx.currentTime + 0.01); // tick mudo só pra "ligar"
+      } catch { /* ok */ }
+    };
+    const evs: (keyof WindowEventMap)[] = ["pointerdown", "touchend", "keydown", "click"];
+    evs.forEach((e) => window.addEventListener(e, desbloquear, { once: true, passive: true }));
+    return () => evs.forEach((e) => window.removeEventListener(e, desbloquear));
+  }, [garantirAudio]);
 
   const carregarMensagens = useCallback((comSpinner = false) => {
     if (comSpinner) setChatLoading(true);
@@ -348,10 +373,10 @@ export default function PortalPage() {
     return () => clearInterval(t);
   }, [view, carregarMensagens, checarNaoLidas]);
 
-  // Enquanto a conversa está aberta, puxa mensagens novas a cada 12s.
+  // Conversa aberta: puxa mensagens novas a cada 6s (bip toca quase na hora).
   useEffect(() => {
     if (view !== "conversa") return;
-    const t = setInterval(() => carregarMensagens(false), 12000);
+    const t = setInterval(() => carregarMensagens(false), 6000);
     return () => clearInterval(t);
   }, [view, carregarMensagens]);
 
@@ -926,7 +951,7 @@ export default function PortalPage() {
                   <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
                     <div>
                       <h3 style={{ margin: "0 0 3px", color: NAVY, fontSize: 15 }}>🔐 Certificado digital (e-CNPJ A1)</h3>
-                      {cert.subject ? <div style={{ fontSize: 12.5, color: GRAY }}>{cert.subject}</div> : null}
+                      {cert.subject ? <div style={{ fontSize: 12.5, color: GRAY, wordBreak: "break-word", overflowWrap: "anywhere" }}>{cert.subject}</div> : null}
                       <div style={{ fontSize: 12.5, color: GRAY, marginTop: 2 }}>
                         Validade: <strong>{dataBR(cert.validade)}</strong>
                       </div>
@@ -1285,7 +1310,8 @@ export default function PortalPage() {
 
       <style jsx>{`
         .pac-portal { display: flex; min-height: 100vh; background: #f5f7fa; color: #1b2333;
-          font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif; letter-spacing: -0.01em; }
+          font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif; letter-spacing: -0.01em;
+          max-width: 100%; overflow-x: hidden; }
 
         .pac-sidebar { width: 208px; flex-shrink: 0; background: ${NAVY}; color: #c4d0e4;
           display: flex; flex-direction: column; gap: 16px; padding: 16px 12px; overflow-y: auto; }
@@ -1374,10 +1400,15 @@ export default function PortalPage() {
           }
           .pac-sidebar.open { transform: translateX(0); }
           .pac-backdrop { position: fixed; inset: 0; background: rgba(10,16,30,0.5); z-index: 55; }
-          .pac-content { padding: 14px 12px; }
+          .pac-content { padding: 14px 12px; overflow-x: hidden; }
           .pac-topbar { padding: 10px 12px; padding-top: max(10px, env(safe-area-inset-top, 0px)); }
           .pac-kpis { grid-template-columns: 1fr 1fr; }
           .pac-atalhos { grid-template-columns: 1fr; }
+          .pac-paineis { grid-template-columns: 1fr; }
+          /* Tabelas mais largas que a tela ROLAM dentro do próprio card (a página
+             não anda pro lado). O título/botão acima ficam fixos (texto quebra). */
+          .pac-card { overflow-x: auto; }
+          .pac-table { min-width: 520px; }
         }
         /* Telas bem estreitas: KPIs numa coluna só. */
         @media (max-width: 460px) {
