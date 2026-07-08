@@ -122,6 +122,13 @@ class Settings(BaseSettings):
         default="https://flfeppcduzrrskojwkjn.functions.supabase.co/pacchat-api",
         alias="PACCHAT_API_URL",
     )
+    # --- Web Push (notificação do portal no celular) ---
+    # Par de chaves VAPID. A PÚBLICA vai pro navegador (não é segredo); a PRIVADA
+    # é SEGREDO (assina o push) e mora só no env do servidor. Gere um par e ponha
+    # nos dois lados. Vazio = push desligado (o app funciona igual, só não notifica).
+    vapid_public_key: str = Field(default="", alias="VAPID_PUBLIC_KEY")
+    vapid_private_key: str = Field(default="", alias="VAPID_PRIVATE_KEY")
+    vapid_subject: str = Field(default="mailto:admin@pacxml.com.br", alias="VAPID_SUBJECT")
     # Base PÚBLICA da API (pros links de anexo que o PAC TAREFAS baixa).
     api_public_url: str = Field(default="https://api.pacgestao.com.br", alias="API_PUBLIC_URL")
     first_superuser_email: str = Field(default="admin@pacxml.com.br", alias="FIRST_SUPERUSER_EMAIL")

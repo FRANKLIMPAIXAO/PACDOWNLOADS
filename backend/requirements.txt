@@ -42,3 +42,8 @@ pdfplumber==0.11.9
 # --- lxml: C14N (canonicalização) pra assinar o XML do evento de
 # manifestação do destinatário (Ciência da Operação) — XML-DSig manual. ---
 lxml==5.3.0
+
+# --- Web Push: notificação do portal no celular (tipo WhatsApp), mesmo com o
+# app fechado. Puxa py-vapid + http-ece + cryptography. Dep NOVA → exige REBUILD
+# da imagem em prod (não pega só com Stop+Start). ---
+pywebpush==2.3.0

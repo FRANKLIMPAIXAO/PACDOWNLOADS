@@ -511,6 +511,20 @@ export async function portalBaixarArquivo(documentoId: number, tipo: "xml" | "pd
   window.URL.revokeObjectURL(url);
 }
 
+// --- Web Push (notificação no celular) ---
+/** Chave pública VAPID (pro navegador se inscrever). null = push não configurado. */
+export function portalVapidKey() {
+  return portalFetch<{ public_key: string | null }>("/api/v1/portal/push/vapid-key");
+}
+
+/** Registra a inscrição de push deste dispositivo no backend. */
+export function portalPushSubscribe(sub: { endpoint: string; p256dh: string; auth: string }) {
+  return portalFetch<{ ok: boolean }>("/api/v1/portal/push/subscribe", {
+    method: "POST",
+    body: JSON.stringify(sub),
+  });
+}
+
 // --- Conversa (chat) com o escritório ---
 import type { ChatMensagem } from "../components/chat-thread";
 export type { ChatMensagem };

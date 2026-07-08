@@ -1190,3 +1190,64 @@ async def portal_enviar_anexo(
         raise HTTPException(status_code=502, detail=str(exc))
     m = resp.get("mensagem") or {}
     return map_mensagem(m) if m else {"ok": True, "conversa_id": resp.get("conversa_id")}
+
+
+# ---------------------------------------------------------------------------
+# Web Push (notificação no celular, tipo WhatsApp). O cliente se INSCREVE aqui;
+# o disparo vem pelo webhook que o PacChat chama (routes/pacchat_webhook.py).
+# ---------------------------------------------------------------------------
+from app.models.push_subscription import PushSubscription  # noqa: E402
+
+
+class _PushSub(_MsgBase):
+    endpoint: str
+    p256dh: str
+    auth: str
+
+
+@router.get("/push/vapid-key")
+def portal_push_vapid_key(cliente: Usuario = Depends(get_current_cliente)) -> dict:
+    """Chave PÚBLICA VAPID pro navegador se inscrever no push (não é segredo).
+    Vazia = push não configurado no servidor (o front esconde o botão)."""
+    from app.config import get_settings
+    return {"public_key": get_settings().vapid_public_key or None}
+
+
+@router.post("/push/subscribe", status_code=201)
+def portal_push_subscribe(
+    payload: _PushSub,
+    cliente: Usuario = Depends(get_current_cliente),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Guarda/atualiza a inscrição de push DESTE dispositivo (upsert por endpoint).
+    Escopo pelo cliente do TOKEN — a inscrição fica amarrada a ele."""
+    ep = (payload.endpoint or "").strip()
+    if not ep or not payload.p256dh or not payload.auth:
+        raise HTTPException(status_code=400, detail="Inscrição de push inválida.")
+    sub = db.scalar(select(PushSubscription).where(PushSubscription.endpoint == ep))
+    if sub:
+        sub.usuario_id = cliente.id
+        sub.empresa_id = cliente.empresa_id
+        sub.p256dh = payload.p256dh
+        sub.auth = payload.auth
+    else:
+        db.add(PushSubscription(
+            usuario_id=cliente.id, empresa_id=cliente.empresa_id,
+            endpoint=ep, p256dh=payload.p256dh, auth=payload.auth,
+        ))
+    db.commit()
+    return {"ok": True}
+
+
+@router.post("/push/unsubscribe")
+def portal_push_unsubscribe(
+    payload: _PushSub,
+    cliente: Usuario = Depends(get_current_cliente),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Remove a inscrição deste dispositivo (cliente desligou as notificações)."""
+    sub = db.scalar(select(PushSubscription).where(PushSubscription.endpoint == (payload.endpoint or "").strip()))
+    if sub:
+        db.delete(sub)
+        db.commit()
+    return {"ok": True}

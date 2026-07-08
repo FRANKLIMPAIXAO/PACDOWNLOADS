@@ -51,6 +51,7 @@ import {
 } from "../../lib/portal";
 import { PortalAdmissao } from "../../components/portal-admissao";
 import { ChatThread } from "../../components/chat-thread";
+import { ativarNotificacoes, estadoNotificacoes, type EstadoPush } from "../../lib/push";
 
 // ---- Marca PAC ----
 const NAVY = "#16294d";
@@ -245,6 +246,9 @@ export default function PortalPage() {
   // Mobile: menu-gaveta + altura do chat ocupando ~a tela toda no celular.
   const [menuAberto, setMenuAberto] = useState(false);
   const [chatAltura, setChatAltura] = useState(540);
+  // Notificação de sistema (Web Push)
+  const [pushStatus, setPushStatus] = useState<EstadoPush>("default");
+  const [pushBusy, setPushBusy] = useState(false);
   // Campainha: refs pra detectar mensagem NOVA da PAC entre um polling e outro.
   const audioCtxRef = useRef<AudioContext | null>(null);
   const prevNaoLidasRef = useRef<number | null>(null);
@@ -364,6 +368,25 @@ export default function PortalPage() {
     window.addEventListener("resize", calcAltura);
     return () => window.removeEventListener("resize", calcAltura);
   }, []);
+
+  // Push: lê o estado da permissão e, se JÁ concedida, re-registra a inscrição
+  // em silêncio (mantém o endpoint atualizado, sem abrir prompt).
+  useEffect(() => {
+    setPushStatus(estadoNotificacoes());
+    ativarNotificacoes(true).catch(() => { /* silencioso */ });
+  }, []);
+
+  async function ativarPush() {
+    setPushBusy(true); setAviso(null); setErro(null);
+    try {
+      const r = await ativarNotificacoes(false);
+      setPushStatus(estadoNotificacoes());
+      if (r.ok) setAviso("🔔 Notificações ativadas! Você será avisado no celular quando o escritório responder.");
+      else setErro(r.motivo || "Não consegui ativar as notificações.");
+    } finally {
+      setPushBusy(false);
+    }
+  }
 
   // Abriu a conversa → carrega e zera o badge. Fora dela, faz polling do não-lido
   // (a cada 15s) — se subir, toca a campainha.
@@ -1032,6 +1055,25 @@ export default function PortalPage() {
               <p style={{ color: GRAY, fontSize: 13, margin: "0 0 12px" }}>
                 Tire dúvidas, envie recados e receba retorno do escritório. As mensagens ficam registradas aqui.
               </p>
+              {/* Ativar notificação de sistema (Web Push) — aparece só se ainda não ativou */}
+              {pushStatus !== "granted" && pushStatus !== "unsupported" ? (
+                <button
+                  type="button"
+                  onClick={ativarPush}
+                  disabled={pushBusy}
+                  className="pac-card"
+                  style={{
+                    width: "100%", textAlign: "left", cursor: "pointer", marginBottom: 12,
+                    display: "flex", alignItems: "center", gap: 10, borderLeft: `4px solid ${ORANGE}`,
+                  }}
+                >
+                  <span style={{ fontSize: 22 }}>🔔</span>
+                  <span style={{ fontSize: 13.5, color: NAVY }}>
+                    <strong>Ativar notificações no celular</strong> — seja avisado quando o escritório responder, mesmo com o app fechado.
+                    {pushStatus === "denied" ? <span style={{ color: RED }}> (bloqueado — libere nas configurações do site)</span> : null}
+                  </span>
+                </button>
+              ) : null}
               <ChatThread
                 mensagens={mensagens}
                 meuLado="cliente"

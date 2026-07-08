@@ -8,10 +8,43 @@
  *    intercepta (deixa o browser cuidar; nada de cachear resposta autenticada).
  * A EXISTÊNCIA deste fetch handler + o manifest + ícones = PWA instalável.
  */
-const CACHE = "pac-portal-v3";
+const CACHE = "pac-portal-v4";
 
 self.addEventListener("install", () => {
   self.skipWaiting();
+});
+
+// Web Push: notificação do portal no celular (tipo WhatsApp), mesmo com o app
+// fechado. O payload vem do backend (PacGestão) disparado pelo webhook do PacChat.
+self.addEventListener("push", (event) => {
+  let data = { title: "PAC", body: "Você recebeu uma nova mensagem.", url: "/portal", tag: "pacchat" };
+  try { if (event.data) data = { ...data, ...event.data.json() }; } catch { /* payload não-JSON */ }
+  event.waitUntil(
+    self.registration.showNotification(data.title, {
+      body: data.body,
+      icon: "/icon-192.png",
+      badge: "/icon-192.png",
+      tag: data.tag || "pacchat",
+      renotify: true,
+      vibrate: [180, 80, 180],
+      data: { url: data.url || "/portal" },
+    }),
+  );
+});
+
+// Tocar na notificação → foca a aba do portal se já aberta, senão abre.
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const alvo = (event.notification.data && event.notification.data.url) || "/portal";
+  event.waitUntil(
+    (async () => {
+      const abas = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+      for (const c of abas) {
+        if (c.url.includes("/portal") && "focus" in c) return c.focus();
+      }
+      if (self.clients.openWindow) return self.clients.openWindow(alvo);
+    })(),
+  );
 });
 
 self.addEventListener("activate", (event) => {
