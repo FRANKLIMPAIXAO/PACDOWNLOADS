@@ -52,6 +52,7 @@ import {
 } from "../../lib/portal";
 import { PortalAdmissao } from "../../components/portal-admissao";
 import { ChatThread } from "../../components/chat-thread";
+import { PortalChamada } from "../../components/portal-chamada";
 import { ativarNotificacoes, estadoNotificacoes, type EstadoPush } from "../../lib/push";
 
 // ---- Marca PAC ----
@@ -731,6 +732,8 @@ export default function PortalPage() {
 
   return (
     <div className="pac-portal">
+      {/* Ligação de voz (WebRTC) — detecta chamada do escritório e mostra a tela */}
+      <PortalChamada />
       {/* Backdrop da gaveta (só aparece no celular quando o menu está aberto) */}
       {menuAberto ? <div className="pac-backdrop" onClick={() => setMenuAberto(false)} /> : null}
       <aside className={`pac-sidebar${menuAberto ? " open" : ""}`}>

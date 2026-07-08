@@ -129,6 +129,12 @@ class Settings(BaseSettings):
     vapid_public_key: str = Field(default="", alias="VAPID_PUBLIC_KEY")
     vapid_private_key: str = Field(default="", alias="VAPID_PRIVATE_KEY")
     vapid_subject: str = Field(default="mailto:admin@pacxml.com.br", alias="VAPID_SUBJECT")
+    # --- Ligação de voz (WebRTC) — servidor TURN (faz a chamada pegar no 4G).
+    # Vazio = só STUN (Google). Quando o PacChat subir o coturn, é só preencher no
+    # env, sem mexer no código: o portal busca em /portal/chamada/ice-servers. ---
+    turn_url: str = Field(default="", alias="TURN_URL")            # ex.: turn:host:3478
+    turn_username: str = Field(default="", alias="TURN_USERNAME")
+    turn_credential: str = Field(default="", alias="TURN_CREDENTIAL")
     # Base PÚBLICA da API (pros links de anexo que o PAC TAREFAS baixa).
     api_public_url: str = Field(default="https://api.pacgestao.com.br", alias="API_PUBLIC_URL")
     first_superuser_email: str = Field(default="admin@pacxml.com.br", alias="FIRST_SUPERUSER_EMAIL")

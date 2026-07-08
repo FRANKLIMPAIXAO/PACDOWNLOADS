@@ -1287,3 +1287,90 @@ def portal_push_test(
         "dispositivos": len(subs),
         "motivo": None if enviados > 0 else "Não consegui entregar (inscrição pode ter expirado — reative).",
     }
+
+
+# ---------------------------------------------------------------------------
+# Ligação de voz (WebRTC) — o áudio vai P2P entre navegadores; o PacChat faz a
+# SINALIZAÇÃO. O PacGestão PROXIA (o X-PAC-Token nunca vai pro navegador — igual
+# ao chat). Tudo escopado pelo CNPJ da empresa do TOKEN. v1: escritório liga,
+# cliente atende (cliente iniciar depende de o PacChat expor a ação).
+# ---------------------------------------------------------------------------
+class _ChamadaResp(_MsgBase):
+    chamada_id: str
+    aceitar: bool
+
+
+class _ChamadaSinal(_MsgBase):
+    chamada_id: str
+    tipo: str  # answer | ice | bye
+    payload: dict | None = None
+
+
+@router.get("/chamada/ice-servers")
+def portal_chamada_ice(cliente: Usuario = Depends(get_current_cliente)) -> dict:
+    """STUN (grátis) + TURN (se configurado no env). O TURN faz a chamada pegar
+    no 4G — quando o PacChat subir o coturn, é só preencher o env."""
+    from app.config import get_settings
+    s = get_settings()
+    servers: list[dict] = [{"urls": "stun:stun.l.google.com:19302"}]
+    if s.turn_url and s.turn_username and s.turn_credential:
+        servers.append({"urls": s.turn_url, "username": s.turn_username, "credential": s.turn_credential})
+    return {"iceServers": servers}
+
+
+@router.get("/chamada/pendente")
+def portal_chamada_pendente(
+    cliente: Usuario = Depends(get_current_cliente),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Tem chamada do escritório tocando pra este cliente? (polling ~3s). PacChat
+    fora → {chamada: null} pra não quebrar o portal."""
+    cnpj = _cnpj_cliente(cliente, db)
+    try:
+        return PacChatService().chamada_pendente(cnpj)
+    except PacChatError:
+        return {"ok": False, "chamada": None}
+
+
+@router.post("/chamada/responder")
+def portal_chamada_responder(
+    payload: _ChamadaResp,
+    cliente: Usuario = Depends(get_current_cliente),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Cliente aceita (true) ou recusa (false) a chamada."""
+    cnpj = _cnpj_cliente(cliente, db)
+    try:
+        return PacChatService().chamada_responder(cnpj, payload.chamada_id, payload.aceitar)
+    except PacChatError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+@router.post("/chamada/sinal")
+def portal_chamada_sinal(
+    payload: _ChamadaSinal,
+    cliente: Usuario = Depends(get_current_cliente),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Cliente manda um sinal WebRTC (answer / ice / bye) pro escritório."""
+    cnpj = _cnpj_cliente(cliente, db)
+    try:
+        return PacChatService().chamada_sinal(cnpj, payload.chamada_id, payload.tipo, payload.payload)
+    except PacChatError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+@router.get("/chamada/sinais")
+def portal_chamada_sinais(
+    chamada_id: str,
+    desde_seq: int = 0,
+    cliente: Usuario = Depends(get_current_cliente),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Busca os sinais do ESCRITÓRIO (offer/ice/bye) desde `desde_seq` (polling
+    ~1s durante a chamada). PacChat fora → lista vazia."""
+    cnpj = _cnpj_cliente(cliente, db)
+    try:
+        return PacChatService().chamada_sinais(cnpj, chamada_id, desde_seq)
+    except PacChatError:
+        return {"ok": False, "sinais": [], "status": None}

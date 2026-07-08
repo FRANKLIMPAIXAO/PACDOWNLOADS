@@ -108,3 +108,17 @@ class PacChatService:
 
     def marcar_lido(self, cnpj: str, conversa_id: str | None = None) -> dict:
         return self._call("marcar_lido", cnpj, conversa_id=conversa_id)
+
+    # --- Ligação de voz (WebRTC) — o PacChat faz a sinalização; o PacGestão só
+    #     proxia (o X-PAC-Token nunca vai pro navegador). ---
+    def chamada_pendente(self, cnpj: str) -> dict:
+        return self._call("chamada_pendente", cnpj)
+
+    def chamada_responder(self, cnpj: str, chamada_id: str, aceitar: bool) -> dict:
+        return self._call("chamada_responder", cnpj, chamada_id=chamada_id, aceitar=aceitar)
+
+    def chamada_sinal(self, cnpj: str, chamada_id: str, tipo: str, payload: dict | None = None) -> dict:
+        return self._call("chamada_sinal", cnpj, chamada_id=chamada_id, tipo=tipo, payload=payload)
+
+    def chamada_sinais(self, cnpj: str, chamada_id: str, desde_seq: int = 0) -> dict:
+        return self._call("chamada_sinais", cnpj, chamada_id=chamada_id, desde_seq=desde_seq)

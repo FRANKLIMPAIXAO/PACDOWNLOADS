@@ -534,6 +534,38 @@ export function portalPushTest() {
   );
 }
 
+// --- Ligação de voz (WebRTC) — proxy da sinalização do PacChat ---
+export type PortalChamadaPendente = {
+  ok?: boolean;
+  chamada: { id: string; de_nome?: string; status?: string; iniciada_em?: string } | null;
+  offer?: RTCSessionDescriptionInit;
+  offer_seq?: number;
+};
+
+export function portalChamadaIce() {
+  return portalFetch<{ iceServers: RTCIceServer[] }>("/api/v1/portal/chamada/ice-servers");
+}
+export function portalChamadaPendente() {
+  return portalFetch<PortalChamadaPendente>("/api/v1/portal/chamada/pendente");
+}
+export function portalChamadaResponder(chamadaId: string, aceitar: boolean) {
+  return portalFetch<{ ok: boolean }>("/api/v1/portal/chamada/responder", {
+    method: "POST",
+    body: JSON.stringify({ chamada_id: chamadaId, aceitar }),
+  });
+}
+export function portalChamadaSinal(chamadaId: string, tipo: string, payload?: unknown) {
+  return portalFetch<{ ok: boolean }>("/api/v1/portal/chamada/sinal", {
+    method: "POST",
+    body: JSON.stringify({ chamada_id: chamadaId, tipo, payload: payload ?? null }),
+  });
+}
+export function portalChamadaSinais(chamadaId: string, desdeSeq: number) {
+  return portalFetch<{ ok?: boolean; status?: string | null; sinais: { seq: number; tipo: string; payload: unknown }[] }>(
+    `/api/v1/portal/chamada/sinais?chamada_id=${encodeURIComponent(chamadaId)}&desde_seq=${desdeSeq}`,
+  );
+}
+
 // --- Conversa (chat) com o escritório ---
 import type { ChatMensagem } from "../components/chat-thread";
 export type { ChatMensagem };
