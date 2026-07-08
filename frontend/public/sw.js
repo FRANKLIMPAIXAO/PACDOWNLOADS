@@ -8,7 +8,7 @@
  *    intercepta (deixa o browser cuidar; nada de cachear resposta autenticada).
  * A EXISTÊNCIA deste fetch handler + o manifest + ícones = PWA instalável.
  */
-const CACHE = "pac-portal-v4";
+const CACHE = "pac-portal-v5";
 
 self.addEventListener("install", () => {
   self.skipWaiting();
@@ -17,8 +17,9 @@ self.addEventListener("install", () => {
 // Web Push: notificação do portal no celular (tipo WhatsApp), mesmo com o app
 // fechado. O payload vem do backend (PacGestão) disparado pelo webhook do PacChat.
 self.addEventListener("push", (event) => {
-  let data = { title: "PAC", body: "Você recebeu uma nova mensagem.", url: "/portal", tag: "pacchat" };
+  let data = { title: "PAC", body: "Você recebeu uma nova mensagem.", url: "/portal", tag: "pacchat", requireInteraction: false };
   try { if (event.data) data = { ...data, ...event.data.json() }; } catch { /* payload não-JSON */ }
+  const ehChamada = data.tag === "chamada";
   event.waitUntil(
     self.registration.showNotification(data.title, {
       body: data.body,
@@ -26,7 +27,9 @@ self.addEventListener("push", (event) => {
       badge: "/icon-192.png",
       tag: data.tag || "pacchat",
       renotify: true,
-      vibrate: [180, 80, 180],
+      // Ligação: fica na tela até tocar + vibra mais forte (parece "chamando").
+      requireInteraction: !!data.requireInteraction,
+      vibrate: ehChamada ? [300, 150, 300, 150, 300, 150, 300] : [180, 80, 180],
       data: { url: data.url || "/portal" },
     }),
   );

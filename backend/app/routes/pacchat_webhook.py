@@ -45,6 +45,10 @@ class NotificarPayload(BaseModel):
     corpo: str | None = Field(default=None, max_length=500)
     autor_nome: str | None = Field(default=None, max_length=120)
     titulo: str | None = Field(default=None, max_length=120)
+    # Pra push de LIGAÇÃO: tag própria ("chamada") e requer_interacao=True (a
+    # notificação fica na tela até o cliente tocar e abrir o portal p/ atender).
+    tag: str | None = Field(default=None, max_length=40)
+    requer_interacao: bool = False
 
 
 def _token_ok(recebido: str | None) -> bool:
@@ -116,7 +120,11 @@ def notificar(
 
     titulo = (payload.titulo or f"💬 {payload.autor_nome or 'Escritório PAC'}")[:80]
     corpo = (payload.corpo or "Você recebeu uma nova mensagem no portal.")[:140]
-    mortos = enviar_push(subs, titulo, corpo, url="/portal")
+    mortos = enviar_push(
+        subs, titulo, corpo, url="/portal",
+        tag=(payload.tag or "pacchat"),
+        require_interaction=payload.requer_interacao,
+    )
 
     # Limpa inscrições que morreram (404/410) pra não tentar de novo.
     if mortos:

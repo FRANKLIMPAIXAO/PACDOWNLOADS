@@ -19,10 +19,15 @@ def push_configurado() -> bool:
     return bool(s.vapid_public_key and s.vapid_private_key)
 
 
-def enviar_push(subs: list, titulo: str, corpo: str, url: str = "/portal", tag: str = "pacchat") -> list[str]:
+def enviar_push(
+    subs: list, titulo: str, corpo: str, url: str = "/portal", tag: str = "pacchat",
+    require_interaction: bool = False,
+) -> list[str]:
     """Envia a notificação pra cada inscrição (`subs` = objetos com .endpoint,
     .p256dh, .auth). Retorna os endpoints MORTOS (404/410) pra quem chamou apagar
-    do banco. Nunca levanta — falha de um device não derruba os outros."""
+    do banco. Nunca levanta — falha de um device não derruba os outros.
+    `require_interaction`=True → a notificação FICA na tela até o usuário tocar
+    (usado pra ligação, pra não sumir antes de atender)."""
     if not subs:
         return []
     s = get_settings()
@@ -35,7 +40,10 @@ def enviar_push(subs: list, titulo: str, corpo: str, url: str = "/portal", tag: 
         logger.warning("pywebpush não instalado — precisa REBUILD da imagem. Push pulado.")
         return []
 
-    payload = json.dumps({"title": titulo, "body": corpo, "url": url, "tag": tag})
+    payload = json.dumps({
+        "title": titulo, "body": corpo, "url": url, "tag": tag,
+        "requireInteraction": require_interaction,
+    })
     mortos: list[str] = []
     for sub in subs:
         info = {"endpoint": sub.endpoint, "keys": {"p256dh": sub.p256dh, "auth": sub.auth}}
