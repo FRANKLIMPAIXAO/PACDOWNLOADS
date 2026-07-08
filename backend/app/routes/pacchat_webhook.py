@@ -16,8 +16,11 @@ from __future__ import annotations
 
 import hmac
 import logging
+import threading
+import time
 from collections import deque
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
@@ -55,6 +58,27 @@ def _token_ok(recebido: str | None) -> bool:
     esperado = get_settings().pac_tarefas_webhook_token or ""
     # compare_digest evita timing attack; sem token configurado → nega.
     return bool(esperado) and bool(recebido) and hmac.compare_digest(recebido, esperado)
+
+
+def _repetir_push_chamada(cnpj: str, subs_data: list[dict], titulo: str, corpo: str,
+                          vezes: int = 5, intervalo: float = 4.0) -> None:
+    """"Toca" a notificação de ligação VÁRIAS vezes (buzz repetido, tag=chamada +
+    renotify → re-alerta o mesmo aviso), simulando um telefone tocando. PARA
+    sozinho quando a chamada não está mais pendente (atendida/encerrada). Roda em
+    thread daemon — não segura a resposta do webhook."""
+    from app.services.pacchat_service import PacChatError, PacChatService
+    subs = [SimpleNamespace(**d) for d in subs_data]
+    for _ in range(vezes):
+        time.sleep(intervalo)
+        try:
+            r = PacChatService().chamada_pendente(cnpj)
+            if not r.get("chamada"):
+                return  # atendeu / encerrou → para de "tocar"
+        except PacChatError:
+            return
+        except Exception:  # noqa: BLE001 — nunca deixa a thread derrubar nada
+            return
+        enviar_push(subs, titulo, corpo, url="/portal", tag="chamada", require_interaction=True)
 
 
 @router.post("/notificar")
@@ -136,6 +160,16 @@ def notificar(
     enviados = len(subs) - len(mortos)
     reg["enviados"] = enviados
     _registrar("ok")
+
+    # Ligação (tag=chamada): "toca" repetido — repete o push a cada ~4s enquanto a
+    # chamada estiver tocando (para sozinho ao atender). PacChat chama o webhook 1x.
+    if (payload.tag or "") == "chamada" and enviados > 0:
+        vivas = [{"endpoint": s.endpoint, "p256dh": s.p256dh, "auth": s.auth}
+                 for s in subs if s.endpoint not in mortos]
+        threading.Thread(
+            target=_repetir_push_chamada, args=(cnpj, vivas, titulo, corpo), daemon=True,
+        ).start()
+
     return {"ok": True, "enviados": enviados, "dispositivos": len(subs), "removidos": len(mortos)}
 
 
