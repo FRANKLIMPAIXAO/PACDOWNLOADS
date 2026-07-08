@@ -525,6 +525,15 @@ export function portalPushSubscribe(sub: { endpoint: string; p256dh: string; aut
   });
 }
 
+/** Dispara uma notificação de TESTE pros dispositivos deste cliente (pra ele
+ * conferir se chega com o app fechado). */
+export function portalPushTest() {
+  return portalFetch<{ ok: boolean; enviados?: number; dispositivos?: number; motivo?: string | null }>(
+    "/api/v1/portal/push/test",
+    { method: "POST" },
+  );
+}
+
 // --- Conversa (chat) com o escritório ---
 import type { ChatMensagem } from "../components/chat-thread";
 export type { ChatMensagem };

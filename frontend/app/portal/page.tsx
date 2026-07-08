@@ -28,6 +28,7 @@ import {
   portalMensagensNaoLidas,
   portalEnviarMensagem,
   portalEnviarArquivo,
+  portalPushTest,
   portalTrocarEmpresa,
   portalResumo,
   portalSyncGuias,
@@ -383,6 +384,19 @@ export default function PortalPage() {
       setPushStatus(estadoNotificacoes());
       if (r.ok) setAviso("🔔 Notificações ativadas! Você será avisado no celular quando o escritório responder.");
       else setErro(r.motivo || "Não consegui ativar as notificações.");
+    } finally {
+      setPushBusy(false);
+    }
+  }
+
+  async function testarPush() {
+    setPushBusy(true); setAviso(null); setErro(null);
+    try {
+      const r = await portalPushTest();
+      if (r.ok) setAviso("Enviei uma notificação de teste! FECHE o app agora — ela deve aparecer em alguns segundos. 📲");
+      else setErro(r.motivo || "Não consegui enviar o teste.");
+    } catch {
+      setErro("Falha ao enviar o teste.");
     } finally {
       setPushBusy(false);
     }
@@ -1055,7 +1069,7 @@ export default function PortalPage() {
               <p style={{ color: GRAY, fontSize: 13, margin: "0 0 12px" }}>
                 Tire dúvidas, envie recados e receba retorno do escritório. As mensagens ficam registradas aqui.
               </p>
-              {/* Ativar notificação de sistema (Web Push) — aparece só se ainda não ativou */}
+              {/* Notificação de sistema (Web Push): ativar (se ainda não) ou testar (se já) */}
               {pushStatus !== "granted" && pushStatus !== "unsupported" ? (
                 <button
                   type="button"
@@ -1073,6 +1087,19 @@ export default function PortalPage() {
                     {pushStatus === "denied" ? <span style={{ color: RED }}> (bloqueado — libere nas configurações do site)</span> : null}
                   </span>
                 </button>
+              ) : pushStatus === "granted" ? (
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 12.5, color: GREEN }}>🔔 Notificações ativadas.</span>
+                  <button
+                    type="button"
+                    onClick={testarPush}
+                    disabled={pushBusy}
+                    className="pac-btn pac-btn-ghost"
+                    style={{ fontSize: 12.5 }}
+                  >
+                    {pushBusy ? "Enviando…" : "Enviar notificação de teste"}
+                  </button>
+                </div>
               ) : null}
               <ChatThread
                 mensagens={mensagens}

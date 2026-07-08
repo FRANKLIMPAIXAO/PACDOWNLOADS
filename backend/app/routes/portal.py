@@ -1251,3 +1251,39 @@ def portal_push_unsubscribe(
         db.delete(sub)
         db.commit()
     return {"ok": True}
+
+
+@router.post("/push/test")
+def portal_push_test(
+    cliente: Usuario = Depends(get_current_cliente),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Manda uma notificação de TESTE pros dispositivos DESTE cliente. Serve pra
+    ele conferir, do próprio celular, se o push chega com o app fechado — sem
+    depender do PacChat nem de curl. Diz o motivo quando não dá (sem inscrição /
+    servidor sem VAPID)."""
+    from app.services.push_service import enviar_push, push_configurado
+
+    if not push_configurado():
+        return {"ok": False, "motivo": "O servidor ainda não tem as chaves de notificação (VAPID) configuradas."}
+    subs = list(db.scalars(select(PushSubscription).where(PushSubscription.usuario_id == cliente.id)).all())
+    if not subs:
+        return {"ok": False, "motivo": "Nenhum dispositivo inscrito. Toque em Ativar notificações primeiro."}
+    mortos = enviar_push(
+        subs,
+        "🔔 Teste do PAC Portal",
+        "Funcionou! Você recebe avisos mesmo com o app fechado.",
+        url="/portal", tag="teste",
+    )
+    if mortos:
+        for s in subs:
+            if s.endpoint in mortos:
+                db.delete(s)
+        db.commit()
+    enviados = len(subs) - len(mortos)
+    return {
+        "ok": enviados > 0,
+        "enviados": enviados,
+        "dispositivos": len(subs),
+        "motivo": None if enviados > 0 else "Não consegui entregar (inscrição pode ter expirado — reative).",
+    }
