@@ -36,7 +36,7 @@ settings = get_settings()
 # BUILD_COMMIT no build (commit fica "unknown"), este é o sinal confiável pra
 # saber, via GET /version, se o deploy pegou o código novo (cache stale é
 # recorrente). Formato livre: AAAA-MM-DD + resumo curto.
-APP_BUILD_TAG = "2026-07-08-webpush-notificacao"
+APP_BUILD_TAG = "2026-07-08-webpush-diag-version"
 
 
 @asynccontextmanager
@@ -173,6 +173,15 @@ def version() -> dict:
             except OSError:
                 pass
 
+    # Diagnóstico do Web Push SEM expor segredo: só booleans (a chave PÚBLICA não
+    # é segredo; a privada nunca sai). push_web_ok=true → VAPID configurado.
+    _vapid_pub = bool(getattr(settings, "vapid_public_key", ""))
+    _vapid_priv = bool(getattr(settings, "vapid_private_key", ""))
+    try:
+        import pywebpush  # noqa: F401
+        _pywebpush_ok = True
+    except Exception:  # noqa: BLE001
+        _pywebpush_ok = False
     return {
         "app": settings.app_name,
         "build_tag": APP_BUILD_TAG,
@@ -181,6 +190,11 @@ def version() -> dict:
         "mock_provider": settings.use_mock_focus_nfe,
         "use_mock_integra": getattr(settings, "use_mock_integra", None),
         "use_mock_infosimples": getattr(settings, "use_mock_infosimples", None),
+        # Web Push: os 3 têm que ser true pra notificação funcionar.
+        "push_web_ok": _vapid_pub and _vapid_priv and _pywebpush_ok,
+        "vapid_publica_setada": _vapid_pub,
+        "vapid_privada_setada": _vapid_priv,
+        "pywebpush_instalado": _pywebpush_ok,
     }
 
 
