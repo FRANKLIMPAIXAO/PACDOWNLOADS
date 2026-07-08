@@ -548,6 +548,12 @@ export function portalChamadaIce() {
 export function portalChamadaPendente() {
   return portalFetch<PortalChamadaPendente>("/api/v1/portal/chamada/pendente");
 }
+export function portalChamadaIniciar(offer: RTCSessionDescriptionInit) {
+  return portalFetch<{ ok?: boolean; chamada_id?: string }>("/api/v1/portal/chamada/iniciar", {
+    method: "POST",
+    body: JSON.stringify({ offer }),
+  });
+}
 export function portalChamadaResponder(chamadaId: string, aceitar: boolean) {
   return portalFetch<{ ok: boolean }>("/api/v1/portal/chamada/responder", {
     method: "POST",

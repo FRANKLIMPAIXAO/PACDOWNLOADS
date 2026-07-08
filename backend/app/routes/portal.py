@@ -1327,6 +1327,25 @@ def portal_chamada_ice(cliente: Usuario = Depends(get_current_cliente)) -> dict:
     return {"iceServers": servers}
 
 
+class _ChamadaOffer(_MsgBase):
+    offer: dict
+
+
+@router.post("/chamada/iniciar")
+def portal_chamada_iniciar(
+    payload: _ChamadaOffer,
+    cliente: Usuario = Depends(get_current_cliente),
+    db: Session = Depends(get_db),
+) -> dict:
+    """CLIENTE liga pro escritório: publica o offer no PacChat (que faz a tela da
+    equipe tocar). Retorna {chamada_id}. Depende do PacChat expor 'chamada_iniciar'."""
+    cnpj = _cnpj_cliente(cliente, db)
+    try:
+        return PacChatService().chamada_iniciar(cnpj, payload.offer)
+    except PacChatError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
 @router.get("/chamada/pendente")
 def portal_chamada_pendente(
     cliente: Usuario = Depends(get_current_cliente),

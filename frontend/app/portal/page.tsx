@@ -52,7 +52,7 @@ import {
 } from "../../lib/portal";
 import { PortalAdmissao } from "../../components/portal-admissao";
 import { ChatThread } from "../../components/chat-thread";
-import { PortalChamada } from "../../components/portal-chamada";
+import { PortalChamada, type ChamadaHandle } from "../../components/portal-chamada";
 import { ativarNotificacoes, estadoNotificacoes, type EstadoPush } from "../../lib/push";
 
 // ---- Marca PAC ----
@@ -251,6 +251,8 @@ export default function PortalPage() {
   // Notificação de sistema (Web Push)
   const [pushStatus, setPushStatus] = useState<EstadoPush>("default");
   const [pushBusy, setPushBusy] = useState(false);
+  // Ligação de voz — ref pro botão "Ligar" disparar a chamada de saída.
+  const chamadaRef = useRef<ChamadaHandle | null>(null);
   // Campainha: refs pra detectar mensagem NOVA da PAC entre um polling e outro.
   const audioCtxRef = useRef<AudioContext | null>(null);
   const prevNaoLidasRef = useRef<number | null>(null);
@@ -733,7 +735,7 @@ export default function PortalPage() {
   return (
     <div className="pac-portal">
       {/* Ligação de voz (WebRTC) — detecta chamada do escritório e mostra a tela */}
-      <PortalChamada />
+      <PortalChamada ref={chamadaRef} />
       {/* Backdrop da gaveta (só aparece no celular quando o menu está aberto) */}
       {menuAberto ? <div className="pac-backdrop" onClick={() => setMenuAberto(false)} /> : null}
       <aside className={`pac-sidebar${menuAberto ? " open" : ""}`}>
@@ -1068,7 +1070,17 @@ export default function PortalPage() {
 
           {view === "conversa" ? (
             <>
-              {tituloSecao("chat", "Falar com o escritório")}
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                {tituloSecao("chat", "Falar com o escritório")}
+                <button
+                  type="button"
+                  onClick={() => chamadaRef.current?.ligar()}
+                  className="pac-btn pac-btn-primary"
+                  style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+                >
+                  📞 Ligar
+                </button>
+              </div>
               <p style={{ color: GRAY, fontSize: 13, margin: "0 0 12px" }}>
                 Tire dúvidas, envie recados e receba retorno do escritório. As mensagens ficam registradas aqui.
               </p>

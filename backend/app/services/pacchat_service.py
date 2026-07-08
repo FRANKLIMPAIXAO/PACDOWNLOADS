@@ -114,6 +114,12 @@ class PacChatService:
     def chamada_pendente(self, cnpj: str) -> dict:
         return self._call("chamada_pendente", cnpj)
 
+    def chamada_iniciar(self, cnpj: str, offer: dict) -> dict:
+        """CLIENTE inicia a chamada: publica o offer; o PacChat cria a chamada e
+        faz a tela da equipe tocar. Retorna {chamada_id}. (Depende do PacChat
+        expor a ação 'chamada_iniciar'.)"""
+        return self._call("chamada_iniciar", cnpj, offer=offer)
+
     def chamada_responder(self, cnpj: str, chamada_id: str, aceitar: bool) -> dict:
         return self._call("chamada_responder", cnpj, chamada_id=chamada_id, aceitar=aceitar)
 
