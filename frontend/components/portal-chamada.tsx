@@ -25,6 +25,9 @@ export function PortalChamada() {
   const [deNome, setDeNome] = useState("Escritório PAC");
   const [mudo, setMudo] = useState(false);
   const [segundos, setSegundos] = useState(0);
+  // Toque de "chamando" (ringtone) enquanto a chamada entra.
+  const ringCtxRef = useRef<AudioContext | null>(null);
+  const ringTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const chamadaIdRef = useRef<string | null>(null);
   const offerRef = useRef<RTCSessionDescriptionInit | null>(null);
@@ -36,6 +39,34 @@ export function PortalChamada() {
   const sinaisTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const estadoRef = useRef<Estado>("idle");
   estadoRef.current = estado;
+
+  // AudioContext do ring (destravado por gesto — política de autoplay do celular).
+  const garantirRingAudio = useCallback((): AudioContext | null => {
+    if (typeof window === "undefined") return null;
+    const AC = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AC) return null;
+    if (!ringCtxRef.current) { try { ringCtxRef.current = new AC(); } catch { return null; } }
+    const ctx = ringCtxRef.current;
+    if (ctx.state === "suspended") ctx.resume().catch(() => {});
+    return ctx;
+  }, []);
+
+  // Toque de telefone (dois bipes) + vibração — repetido enquanto "tocando".
+  const tocarRing = useCallback(() => {
+    try { navigator.vibrate?.([300, 200, 300]); } catch { /* iOS não tem */ }
+    const ctx = garantirRingAudio();
+    if (!ctx) return;
+    const t0 = ctx.currentTime;
+    ([[480, 0], [620, 0.22]] as [number, number][]).forEach(([f, dt]) => {
+      const o = ctx.createOscillator(); const g = ctx.createGain();
+      o.type = "sine"; o.frequency.value = f;
+      g.gain.setValueAtTime(0.0001, t0 + dt);
+      g.gain.exponentialRampToValueAtTime(0.22, t0 + dt + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + dt + 0.2);
+      o.connect(g); g.connect(ctx.destination);
+      o.start(t0 + dt); o.stop(t0 + dt + 0.22);
+    });
+  }, [garantirRingAudio]);
 
   const encerrar = useCallback((mandarBye: boolean) => {
     if (sinaisTimerRef.current) { clearInterval(sinaisTimerRef.current); sinaisTimerRef.current = null; }
@@ -81,6 +112,25 @@ export function PortalChamada() {
   // Limpeza ao desmontar.
   useEffect(() => () => encerrar(false), [encerrar]);
 
+  // Destrava o áudio no 1º gesto do usuário (pro ring conseguir tocar depois).
+  useEffect(() => {
+    const unlock = () => { garantirRingAudio(); };
+    const evs: (keyof WindowEventMap)[] = ["pointerdown", "touchend", "click"];
+    evs.forEach((e) => window.addEventListener(e, unlock, { once: true, passive: true }));
+    return () => evs.forEach((e) => window.removeEventListener(e, unlock));
+  }, [garantirRingAudio]);
+
+  // Toca o ring (repete) enquanto a chamada está "tocando".
+  useEffect(() => {
+    if (estado !== "tocando") {
+      if (ringTimerRef.current) { clearInterval(ringTimerRef.current); ringTimerRef.current = null; }
+      return;
+    }
+    tocarRing();
+    ringTimerRef.current = setInterval(tocarRing, 1700);
+    return () => { if (ringTimerRef.current) { clearInterval(ringTimerRef.current); ringTimerRef.current = null; } };
+  }, [estado, tocarRing]);
+
   async function atender() {
     const id = chamadaIdRef.current;
     const offer = offerRef.current;
@@ -99,6 +149,8 @@ export function PortalChamada() {
       pc.ontrack = (e) => {
         if (audioRef.current) {
           audioRef.current.srcObject = e.streams[0];
+          audioRef.current.muted = false;
+          audioRef.current.volume = 1;
           audioRef.current.play().catch(() => {});
         }
       };

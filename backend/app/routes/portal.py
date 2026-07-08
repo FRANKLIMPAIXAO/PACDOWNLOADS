@@ -1308,13 +1308,22 @@ class _ChamadaSinal(_MsgBase):
 
 @router.get("/chamada/ice-servers")
 def portal_chamada_ice(cliente: Usuario = Depends(get_current_cliente)) -> dict:
-    """STUN (grátis) + TURN (se configurado no env). O TURN faz a chamada pegar
-    no 4G — quando o PacChat subir o coturn, é só preencher o env."""
+    """STUN + TURN. TURN é OBRIGATÓRIO pra pegar no 4G (CGNAT) — sem ele a chamada
+    fica instável/não conecta. Se o coturn do VPS estiver no env, usa ele
+    (privado, melhor); senão cai no TURN público da Metered (mesmo do PacChat)."""
     from app.config import get_settings
     s = get_settings()
     servers: list[dict] = [{"urls": "stun:stun.l.google.com:19302"}]
     if s.turn_url and s.turn_username and s.turn_credential:
         servers.append({"urls": s.turn_url, "username": s.turn_username, "credential": s.turn_credential})
+    else:
+        # TURN público (Metered) — fallback até o coturn do VPS subir. Os DOIS
+        # lados (portal e PacChat) precisam usar TURN pra a ligação fechar no 4G.
+        servers += [
+            {"urls": "turn:openrelay.metered.ca:80", "username": "openrelayproject", "credential": "openrelayproject"},
+            {"urls": "turn:openrelay.metered.ca:443", "username": "openrelayproject", "credential": "openrelayproject"},
+            {"urls": "turn:openrelay.metered.ca:443?transport=tcp", "username": "openrelayproject", "credential": "openrelayproject"},
+        ]
     return {"iceServers": servers}
 
 
