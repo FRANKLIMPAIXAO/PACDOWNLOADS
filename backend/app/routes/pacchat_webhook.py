@@ -72,8 +72,16 @@ def _repetir_push_chamada(cnpj: str, subs_data: list[dict], titulo: str, corpo: 
         time.sleep(intervalo)
         try:
             r = PacChatService().chamada_pendente(cnpj)
-            if not r.get("chamada"):
-                return  # atendeu / encerrou → para de "tocar"
+            chamada = r.get("chamada")
+            # PARA de "tocar" se: não há chamada, OU o status deixou de ser
+            # "chamando" (atendida/encerrada/recusada). O PacChat mantém a chamada
+            # no retorno com status "aceita" depois de atender — por isso não basta
+            # checar se ela sumiu. (status ausente = trata como tocando; o cap de
+            # `vezes` já limita.)
+            if not chamada:
+                return
+            if (chamada.get("status") or "chamando") != "chamando":
+                return
         except PacChatError:
             return
         except Exception:  # noqa: BLE001 — nunca deixa a thread derrubar nada
