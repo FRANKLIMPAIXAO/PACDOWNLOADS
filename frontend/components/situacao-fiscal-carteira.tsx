@@ -153,12 +153,38 @@ export function SituacaoFiscalCarteira() {
               </p>
             </>
           ) : job.status === "concluido" ? (
-            <strong style={{ color: "rgb(16,185,129)" }}>
-              ✅ Atualização concluída — {job.sucesso} ok · {job.falhas} falha(s). Painel atualizado.
+            <strong style={{ color: job.falhas && !job.sucesso ? "rgb(248,113,113)" : "rgb(16,185,129)" }}>
+              {job.falhas && !job.sucesso ? "⚠️" : "✅"} Atualização concluída — {job.sucesso} ok · {job.falhas} falha(s). Painel atualizado.
             </strong>
           ) : (
             <strong style={{ color: "rgb(248,113,113)" }}>⚠️ Falha na atualização: {job.erro_geral || "erro"}</strong>
           )}
+
+          {/* Motivo das falhas — numa falha de 100% o motivo mais comum É a causa raiz */}
+          {job.erros && job.erros.length > 0 ? (
+            <details style={{ marginTop: 10 }} open={!job.sucesso}>
+              <summary style={{ cursor: "pointer", color: "rgb(248,113,113)", fontSize: 13 }}>
+                Ver motivos das falhas ({job.erros.length}{job.falhas > job.erros.length ? `, de ${job.falhas}` : ""})
+              </summary>
+              {(() => {
+                const cont: Record<string, number> = {};
+                for (const e of job.erros) cont[e.erro] = (cont[e.erro] || 0) + 1;
+                const top = Object.entries(cont).sort((a, b) => b[1] - a[1])[0];
+                return top ? (
+                  <p style={{ margin: "8px 0", fontSize: 13, color: "rgb(245,158,11)" }}>
+                    Motivo mais comum ({top[1]}×): <strong>{top[0]}</strong>
+                  </p>
+                ) : null;
+              })()}
+              <div style={{ maxHeight: 200, overflowY: "auto", fontSize: 12, marginTop: 4 }}>
+                {job.erros.map((e, i) => (
+                  <div key={i} style={{ padding: "3px 0", borderTop: "1px solid var(--border)" }}>
+                    <span style={{ color: "var(--muted-strong)" }}>{e.empresa}:</span> {e.erro}
+                  </div>
+                ))}
+              </div>
+            </details>
+          ) : null}
         </section>
       ) : null}
 

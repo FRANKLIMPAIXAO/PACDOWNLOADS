@@ -36,7 +36,7 @@ settings = get_settings()
 # BUILD_COMMIT no build (commit fica "unknown"), este é o sinal confiável pra
 # saber, via GET /version, se o deploy pegou o código novo (cache stale é
 # recorrente). Formato livre: AAAA-MM-DD + resumo curto.
-APP_BUILD_TAG = "2026-07-08-push-chamada-para-ao-atender"
+APP_BUILD_TAG = "2026-07-09-diag-serpro-version"
 
 
 @asynccontextmanager
@@ -182,6 +182,20 @@ def version() -> dict:
         _pywebpush_ok = True
     except Exception:  # noqa: BLE001
         _pywebpush_ok = False
+    # Diagnóstico do Integra/Serpro (situação fiscal da carteira) — só booleans,
+    # nenhum segredo. `integra_config_ok=false` explica a falha de 100% no SITFIS:
+    # olhe qual campo está false (cert_arquivo_existe=false = cert sumiu no rebuild).
+    _cert_path = getattr(settings, "serpro_cert_path", "") or ""
+    _serpro = {
+        "consumer_key_setado": bool(getattr(settings, "serpro_consumer_key", "")),
+        "consumer_secret_setado": bool(getattr(settings, "serpro_consumer_secret", "")),
+        "cert_path_setado": bool(_cert_path),
+        "cert_password_setado": bool(getattr(settings, "serpro_cert_password", "")),
+        "contratante_cnpj_setado": bool(getattr(settings, "serpro_contratante_cnpj", "")),
+        "cert_arquivo_existe": bool(_cert_path and os.path.exists(_cert_path)),
+    }
+    _serpro["integra_config_ok"] = (settings.use_mock_integra is False) and all(_serpro.values())
+
     return {
         "app": settings.app_name,
         "build_tag": APP_BUILD_TAG,
@@ -195,6 +209,8 @@ def version() -> dict:
         "vapid_publica_setada": _vapid_pub,
         "vapid_privada_setada": _vapid_priv,
         "pywebpush_instalado": _pywebpush_ok,
+        # Integra/Serpro (situação fiscal): integra_config_ok tem que ser true.
+        "serpro": _serpro,
     }
 
 
