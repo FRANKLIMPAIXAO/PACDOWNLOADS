@@ -1193,17 +1193,44 @@ class IntegraContadorProvider:
         if response.status_code >= 400:
             try:
                 payload = response.json()
+            except ValueError:
+                payload = None
+            if isinstance(payload, dict):
                 msgs = payload.get("mensagens") or []
                 primeiro = msgs[0] if msgs else {}
+                codigo = str(primeiro.get("codigo") or "")
+                texto = str(primeiro.get("texto") or "")
+                # SITFIS (e outros serviços ASSÍNCRONOS da Serpro) devolvem a
+                # ACEITAÇÃO da requisição com um código "Sucesso-*" MAS sob um
+                # status HTTP != 2xx. Ex.: SOLICITARPROTOCOLO91 responde
+                # `[Sucesso-Sitfis-SC01] A requisição foi efetuada com sucesso`
+                # (+ `protocoloRelatorio`/`tempoEspera` no `dados`). Isso NÃO é
+                # erro — quem manda é o código de APLICAÇÃO da Serpro, não o
+                # status HTTP. Tratar como sucesso e devolver o envelope pro
+                # chamador extrair protocolo/PDF (ou aguardar `tempoEspera`).
+                # Antes, o `status >= 400` levantava 502 e derrubava 100% do
+                # SITFIS da carteira ("0 ok · N falhas") — cada empresa falhava
+                # com "[Sucesso-Sitfis-SC01]: A requisição foi efetuada com
+                # sucesso" (uma MENSAGEM DE SUCESSO tratada como falha).
+                # Sinal confiável = o PREFIXO do código da Serpro (namespaced:
+                # "Sucesso-...", "Erro-...", "AcessoNegado-...", "Aviso-...").
+                # Um código que começa com "Sucesso" (ignorando um "[" à frente)
+                # é sucesso inequívoco. Fallback pelo TEXTO só quando não veio
+                # código, e restrito à frase exata pra não confundir com um erro
+                # que por acaso contenha a palavra "sucesso".
+                codigo_norm = codigo.strip().lstrip("[").lower()
+                if codigo_norm.startswith("sucesso") or (
+                    not codigo and "efetuada com sucesso" in texto.lower()
+                ):
+                    return payload
                 raise IntegraServicoError(
-                    str(primeiro.get("codigo") or response.status_code),
-                    str(primeiro.get("texto") or response.text[:300]),
+                    codigo or str(response.status_code),
+                    texto or response.text[:300],
                     raw=payload,
                 )
-            except (ValueError, KeyError):
-                raise IntegraServicoError(
-                    str(response.status_code), response.text[:300], raw=response.text
-                )
+            raise IntegraServicoError(
+                str(response.status_code), response.text[:300], raw=response.text
+            )
 
         # Serpro pode responder 200 com body vazio (ex: SITFIS quando protocolo
         # foi solicitado ha pouco tempo, ou serviços async em processamento).
