@@ -37,6 +37,13 @@ class ExecucaoRoboSefaz(Base):
         String(20), nullable=False, default="pendente", index=True,
     )
 
+    # Modo do robô: "documentos" (padrão — baixa NFes + eventos) ou "eventos"
+    # (regularização: baixa SÓ os procEventoNFe do período pra aplicar
+    # cancelamentos históricos nas notas já capturadas, sem re-baixar as NFes).
+    modo: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="documentos", server_default="documentos",
+    )
+
     # Janela de busca no portal
     periodo_inicio: Mapped[datetime] = mapped_column(Date, nullable=False)
     periodo_fim: Mapped[datetime] = mapped_column(Date, nullable=False)

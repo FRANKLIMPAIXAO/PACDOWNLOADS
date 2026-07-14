@@ -36,7 +36,7 @@ settings = get_settings()
 # BUILD_COMMIT no build (commit fica "unknown"), este é o sinal confiável pra
 # saber, via GET /version, se o deploy pegou o código novo (cache stale é
 # recorrente). Formato livre: AAAA-MM-DD + resumo curto.
-APP_BUILD_TAG = "2026-07-14-cancelamento-emitidas"
+APP_BUILD_TAG = "2026-07-14-regularizar-cancelamentos"
 
 
 @asynccontextmanager
@@ -81,6 +81,7 @@ async def lifespan(_: FastAPI):
         "ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS senha_provisoria BOOLEAN NOT NULL DEFAULT FALSE",
         "ALTER TABLE empresas ADD COLUMN IF NOT EXISTS so_servico BOOLEAN NOT NULL DEFAULT FALSE",
         "ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS motivo_inativacao VARCHAR(255)",
+        "ALTER TABLE execucoes_robo_sefaz ADD COLUMN IF NOT EXISTS modo VARCHAR(20) NOT NULL DEFAULT 'documentos'",
     ]
     for _stmt in _ddl_startup:
         try:

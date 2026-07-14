@@ -21,6 +21,11 @@ class DispararRoboSefazPayload(BaseModel):
         default=None,
         description="Default = último dia do mês anterior",
     )
+    modo: str = Field(
+        default="documentos",
+        description="'documentos' (NFes + eventos) ou 'eventos' (regularização: "
+                    "só procEventoNFe do período pra aplicar cancelamentos).",
+    )
 
 
 class ExecucaoRoboSefazRead(BaseModel):
@@ -31,6 +36,7 @@ class ExecucaoRoboSefazRead(BaseModel):
     disparo: str
     uf: str
     status: str
+    modo: str = "documentos"
     periodo_inicio: date
     periodo_fim: date
     empresa_id: int | None

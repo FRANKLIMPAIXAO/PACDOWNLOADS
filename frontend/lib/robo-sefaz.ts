@@ -59,6 +59,9 @@ export type DispararPayload = {
   empresa_id?: number | null;
   periodo_inicio?: string | null;  // YYYY-MM-DD
   periodo_fim?: string | null;
+  // "documentos" (NFes + eventos) ou "eventos" (regularização: só os
+  // procEventoNFe do período pra aplicar cancelamentos históricos).
+  modo?: "documentos" | "eventos";
 };
 
 export function obterAgendamento() {

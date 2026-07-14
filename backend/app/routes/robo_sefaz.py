@@ -209,6 +209,7 @@ def disparar_robo(
         periodo_fim=payload.periodo_fim,
         empresa_id=payload.empresa_id,
         uf="GO",
+        modo=payload.modo,
     )
     execucao_id = execucao.id
 

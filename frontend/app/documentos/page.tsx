@@ -26,6 +26,7 @@ import {
   verificarCanceladas,
 } from "../../lib/documentos";
 import { Empresa, listarEmpresas } from "../../lib/empresas";
+import { dispararRobo } from "../../lib/robo-sefaz";
 import { dfeDistribuirLote, dfeElegiveis, dfeManifestar, dfeManifestarDoc, cronExecucoes, type CronExecucao } from "../../lib/dfe";
 import { cteDistribuirLote, cteElegiveis } from "../../lib/cte";
 import { nfseElegiveis, nfseSincronizar } from "../../lib/nfse";
@@ -582,11 +583,37 @@ function DocumentosContent() {
     setError(null);
     setToast(null);
     try {
+      // 1) Varredura LOCAL: aplica eventos de cancelamento que já estão no
+      //    sistema (útil p/ recebidas manifestadas). Instantâneo.
       const r = await verificarCanceladas(empresaId || undefined);
       setToast(
         `Verificadas ${r.verificadas} NFes · ${r.novas_canceladas} novas canceladas detectadas.`
       );
       setRefreshTick((t) => t + 1);
+
+      // 2) EMITIDAS: os cancelamentos das notas próprias só chegam baixando os
+      //    eventos (procEventoNFe) direto no SEFAZ. Isso roda o robô em modo
+      //    "somente eventos" (background, cert+captcha) pro período filtrado.
+      const temPeriodo = Boolean(dataInicio && dataFim);
+      const periodoTxt = temPeriodo ? `${dataInicio} a ${dataFim}` : "mês anterior (padrão)";
+      const ok = window.confirm(
+        "Regularizar também os cancelamentos das notas EMITIDAS?\n\n" +
+        `• Baixa os eventos de cancelamento direto no SEFAZ-GO (período: ${periodoTxt})` +
+        `${empresaId ? " · só a empresa selecionada" : " · todas as empresas com certificado"}.\n` +
+        "• Roda o robô SEFAZ em segundo plano (uns minutos) — acompanhe em 'Robô SEFAZ'.\n\n" +
+        "Continuar?"
+      );
+      if (!ok) return;
+      const exec = await dispararRobo({
+        modo: "eventos",
+        empresa_id: empresaId || undefined,
+        periodo_inicio: temPeriodo ? dataInicio : undefined,
+        periodo_fim: temPeriodo ? dataFim : undefined,
+      });
+      setToast(
+        `Regularização de cancelamentos disparada (execução #${exec.id}, modo eventos). ` +
+        "Acompanhe em 'Robô SEFAZ'; ao terminar, recarregue esta tela."
+      );
     } catch (err) {
       if (err instanceof ApiError) setError(err.message);
       else setError("Falha na verificacao de canceladas.");
@@ -1030,9 +1057,9 @@ function DocumentosContent() {
           className="btn-secondary"
           onClick={handleVerificarCanceladas}
           disabled={busyId === "verificar-cancel"}
-          title="Varre XMLs locais e marca como cancelada quando detectar evento SEFAZ"
+          title="Marca canceladas já detectadas + (opcional) baixa os eventos de cancelamento das EMITIDAS direto no SEFAZ (robô em background)"
         >
-          {busyId === "verificar-cancel" ? "Verificando..." : "🔍 Verificar cancelamentos"}
+          {busyId === "verificar-cancel" ? "Verificando..." : "🔍 Verificar / regularizar cancelamentos"}
         </button>
       </section>
 

@@ -73,10 +73,16 @@ class RoboSefazService:
         periodo_fim: date | None = None,
         empresa_id: int | None = None,
         uf: str = "GO",
+        modo: str = "documentos",
     ) -> ExecucaoRoboSefaz:
-        """Cria registro pendente. Default de período = mês anterior."""
+        """Cria registro pendente. Default de período = mês anterior.
+
+        `modo`: "documentos" (baixa NFes + eventos) ou "eventos" (regularização —
+        baixa só os procEventoNFe do período pra aplicar cancelamentos)."""
         if disparo not in {"cron", "manual"}:
             raise ValueError(f"disparo inválido: {disparo!r}")
+        if modo not in {"documentos", "eventos"}:
+            raise ValueError(f"modo inválido: {modo!r}")
         if periodo_inicio is None or periodo_fim is None:
             ini, fim = janela_mes_anterior()
             periodo_inicio = periodo_inicio or ini
@@ -89,6 +95,7 @@ class RoboSefazService:
             periodo_inicio=periodo_inicio,
             periodo_fim=periodo_fim,
             empresa_id=empresa_id,
+            modo=modo,
         )
         self.db.add(execucao)
         self.db.commit()
@@ -135,6 +142,10 @@ class RoboSefazService:
             cmd.extend(["--empresas", ",".join(str(i) for i in empresa_ids)])
         elif execucao.empresa_id:
             cmd.extend(["--empresa", str(execucao.empresa_id)])
+        # Modo REGULARIZAÇÃO: baixa só os eventos (procEventoNFe) do período pra
+        # aplicar cancelamentos históricos sem re-baixar as NFes.
+        if getattr(execucao, "modo", "documentos") == "eventos":
+            cmd.append("--somente-eventos")
 
         # Em produção sempre headless; deixar variavel HEADLESS=true no .env do agent
         env = os.environ.copy()

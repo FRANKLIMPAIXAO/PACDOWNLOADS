@@ -674,6 +674,7 @@ async def processar_empresa(
     download_dir: Path,
     *,
     headless: bool,
+    somente_eventos: bool = False,
 ) -> ResultadoEmpresa:
     log = logging.getLogger(f"empresa[{empresa.cnpj}]")
     inicio = dt.datetime.now()
@@ -1098,33 +1099,51 @@ async def processar_empresa(
             for op in opcoes:
                 log.info("  [%d] value=%r texto=%r", op["idx"], op["value"], op["texto"][:100])
 
-            # Estratégia 1: "Documentos + Eventos" (label com "documento" E
-            # "evento") — traz as NFes E os procEventoNFe de CANCELAMENTO. É o que
-            # QUEREMOS: sem os eventos, o PAC não sabe que a nota foi cancelada e
-            # ela aparece eternamente como ATIVA (bug "não traz as notas
-            # canceladas"). O backend (upload_xml_service) já ignora CCe e aplica
-            # só o cancelamento, então "sobrar" evento não faz mal.
             idx_escolhido = None
-            for op in opcoes:
-                t = op["texto"].lower()
-                if "documento" in t and "evento" in t:
-                    idx_escolhido = op["idx"]
-                    log.info("✓ Radio 'documentos + eventos' detectado no idx=%d", idx_escolhido)
-                    break
-
-            # Estratégia 2 (fallback SEGURO): "Somente Documentos" (documento mas
-            # NÃO evento). Perde os cancelamentos, mas AINDA captura as NFes — nunca
-            # cair em "Somente Eventos" (que traria eventos SEM as notas: o bug
-            # catastrófico antigo de não capturar faturamento).
-            if idx_escolhido is None:
+            if somente_eventos:
+                # MODO REGULARIZAÇÃO: baixa SÓ os eventos (procEventoNFe) pra
+                # aplicar cancelamentos HISTÓRICOS sem re-baixar as NFes. Seleciona
+                # "Somente Eventos" (label com "evento" mas NÃO "documento").
                 for op in opcoes:
                     t = op["texto"].lower()
-                    if "documento" in t and "evento" not in t:
+                    if "evento" in t and "documento" not in t:
                         idx_escolhido = op["idx"]
-                        log.warning("Radio 'documentos + eventos' não achado, usando 'somente documentos' (idx=%d)", idx_escolhido)
+                        log.info("✓ Radio 'somente eventos' detectado no idx=%d", idx_escolhido)
                         break
+                # Fallback: "Documentos + Eventos" (traz os eventos também; só pesa
+                # mais). O upload aplica só cancelamentos e ignora o resto.
+                if idx_escolhido is None:
+                    for op in opcoes:
+                        t = op["texto"].lower()
+                        if "documento" in t and "evento" in t:
+                            idx_escolhido = op["idx"]
+                            log.warning("'Somente eventos' não achado, usando 'documentos + eventos' (idx=%d)", idx_escolhido)
+                            break
+            else:
+                # MODO NORMAL: "Documentos + Eventos" (label com "documento" E
+                # "evento") — traz as NFes E os procEventoNFe de CANCELAMENTO. Sem os
+                # eventos, o PAC não sabe que a nota foi cancelada e ela aparece
+                # eternamente ATIVA (bug "não traz as notas canceladas"). O backend
+                # (upload_xml_service) ignora CCe e aplica só o cancelamento.
+                for op in opcoes:
+                    t = op["texto"].lower()
+                    if "documento" in t and "evento" in t:
+                        idx_escolhido = op["idx"]
+                        log.info("✓ Radio 'documentos + eventos' detectado no idx=%d", idx_escolhido)
+                        break
+                # Fallback SEGURO: "Somente Documentos" (documento mas NÃO evento).
+                # Perde cancelamentos, mas AINDA captura as NFes — nunca cair em
+                # "Somente Eventos" (traria eventos SEM as notas: bug antigo de não
+                # capturar faturamento).
+                if idx_escolhido is None:
+                    for op in opcoes:
+                        t = op["texto"].lower()
+                        if "documento" in t and "evento" not in t:
+                            idx_escolhido = op["idx"]
+                            log.warning("Radio 'documentos + eventos' não achado, usando 'somente documentos' (idx=%d)", idx_escolhido)
+                            break
 
-            # Estratégia 3 (último recurso): primeiro radio
+            # Último recurso: primeiro radio
             if idx_escolhido is None:
                 idx_escolhido = 0
                 log.warning("Nenhum label legível, marcando primeiro radio (idx=0)")
@@ -1502,7 +1521,7 @@ def _contar_xmls_no_zip(zip_path) -> int:
 
 async def baixar_empresa_com_chunk(
     pw, emp, cert, data_ini, data_fim, download_dir, pac, *,
-    headless, max_tentativas, dry_run, prof=0,
+    headless, max_tentativas, dry_run, prof=0, somente_eventos=False,
 ):
     """Baixa a janela [data_ini, data_fim]; se vier CAPADA (≥ LIMITE_CAP_PORTAL
     notas), divide ao meio e baixa cada metade (recursivo) — garante completude
@@ -1514,7 +1533,7 @@ async def baixar_empresa_com_chunk(
     janela = JanelaPeriodo(data_inicio=data_ini, data_fim=data_fim)
     res = None
     for tentativa in range(1, max_tentativas + 1):
-        res = await processar_empresa(pw, emp, cert, janela, download_dir, headless=headless)
+        res = await processar_empresa(pw, emp, cert, janela, download_dir, headless=headless, somente_eventos=somente_eventos)
         if res.sucesso or res.sem_resultados:
             break
         if tentativa < max_tentativas:
@@ -1537,10 +1556,12 @@ async def baixar_empresa_com_chunk(
         folhas = []
         folhas += await baixar_empresa_com_chunk(
             pw, emp, cert, data_ini, meio, download_dir, pac,
-            headless=headless, max_tentativas=max_tentativas, dry_run=dry_run, prof=prof + 1)
+            headless=headless, max_tentativas=max_tentativas, dry_run=dry_run,
+            prof=prof + 1, somente_eventos=somente_eventos)
         folhas += await baixar_empresa_com_chunk(
             pw, emp, cert, meio + dt.timedelta(days=1), data_fim, download_dir, pac,
-            headless=headless, max_tentativas=max_tentativas, dry_run=dry_run, prof=prof + 1)
+            headless=headless, max_tentativas=max_tentativas, dry_run=dry_run,
+            prof=prof + 1, somente_eventos=somente_eventos)
         return folhas
 
     # Folha (sob o limite, ou não dá pra dividir mais) → upload
@@ -1667,6 +1688,7 @@ async def main_async(args: argparse.Namespace) -> int:
                         pw, emp, cert, janela.data_inicio, janela.data_fim,
                         DOWNLOAD_DIR, pac, headless=headless,
                         max_tentativas=max_tentativas, dry_run=args.dry_run,
+                        somente_eventos=getattr(args, "somente_eventos", False),
                     )
                     res = _agregar_folhas(folhas)
                     if res is not None:
@@ -1722,6 +1744,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--periodo", type=str, help="YYYY-MM (default: mês anterior)")
     p.add_argument("--headed", action="store_true", help="Mostra browser (debug)")
     p.add_argument("--dry-run", action="store_true", help="Não envia ZIP pro PAC")
+    p.add_argument(
+        "--somente-eventos", action="store_true",
+        help="Baixa SÓ os eventos (procEventoNFe) do período — regulariza "
+             "cancelamentos históricos sem re-baixar as NFes.",
+    )
     return p.parse_args()
 
 
