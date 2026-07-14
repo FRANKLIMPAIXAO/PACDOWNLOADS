@@ -1098,24 +1098,30 @@ async def processar_empresa(
             for op in opcoes:
                 log.info("  [%d] value=%r texto=%r", op["idx"], op["value"], op["texto"][:100])
 
-            # Estratégia 1: procurar o radio cujo label fala "Documento"
-            # (mas NÃO "Evento") — é o que baixa só as NFes
+            # Estratégia 1: "Documentos + Eventos" (label com "documento" E
+            # "evento") — traz as NFes E os procEventoNFe de CANCELAMENTO. É o que
+            # QUEREMOS: sem os eventos, o PAC não sabe que a nota foi cancelada e
+            # ela aparece eternamente como ATIVA (bug "não traz as notas
+            # canceladas"). O backend (upload_xml_service) já ignora CCe e aplica
+            # só o cancelamento, então "sobrar" evento não faz mal.
             idx_escolhido = None
             for op in opcoes:
                 t = op["texto"].lower()
-                if "documento" in t and "evento" not in t:
+                if "documento" in t and "evento" in t:
                     idx_escolhido = op["idx"]
-                    log.info("✓ Radio 'somente documentos' detectado no idx=%d", idx_escolhido)
+                    log.info("✓ Radio 'documentos + eventos' detectado no idx=%d", idx_escolhido)
                     break
 
-            # Estratégia 2 (fallback): se não achou, marca o que tem AMBOS
-            # ("Documentos e Eventos") — melhor sobrar do que faltar
+            # Estratégia 2 (fallback SEGURO): "Somente Documentos" (documento mas
+            # NÃO evento). Perde os cancelamentos, mas AINDA captura as NFes — nunca
+            # cair em "Somente Eventos" (que traria eventos SEM as notas: o bug
+            # catastrófico antigo de não capturar faturamento).
             if idx_escolhido is None:
                 for op in opcoes:
                     t = op["texto"].lower()
-                    if "documento" in t and "evento" in t:
+                    if "documento" in t and "evento" not in t:
                         idx_escolhido = op["idx"]
-                        log.warning("Radio 'só documentos' não achado, usando 'documentos + eventos' (idx=%d)", idx_escolhido)
+                        log.warning("Radio 'documentos + eventos' não achado, usando 'somente documentos' (idx=%d)", idx_escolhido)
                         break
 
             # Estratégia 3 (último recurso): primeiro radio

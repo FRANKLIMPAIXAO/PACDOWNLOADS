@@ -50,7 +50,9 @@ function DocumentosContent() {
   const [toast, setToast] = useState<string | null>(null);
   const [empresaId, setEmpresaId] = useState<number | "">("");
   const [tipo, setTipo] = useState<TipoDocumento | "">("");
-  const [filtroCancelada, setFiltroCancelada] = useState<FiltroCancelada>("ativas");
+  // Default = "todas": a funcionária precisa VER as canceladas (com o selo ✗),
+  // não escondê-las. Os cards de resumo já somam valor só das ativas.
+  const [filtroCancelada, setFiltroCancelada] = useState<FiltroCancelada>("todas");
   // Aba entrada/saída: "" = todas, "emitida" = saída (robô SEFAZ),
   // "recebida" = entrada (Focus DF-e).
   const [filtroOrigem, setFiltroOrigem] = useState<"" | "emitida" | "recebida">("");

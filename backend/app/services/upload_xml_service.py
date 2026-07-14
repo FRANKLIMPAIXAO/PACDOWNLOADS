@@ -48,6 +48,12 @@ class UploadResultado:
     # XMLs pulados por ISOLAMENTO multi-tenant: nota de OUTRA empresa enviada num
     # upload restrito (ex.: cliente no portal subindo nota que não é dele).
     fora_do_escopo: int = 0
+    # Eventos de CANCELAMENTO (procEventoNFe/CTe) que marcaram uma nota como
+    # cancelada; órfãos = evento sem a nota no sistema; ignorados = eventos que
+    # não são cancelamento (ex.: Carta de Correção).
+    cancelamentos: int = 0
+    cancelamentos_orfaos: int = 0
+    eventos_ignorados: int = 0
     erros: int = 0
     detalhes: list[UploadDetalhe] = field(default_factory=list)
 
@@ -104,6 +110,68 @@ def _normalizar_cnpj(s: str | None) -> str | None:
     return digits if len(digits) == 14 else None
 
 
+# tpEvento de Cancelamento na SEFAZ (NFe/NFCe e CTe usam o mesmo código base).
+_TPEVENTO_CANCELAMENTO = "110111"
+
+
+def _parece_evento(xml_bytes: bytes) -> bool:
+    """Classificação BARATA (sem parsear): o XML é um evento (procEventoNFe/CTe)?
+
+    Usada pra ADIAR eventos pro 2º passe do ZIP — a nota tem que ser persistida
+    ANTES do evento de cancelamento que a referencia (senão o evento fica órfão).
+    """
+    return b"procEvento" in xml_bytes[:800]
+
+
+def _eh_evento(root: ET.Element) -> bool:
+    return _local_name(root.tag).lower() in ("proceventonfe", "proceventocte")
+
+
+def _parse_evento_cancelamento(xml_str: str) -> dict | None:
+    """Se o XML for um evento de CANCELAMENTO (tpEvento 110111), devolve
+    `{chave, motivo, protocolo, data}` — `chave` é a chNFe/chCTe da nota cancelada.
+
+    Retorna None pra eventos que NÃO são cancelamento (ex.: Carta de Correção
+    110110) — o chamador ignora esses (não são documento nem cancelamento).
+    Regex mirror do RoboXMLService._extrair_evento_cancelamento (tags sem prefixo
+    de namespace, como vêm no procEventoNFe da SEFAZ)."""
+    import re
+
+    def _get(tag: str) -> str | None:
+        m = re.search(rf"<{tag}[^>]*>([^<]+)</{tag}>", xml_str)
+        return m.group(1).strip() if m else None
+
+    tp = _get("tpEvento") or ""
+    desc = (_get("descEvento") or "").lower()
+    if tp != _TPEVENTO_CANCELAMENTO and "cancel" not in desc:
+        return None
+    chave = _get("chNFe") or _get("chCTe") or ""
+    chave = "".join(c for c in chave if c.isdigit())
+    if len(chave) != 44:
+        return None
+    return {
+        "chave": chave,
+        "motivo": _get("xJust"),
+        "protocolo": _get("nProt"),
+        "data": _get("dhEvento") or _get("dhRegEvento"),
+    }
+
+
+def _parse_data_evento(data_evento: str | None):
+    """'2026-04-15T08:23:59-03:00' ou '20260415' -> date. Fallback: hoje."""
+    from datetime import date
+    if data_evento:
+        try:
+            return datetime.fromisoformat(data_evento.replace("Z", "+00:00")).date()
+        except (ValueError, AttributeError):
+            if len(data_evento) == 8 and data_evento.isdigit():
+                try:
+                    return datetime.strptime(data_evento, "%Y%m%d").date()
+                except ValueError:
+                    pass
+    return date.today()
+
+
 class UploadXmlService:
     """Recebe XMLs (avulsos ou em ZIP) e persiste roteando pra empresa correta."""
 
@@ -156,6 +224,11 @@ class UploadXmlService:
         total = len(entradas)
         if on_progress:
             on_progress(0, total)
+        # 2 PASSES: as NOTAS primeiro, os EVENTOS de cancelamento depois. O ZIP do
+        # SEFAZ ("Documentos + Eventos") traz a nota E o procEventoNFe que a
+        # cancela; se o evento fosse processado antes da nota, ficaria órfão (nota
+        # ainda não existe). Adiar os eventos garante a ordem certa dentro do ZIP.
+        eventos_adiados: list[tuple[str, bytes]] = []
         for idx, info in enumerate(entradas, 1):
             resultado.total_arquivos += 1
             try:
@@ -168,13 +241,21 @@ class UploadXmlService:
                     mensagem=f"Falha ao ler do ZIP: {exc}",
                 ))
             else:
-                self._processar_xml(
-                    info.filename, xml_bytes, empresa_id_fallback, resultado,
-                    restringir_empresa_id=restringir_empresa_id,
-                )
+                if _parece_evento(xml_bytes):
+                    eventos_adiados.append((info.filename, xml_bytes))
+                else:
+                    self._processar_xml(
+                        info.filename, xml_bytes, empresa_id_fallback, resultado,
+                        restringir_empresa_id=restringir_empresa_id,
+                    )
             # Reporta a cada 25 (ou no fim) pra não martelar o lock.
             if on_progress and (idx % 25 == 0 or idx == total):
                 on_progress(idx, total)
+        for nome, xml_bytes in eventos_adiados:
+            self._processar_xml(
+                nome, xml_bytes, empresa_id_fallback, resultado,
+                restringir_empresa_id=restringir_empresa_id,
+            )
         return resultado
 
     def processar_xmls(
@@ -186,10 +267,19 @@ class UploadXmlService:
     ) -> UploadResultado:
         """Processa lista de (filename, bytes)."""
         resultado = UploadResultado()
+        eventos_adiados: list[tuple[str, bytes]] = []
         for nome, content in arquivos:
             if not nome.lower().endswith(".xml"):
                 continue
             resultado.total_arquivos += 1
+            if _parece_evento(content):
+                eventos_adiados.append((nome, content))  # eventos por último
+                continue
+            self._processar_xml(
+                nome, content, empresa_id_fallback, resultado,
+                restringir_empresa_id=restringir_empresa_id,
+            )
+        for nome, content in eventos_adiados:
             self._processar_xml(
                 nome, content, empresa_id_fallback, resultado,
                 restringir_empresa_id=restringir_empresa_id,
@@ -224,6 +314,17 @@ class UploadXmlService:
             resultado.detalhes.append(det)
             return
         det.tipo = tipo.value
+
+        # EVENTO (procEventoNFe/CTe) NÃO é um documento novo — é um evento SOBRE
+        # uma nota já capturada. Cancelamento (110111) marca a nota como cancelada;
+        # outros eventos (Carta de Correção) são ignorados. Sem isto, o evento caía
+        # no fluxo normal e virava "duplicado" (nota seguia ATIVA) ou um documento
+        # lixo — era a causa de "o sistema não traz as notas canceladas".
+        if _eh_evento(root):
+            self._aplicar_evento_cancelamento(
+                xml_str, tipo, det, resultado, restringir_empresa_id,
+            )
+            return
 
         # Parser extrai chave + CNPJs
         try:
@@ -393,4 +494,71 @@ class UploadXmlService:
             det.status = "erro"
             det.mensagem = f"Falha ao persistir: {exc}"
 
+        resultado.detalhes.append(det)
+
+    def _aplicar_evento_cancelamento(
+        self,
+        xml_str: str,
+        tipo: TipoDocumento,
+        det: UploadDetalhe,
+        resultado: UploadResultado,
+        restringir_empresa_id: int | None,
+    ) -> None:
+        """Aplica um evento (procEventoNFe/CTe). Se for CANCELAMENTO, acha a nota
+        pela chave e marca `cancelada=True` (+ motivo/protocolo/data). Eventos que
+        não são cancelamento (ex.: Carta de Correção) são ignorados. NUNCA cria
+        um DocumentoFiscal a partir de um evento."""
+        ev = _parse_evento_cancelamento(xml_str)
+        if not ev:
+            det.status = "evento_ignorado"
+            det.mensagem = "Evento não-cancelamento (ex.: Carta de Correção) — ignorado."
+            resultado.eventos_ignorados += 1
+            resultado.detalhes.append(det)
+            return
+
+        chave = ev["chave"]
+        det.chave = chave
+        stmt = select(DocumentoFiscal).where(
+            DocumentoFiscal.tipo_documento == tipo,
+            DocumentoFiscal.chave_acesso == chave,
+        )
+        # ISOLAMENTO: num upload restrito (portal), só marca nota da própria empresa.
+        if restringir_empresa_id is not None:
+            stmt = stmt.where(DocumentoFiscal.empresa_id == restringir_empresa_id)
+        doc = self.db.scalar(stmt)
+
+        if not doc:
+            # A nota ainda não está no sistema (pode chegar num run futuro, ou não
+            # foi capturada). Não é erro nem documento — registra pra diagnóstico.
+            det.status = "cancelamento_sem_nota"
+            det.mensagem = "Evento de cancelamento sem a nota correspondente no sistema."
+            resultado.cancelamentos_orfaos += 1
+            resultado.detalhes.append(det)
+            return
+
+        det.empresa_id = doc.empresa_id
+        det.empresa_cnpj = doc.cnpj_emitente
+        if doc.cancelada:
+            det.status = "duplicado"
+            det.mensagem = "Nota já estava marcada como cancelada."
+            resultado.duplicados += 1
+            resultado.detalhes.append(det)
+            return
+
+        doc.cancelada = True
+        doc.motivo_cancelamento = (ev.get("motivo") or "")[:255] or None
+        doc.protocolo_cancelamento = (ev.get("protocolo") or "")[:30] or None
+        doc.cancelada_em = _parse_data_evento(ev.get("data"))
+        if not doc.status or doc.status == "baixado":
+            doc.status = "cancelada"
+        try:
+            self.db.commit()
+            resultado.cancelamentos += 1
+            det.status = "cancelada"
+            det.mensagem = "Nota marcada como cancelada pelo evento SEFAZ."
+        except Exception as exc:  # noqa: BLE001
+            self.db.rollback()
+            resultado.erros += 1
+            det.status = "erro"
+            det.mensagem = f"Falha ao marcar cancelamento: {exc}"
         resultado.detalhes.append(det)
