@@ -83,16 +83,24 @@ class NFSeService:
             logger.exception("Falha no sync NFSe da empresa %s", empresa_id)
             raise HTTPException(status_code=502, detail=f"Sync NFSe falhou: {exc}")
 
-        emitidas = recebidas = eventos = novos = 0
+        emitidas = recebidas = eventos = novos = canceladas = 0
         for doc in res.documentos:
-            if (doc.tipo_documento or "").upper() == "EVENTO":
-                eventos += 1
-                continue
+            is_evento = (doc.tipo_documento or "").upper() == "EVENTO"
             if not doc.xml:
+                if is_evento:
+                    eventos += 1
                 continue
             meta = parse_nfse(doc.xml)
-            if meta.get("_erro") or meta.get("tipo_raiz") == "evento":
-                eventos += 1 if meta.get("tipo_raiz") == "evento" else 0
+            if meta.get("_erro"):
+                continue
+            # EVENTO (cancelamento/substituição): NÃO é uma NFS-e nova — é um
+            # evento SOBRE uma NFS-e existente. Antes era só contado e descartado
+            # (bug "serviço não vem cancelada" — a NFS-e ficava eternamente ativa).
+            # Agora, se for cancelamento, acha a NFS-e pela chNFSe e marca cancelada.
+            if is_evento or meta.get("tipo_raiz") == "evento":
+                eventos += 1
+                if self._aplicar_evento_nfse(empresa, meta):
+                    canceladas += 1
                 continue
             chave = meta.get("chave_acesso") or doc.chave_acesso
             if not chave:
@@ -151,12 +159,43 @@ class NFSeService:
             "emitidas": emitidas,
             "recebidas": recebidas,
             "eventos": eventos,
+            "canceladas": canceladas,
             "lotes": res.lotes,
             "cursor_final": res.cursor_final,
             "motivo_parada": res.motivo_parada,
             "erros": res.erros[:10],
             "alertas": res.alertas[:5],
         }
+
+    def _aplicar_evento_nfse(self, empresa: Empresa, meta: dict) -> bool:
+        """Aplica um evento de NFS-e. Se for CANCELAMENTO (ou cancelamento por
+        substituição), acha a NFS-e pela chNFSe e marca `cancelada=True`. Retorna
+        True se marcou. Conservador: só cancela quando o motivo do evento indica
+        cancelamento — outros eventos (ciência do tomador etc.) são ignorados."""
+        chave = meta.get("chave_acesso")
+        if not chave:
+            return False
+        # Só trata como cancelamento se o texto do evento indicar. Evita marcar
+        # NFS-e válida como cancelada por um evento benigno (ex.: ciência).
+        texto = " ".join(str(meta.get(k) or "") for k in ("motivo_evento", "tipo_evento")).lower()
+        if "cancel" not in texto and "substitu" not in texto:
+            return False
+        doc = self.db.scalar(
+            select(DocumentoFiscal).where(
+                DocumentoFiscal.empresa_id == empresa.id,
+                DocumentoFiscal.tipo_documento == TipoDocumento.NFSE,
+                DocumentoFiscal.chave_acesso == chave,
+            )
+        )
+        if not doc or doc.cancelada:
+            return False
+        doc.cancelada = True
+        doc.motivo_cancelamento = (meta.get("motivo_evento") or "Cancelamento NFS-e")[:255]
+        dt_ev = _parse_dt(meta.get("dh_emissao"))
+        doc.cancelada_em = dt_ev.date() if dt_ev else datetime.now().date()
+        if not doc.status or doc.status in ("baixado", "completo"):
+            doc.status = "cancelada"
+        return True
 
     def sincronizar_lote(self, empresa_ids: list[int], *, max_lotes: int = 30) -> list[dict]:
         resultados: list[dict] = []
