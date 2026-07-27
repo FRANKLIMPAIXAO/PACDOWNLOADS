@@ -49,6 +49,7 @@ export function AppHeader() {
           <Link href="/cobrancas">💰 Cobranças</Link>
           <Link href="/docs-cliente">📨 Docs do cliente</Link>
           <Link href="/admissoes">👤 Admissões</Link>
+          <Link href="/indicacoes">🤝 PAC Indica</Link>
           {user?.is_admin ? <Link href="/usuarios">👥 Usuários</Link> : null}
         </nav>
         {user ? (

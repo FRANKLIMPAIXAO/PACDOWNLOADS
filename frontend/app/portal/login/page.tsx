@@ -4,20 +4,16 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { ApiError } from "../../../lib/api";
-import { portalLogin } from "../../../lib/portal";
+import { enviarIndicacao, portalLogin, type IndicacaoPayload } from "../../../lib/portal";
 
 const NAVY = "#16294d";
 const ORANGE = "#ec8b1c";
 const GRAY = "#6b7488";
 
-// E-mail do escritório para o "Quero indicar" (troque por um link wa.me do
-// WhatsApp quando tiver o número — converte melhor que e-mail).
-const INDICA_HREF =
-  "mailto:paixaoassessoriacontabil@gmail.com" +
-  "?subject=" + encodeURIComponent("Quero participar do PAC Indica") +
-  "&body=" + encodeURIComponent(
-    "Olá! Tenho interesse em indicar outro empresário e participar do programa PAC Indica. Meu nome é: ",
-  );
+const INDICA_VAZIA: IndicacaoPayload = {
+  nome_indicador: "", contato_indicador: "", empresa_indicador: "",
+  nome_indicado: "", contato_indicado: "", observacao: "", website: "",
+};
 
 // Recursos REAIS do portal (batem com as abas de /portal).
 const RECURSOS: { icone: string; titulo: string; desc: string }[] = [
@@ -35,6 +31,13 @@ export default function PortalLoginPage() {
   const [erro, setErro] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  // PAC Indica (modal de formulário)
+  const [indicaOpen, setIndicaOpen] = useState(false);
+  const [indica, setIndica] = useState<IndicacaoPayload>(INDICA_VAZIA);
+  const [indicaBusy, setIndicaBusy] = useState(false);
+  const [indicaErro, setIndicaErro] = useState<string | null>(null);
+  const [indicaOk, setIndicaOk] = useState(false);
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setErro(null);
@@ -47,6 +50,36 @@ export default function PortalLoginPage() {
     } finally {
       setBusy(false);
     }
+  }
+
+  function updIndica(campo: keyof IndicacaoPayload) {
+    return (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
+      setIndica((s) => ({ ...s, [campo]: e.target.value }));
+  }
+
+  async function handleIndica(e: React.FormEvent) {
+    e.preventDefault();
+    setIndicaErro(null);
+    setIndicaBusy(true);
+    try {
+      await enviarIndicacao({
+        ...indica,
+        nome_indicador: indica.nome_indicador.trim(),
+        contato_indicador: indica.contato_indicador.trim(),
+        nome_indicado: indica.nome_indicado.trim(),
+        contato_indicado: indica.contato_indicado.trim(),
+      });
+      setIndicaOk(true);
+    } catch (err) {
+      setIndicaErro(err instanceof ApiError ? err.message : "Não foi possível enviar. Tente novamente.");
+    } finally {
+      setIndicaBusy(false);
+    }
+  }
+
+  function fecharIndica() {
+    setIndicaOpen(false);
+    setTimeout(() => { setIndicaOk(false); setIndicaErro(null); setIndica(INDICA_VAZIA); }, 200);
   }
 
   return (
@@ -77,14 +110,14 @@ export default function PortalLoginPage() {
             ))}
           </ul>
 
-          <a className="indica" href={INDICA_HREF}>
+          <button type="button" className="indica" onClick={() => setIndicaOpen(true)}>
             <span className="indica-badge">PAC<br />Indica</span>
             <span className="indica-tx">
               <strong>Participe do programa PAC Indica</strong>
-              <span>Indique outro empresário para a PAC e vocês dois são recompensados. Toque para saber como.</span>
+              <span>Indique outro empresário para a PAC e vocês dois são recompensados.</span>
             </span>
             <span className="indica-arrow" aria-hidden>→</span>
-          </a>
+          </button>
         </div>
       </aside>
 
@@ -112,6 +145,64 @@ export default function PortalLoginPage() {
         </div>
         <p className="rodape">© PAC Inteligência Tributária · Acesso exclusivo para clientes</p>
       </main>
+
+      {/* ================= MODAL PAC INDICA ================= */}
+      {indicaOpen ? (
+        <div className="modal-bg" onClick={fecharIndica} role="dialog" aria-modal="true">
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <button type="button" className="modal-x" onClick={fecharIndica} aria-label="Fechar">×</button>
+
+            {indicaOk ? (
+              <div className="modal-ok">
+                <div className="ok-emoji" aria-hidden>🎉</div>
+                <h3>Indicação enviada!</h3>
+                <p>Obrigado por indicar. Nossa equipe vai entrar em contato em breve — e você já está participando do programa PAC Indica.</p>
+                <button type="button" className="modal-fim" onClick={fecharIndica}>Fechar</button>
+              </div>
+            ) : (
+              <>
+                <div className="modal-head">
+                  <span className="indica-badge">PAC<br />Indica</span>
+                  <div>
+                    <h3>Indique e seja recompensado</h3>
+                    <p>Conhece um empresário que precisa de uma contabilidade de verdade? Indique para a PAC — é rápido.</p>
+                  </div>
+                </div>
+
+                <form onSubmit={handleIndica} className="modal-form">
+                  <div className="modal-sec">Seus dados</div>
+                  <label>Seu nome*
+                    <input value={indica.nome_indicador} onChange={updIndica("nome_indicador")} required maxLength={120} />
+                  </label>
+                  <label>Seu telefone ou e-mail*
+                    <input value={indica.contato_indicador} onChange={updIndica("contato_indicador")} required maxLength={120} placeholder="(62) 99999-9999" />
+                  </label>
+                  <label>Sua empresa <span className="opt">(opcional)</span>
+                    <input value={indica.empresa_indicador} onChange={updIndica("empresa_indicador")} maxLength={160} />
+                  </label>
+
+                  <div className="modal-sec">Quem você indica</div>
+                  <label>Nome dele(a)*
+                    <input value={indica.nome_indicado} onChange={updIndica("nome_indicado")} required maxLength={120} />
+                  </label>
+                  <label>Telefone ou e-mail dele(a)*
+                    <input value={indica.contato_indicado} onChange={updIndica("contato_indicado")} required maxLength={120} placeholder="(62) 99999-9999" />
+                  </label>
+                  <label>Observação <span className="opt">(opcional)</span>
+                    <textarea value={indica.observacao} onChange={updIndica("observacao")} rows={2} maxLength={1000} placeholder="Ex.: ramo, cidade, melhor horário para contato…" />
+                  </label>
+
+                  {/* honeypot anti-bot — invisível, sempre vazio no envio humano */}
+                  <input className="hp" tabIndex={-1} autoComplete="off" value={indica.website} onChange={updIndica("website")} aria-hidden />
+
+                  {indicaErro ? <p className="erro">{indicaErro}</p> : null}
+                  <button type="submit" disabled={indicaBusy}>{indicaBusy ? "Enviando..." : "Enviar indicação"}</button>
+                </form>
+              </>
+            )}
+          </div>
+        </div>
+      ) : null}
 
       <style jsx>{`
         .wrap {
@@ -158,6 +249,7 @@ export default function PortalLoginPage() {
 
         .indica {
           display: flex; align-items: center; gap: 16px; text-decoration: none;
+          width: 100%; text-align: left; font: inherit; color: inherit; cursor: pointer;
           padding: 16px 18px; border-radius: 15px;
           background: linear-gradient(100deg, rgba(236, 139, 28, 0.18), rgba(236, 139, 28, 0.05));
           border: 1px solid rgba(236, 139, 28, 0.42);
@@ -204,6 +296,63 @@ export default function PortalLoginPage() {
         }
         .ajuda { margin: 16px 0 0; text-align: center; font-size: 12.5px; color: ${GRAY}; }
         .rodape { margin: 0; font-size: 11.5px; color: #97a0b0; text-align: center; }
+
+        /* ---------- MODAL PAC INDICA ---------- */
+        .modal-bg {
+          position: fixed; inset: 0; z-index: 50; display: grid; place-items: center;
+          padding: 18px; background: rgba(15, 29, 56, 0.55); backdrop-filter: blur(3px);
+          animation: fade .16s ease;
+        }
+        @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+        .modal {
+          position: relative; width: 100%; max-width: 440px; max-height: 92vh; overflow-y: auto;
+          background: #fff; border-radius: 18px; padding: 26px 26px 24px;
+          box-shadow: 0 24px 60px rgba(15, 29, 56, 0.35); animation: pop .18s ease;
+        }
+        @keyframes pop { from { transform: translateY(10px) scale(.98); opacity: .6; } to { transform: none; opacity: 1; } }
+        .modal-x {
+          position: absolute; top: 12px; right: 14px; width: 32px; height: 32px; border: none;
+          background: #f1f3f7; color: ${GRAY}; border-radius: 9px; font-size: 20px; line-height: 1;
+          cursor: pointer;
+        }
+        .modal-x:hover { background: #e6e9f0; }
+        .modal-head { display: flex; gap: 14px; align-items: flex-start; margin-bottom: 20px; padding-right: 24px; }
+        .modal-head h3 { margin: 0; color: ${NAVY}; font-size: 18px; font-weight: 700; }
+        .modal-head p { margin: 5px 0 0; color: ${GRAY}; font-size: 13px; line-height: 1.5; }
+        .modal-form { display: grid; gap: 12px; }
+        .modal-sec {
+          margin-top: 6px; font-size: 11.5px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase;
+          color: ${ORANGE};
+        }
+        .modal-form label { display: grid; gap: 5px; font-size: 12.5px; color: ${GRAY}; }
+        .modal-form .opt { color: #a6adbb; font-weight: 400; text-transform: none; }
+        .modal-form input, .modal-form textarea {
+          appearance: none; border: 1px solid #d8dee8; border-radius: 9px; padding: 10px 12px;
+          font: inherit; font-size: 14.5px; background: #fff; color: #1b2333; resize: vertical;
+        }
+        .modal-form input:focus, .modal-form textarea:focus {
+          outline: none; border-color: ${ORANGE}; box-shadow: 0 0 0 3px rgba(236, 139, 28, 0.16);
+        }
+        .modal-form button[type="submit"] {
+          appearance: none; border: none; background: ${ORANGE}; color: #fff; font: inherit;
+          font-size: 15px; font-weight: 600; padding: 12px; border-radius: 10px; cursor: pointer; margin-top: 6px;
+        }
+        .modal-form button[type="submit"]:hover:not(:disabled) { filter: brightness(1.05); }
+        .modal-form button[type="submit"]:disabled { opacity: .6; cursor: not-allowed; }
+        .modal-form .erro {
+          margin: 0; color: #a32d2d; font-size: 13px; background: #fdeaea; border: 1px solid #f3c2c2;
+          padding: 9px 12px; border-radius: 8px;
+        }
+        /* honeypot — fora da tela, sem ocupar espaço */
+        .hp { position: absolute; left: -9999px; width: 1px; height: 1px; opacity: 0; }
+        .modal-ok { text-align: center; padding: 14px 6px 4px; }
+        .ok-emoji { font-size: 46px; }
+        .modal-ok h3 { margin: 10px 0 6px; color: ${NAVY}; font-size: 20px; }
+        .modal-ok p { margin: 0 auto 20px; color: ${GRAY}; font-size: 14px; line-height: 1.55; max-width: 330px; }
+        .modal-fim {
+          appearance: none; border: none; background: ${NAVY}; color: #fff; font: inherit; font-weight: 600;
+          font-size: 14.5px; padding: 11px 26px; border-radius: 10px; cursor: pointer;
+        }
 
         /* ---------- RESPONSIVO ---------- */
         @media (max-width: 900px) {

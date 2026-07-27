@@ -194,6 +194,25 @@ export function portalLogout(): void {
   setPortalToken(null);
 }
 
+// --- PAC Indica (formulário público na tela de login) ---
+export type IndicacaoPayload = {
+  nome_indicador: string;
+  contato_indicador: string;
+  empresa_indicador?: string;
+  nome_indicado: string;
+  contato_indicado: string;
+  observacao?: string;
+  website?: string; // honeypot — sempre vazio no envio humano
+};
+
+export async function enviarIndicacao(payload: IndicacaoPayload): Promise<void> {
+  await portalFetch("/api/v1/portal/indicacao", {
+    method: "POST",
+    skipAuth: true,
+    body: JSON.stringify(payload),
+  });
+}
+
 export type UploadSaidasResp = {
   total_arquivos: number;
   persistidos: number;
