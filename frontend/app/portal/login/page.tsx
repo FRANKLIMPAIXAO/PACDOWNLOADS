@@ -114,7 +114,7 @@ export default function PortalLoginPage() {
             <span className="indica-badge">PAC<br />Indica</span>
             <span className="indica-tx">
               <strong>Participe do programa PAC Indica</strong>
-              <span>Indique outro empresário para a PAC e vocês dois são recompensados.</span>
+              <span>Indique um empresário e ganhe o valor do 1º honorário dele quando fechar com a PAC.</span>
             </span>
             <span className="indica-arrow" aria-hidden>→</span>
           </button>
@@ -156,7 +156,7 @@ export default function PortalLoginPage() {
               <div className="modal-ok">
                 <div className="ok-emoji" aria-hidden>🎉</div>
                 <h3>Indicação enviada!</h3>
-                <p>Obrigado por indicar. Nossa equipe vai entrar em contato em breve — e você já está participando do programa PAC Indica.</p>
+                <p>Obrigado por indicar! Nossa equipe vai entrar em contato em breve. Se a empresa fechar com a PAC, você ganha o valor do 1º honorário dela — pago no 2º mês.</p>
                 <button type="button" className="modal-fim" onClick={fecharIndica}>Fechar</button>
               </div>
             ) : (
@@ -164,9 +164,14 @@ export default function PortalLoginPage() {
                 <div className="modal-head">
                   <span className="indica-badge">PAC<br />Indica</span>
                   <div>
-                    <h3>Indique e seja recompensado</h3>
+                    <h3>Indique e ganhe um honorário</h3>
                     <p>Conhece um empresário que precisa de uma contabilidade de verdade? Indique para a PAC — é rápido.</p>
                   </div>
+                </div>
+
+                <div className="modal-premio">
+                  <span aria-hidden>🎁</span>
+                  <span>Sua recompensa: <strong>o valor do 1º honorário</strong> da empresa indicada — pago no <strong>2º mês</strong>, depois que ela fechar com a PAC.</span>
                 </div>
 
                 <form onSubmit={handleIndica} className="modal-form">
@@ -319,6 +324,14 @@ export default function PortalLoginPage() {
         .modal-head { display: flex; gap: 14px; align-items: flex-start; margin-bottom: 20px; padding-right: 24px; }
         .modal-head h3 { margin: 0; color: ${NAVY}; font-size: 18px; font-weight: 700; }
         .modal-head p { margin: 5px 0 0; color: ${GRAY}; font-size: 13px; line-height: 1.5; }
+        .modal-premio {
+          display: flex; gap: 10px; align-items: flex-start; margin-bottom: 18px;
+          padding: 12px 14px; border-radius: 12px; font-size: 13px; line-height: 1.5; color: #6b4a12;
+          background: linear-gradient(100deg, rgba(236, 139, 28, 0.16), rgba(236, 139, 28, 0.06));
+          border: 1px solid rgba(236, 139, 28, 0.38);
+        }
+        .modal-premio span:first-child { font-size: 18px; line-height: 1.2; }
+        .modal-premio strong { color: #8a5a10; font-weight: 700; }
         .modal-form { display: grid; gap: 12px; }
         .modal-sec {
           margin-top: 6px; font-size: 11.5px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase;
