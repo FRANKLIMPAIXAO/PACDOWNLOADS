@@ -13,7 +13,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -96,6 +96,15 @@ def criar_indicacao(
     db.add(ind)
     db.commit()
     return {"ok": True}
+
+
+@router.get("/contagem")
+def contar_indicacoes(db: Session = Depends(get_db)) -> dict:
+    """Contador leve p/ o badge no menu — quantas indicações estão 'nova'."""
+    novas = db.scalar(
+        select(func.count()).select_from(IndicacaoPac).where(IndicacaoPac.status == "nova")
+    )
+    return {"novas": int(novas or 0)}
 
 
 @router.get("", response_model=list[IndicacaoRead])

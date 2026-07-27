@@ -13,6 +13,10 @@ export type Indicacao = {
   created_at: string;
 };
 
+export function contarNovasIndicacoes() {
+  return apiFetch<{ novas: number }>("/api/v1/pac-indica/contagem");
+}
+
 export function listarIndicacoes(status?: string) {
   const qs = status ? `?status=${encodeURIComponent(status)}` : "";
   return apiFetch<Indicacao[]>(`/api/v1/pac-indica${qs}`);
