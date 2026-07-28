@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
+import { PortalUsuarios } from "../../components/portal-usuarios";
 import { ApiError } from "../../lib/api";
 import {
   getPortalToken,
@@ -212,7 +213,7 @@ function Ranking({ items, cor }: { items: RankItem[]; cor: string }) {
   );
 }
 
-type View = "home" | "notas" | "documentos" | "empresa" | "admissao" | "indicadores" | "manifestar" | "guias" | "certidoes" | "conversa";
+type View = "home" | "notas" | "documentos" | "empresa" | "admissao" | "indicadores" | "manifestar" | "guias" | "certidoes" | "conversa" | "usuarios";
 
 export default function PortalPage() {
   const router = useRouter();
@@ -651,6 +652,10 @@ export default function PortalPage() {
     { grupo: "Atendimento", itens: [
       { id: "conversa" as View, label: "Falar com o escritório", icon: "chat", badge: chatNaoLidas },
     ] },
+    // Só o gestor (usuário principal) vê "Usuários" — gerencia a equipe da empresa.
+    ...(me?.gestor ? [{ grupo: "Conta", itens: [
+      { id: "usuarios" as View, label: "Usuários", icon: "users", badge: 0 },
+    ] }] : []),
   ];
 
   // ---- pedaços reutilizáveis ----
@@ -1389,6 +1394,8 @@ export default function PortalPage() {
               </div>
             </>
           ) : null}
+
+          {view === "usuarios" && me?.gestor ? <PortalUsuarios /> : null}
         </div>
       </div>
 

@@ -55,7 +55,37 @@ export type PortalMe = {
   // Multi-empresa: empresa ativa + todas as que este login pode acessar.
   empresa_ativa_id?: number;
   empresas?: PortalEmpresaItem[];
+  // gestor = usuário principal (pode gerenciar a equipe da empresa no portal).
+  gestor?: boolean;
 };
+
+export type PortalUsuario = {
+  id: number;
+  nome: string;
+  email: string;
+  ativo: boolean;
+  senha_provisoria: boolean;
+  principal: boolean; // criado pelo escritório (não pode ser removido pelo gestor)
+  sou_eu: boolean;
+};
+
+export function portalListarUsuarios() {
+  return portalFetch<PortalUsuario[]>("/api/v1/portal/usuarios");
+}
+
+export function portalCriarUsuario(dados: { nome: string; email: string; senha: string }) {
+  return portalFetch<PortalUsuario>("/api/v1/portal/usuarios", {
+    method: "POST",
+    body: JSON.stringify(dados),
+  });
+}
+
+export function portalAtualizarUsuario(id: number, dados: { ativo?: boolean; nova_senha?: string }) {
+  return portalFetch<PortalUsuario>(`/api/v1/portal/usuarios/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(dados),
+  });
+}
 
 export type PortalDocumento = {
   id: number;

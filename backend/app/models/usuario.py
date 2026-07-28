@@ -31,6 +31,14 @@ class Usuario(Base):
     empresa_id: Mapped[int | None] = mapped_column(
         ForeignKey("empresas.id"), nullable=True, index=True
     )
+    # Sub-usuários do portal: quando um CLIENTE cria outro usuário da própria
+    # empresa (controle interno), guardamos quem criou. NULL = usuário PRINCIPAL
+    # (criado pelo escritório) = "gestor" que pode gerenciar a equipe. Preenchido
+    # = sub-usuário (não gerencia ninguém). Sem backfill: linhas antigas já são
+    # NULL → viram gestoras automaticamente.
+    criado_por_cliente_id: Mapped[int | None] = mapped_column(
+        ForeignKey("usuarios.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     # Motivo da inativação do CLIENTE (ex.: "inadimplente", "saiu do escritório").
     # Só descritivo pro escritório saber por que o acesso está desligado.
     motivo_inativacao: Mapped[str | None] = mapped_column(String(255), nullable=True)

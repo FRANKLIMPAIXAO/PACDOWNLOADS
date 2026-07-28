@@ -238,6 +238,9 @@ def me(cliente: Usuario = Depends(get_current_cliente), db: Session = Depends(ge
         # Multi-empresa: empresa ativa + todas as permitidas (pro seletor no portal).
         "empresa_ativa_id": cliente.empresa_id,
         "empresas": outras,
+        # gestor = usuário PRINCIPAL (criado pelo escritório) — pode gerenciar a
+        # equipe da empresa dele no portal. Sub-usuário não gerencia ninguém.
+        "gestor": cliente.criado_por_cliente_id is None,
     }
 
 
@@ -257,6 +260,119 @@ def trocar_empresa(
     db.add(PortalAcessoLog(usuario_id=cliente.id, empresa_id=empresa_id, evento="troca_empresa"))
     db.commit()
     return TokenResponse(access_token=create_access_token(cliente.email, emp=empresa_id))
+
+
+# ---------------------------------------------------------------------------
+# Gestão de USUÁRIOS do portal pelo cliente PRINCIPAL (gestor). O usuário que o
+# escritório convidou pode criar/gerenciar os usuários da PRÓPRIA empresa —
+# controle interno, sem depender do escritório. ISOLAMENTO: tudo escopado a
+# `cliente.empresa_id`; nunca cria admin/equipe; sub-usuário não gerencia nada.
+# ---------------------------------------------------------------------------
+from pydantic import BaseModel as _BM, Field as _Fld  # noqa: E402
+
+
+class _NovoUsuarioPortal(_BM):
+    nome: str = _Fld(min_length=2, max_length=120)
+    email: str = _Fld(min_length=5, max_length=255)
+    senha: str = _Fld(min_length=6, max_length=100)
+
+
+class _AtualizaUsuarioPortal(_BM):
+    ativo: bool | None = None
+    nova_senha: str | None = _Fld(default=None, min_length=6, max_length=100)
+
+
+def _exige_gestor(cliente: Usuario) -> None:
+    """Só o usuário PRINCIPAL (gestor, criado pelo escritório) gerencia a equipe.
+    403 pro sub-usuário (criado_por_cliente_id preenchido)."""
+    if getattr(cliente, "criado_por_cliente_id", None) is not None:
+        raise HTTPException(status_code=403, detail="Apenas o usuário principal pode gerenciar a equipe.")
+
+
+def _sub_usuario_da_empresa(uid: int, cliente: Usuario, db: Session) -> Usuario:
+    """Alvo tem que ser CLIENTE da MESMA empresa e não o próprio gestor. 404 se
+    não for (não revela usuários de outra empresa); 400 se for o próprio."""
+    alvo = db.get(Usuario, uid)
+    if not alvo or not alvo.is_cliente or alvo.empresa_id != cliente.empresa_id:
+        raise HTTPException(status_code=404, detail="Usuário não encontrado.")
+    if alvo.id == cliente.id:
+        raise HTTPException(status_code=400, detail="Você não pode alterar o próprio acesso aqui.")
+    return alvo
+
+
+def _usuario_portal_dict(u: Usuario, cliente: Usuario) -> dict:
+    return {
+        "id": u.id,
+        "nome": u.nome,
+        "email": u.email,
+        "ativo": u.ativo,
+        "senha_provisoria": u.senha_provisoria,
+        "principal": u.criado_por_cliente_id is None,  # criado pelo escritório
+        "sou_eu": u.id == cliente.id,
+    }
+
+
+@router.get("/usuarios")
+def portal_listar_usuarios(
+    cliente: Usuario = Depends(get_current_cliente), db: Session = Depends(get_db),
+) -> list[dict]:
+    """Lista a equipe (usuários) da empresa do gestor."""
+    _exige_gestor(cliente)
+    users = db.scalars(
+        select(Usuario)
+        .where(Usuario.is_cliente.is_(True), Usuario.empresa_id == cliente.empresa_id)
+        .order_by(Usuario.nome)
+    ).all()
+    return [_usuario_portal_dict(u, cliente) for u in users]
+
+
+@router.post("/usuarios", status_code=201)
+def portal_criar_usuario(
+    payload: _NovoUsuarioPortal,
+    cliente: Usuario = Depends(get_current_cliente),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Gestor cria um sub-usuário da PRÓPRIA empresa. Senha PROVISÓRIA — o novo
+    usuário é obrigado a trocar no 1º acesso."""
+    _exige_gestor(cliente)
+    email = payload.email.strip()
+    if db.scalar(select(Usuario).where(Usuario.email == email)):
+        raise HTTPException(status_code=400, detail="Já existe um usuário com esse e-mail.")
+    novo = Usuario(
+        nome=payload.nome.strip(),
+        email=email,
+        senha_hash=hash_password(payload.senha),
+        ativo=True,
+        is_admin=False,
+        is_cliente=True,
+        empresa_id=cliente.empresa_id,
+        criado_por_cliente_id=cliente.id,
+        senha_provisoria=True,
+    )
+    db.add(novo)
+    db.commit()
+    db.refresh(novo)
+    return _usuario_portal_dict(novo, cliente)
+
+
+@router.patch("/usuarios/{uid}")
+def portal_atualizar_usuario(
+    uid: int,
+    payload: _AtualizaUsuarioPortal,
+    cliente: Usuario = Depends(get_current_cliente),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Gestor ativa/desativa um usuário da equipe ou redefine a senha (provisória)."""
+    _exige_gestor(cliente)
+    alvo = _sub_usuario_da_empresa(uid, cliente, db)
+    if payload.ativo is not None:
+        alvo.ativo = payload.ativo
+    if payload.nova_senha:
+        alvo.senha_hash = hash_password(payload.nova_senha)
+        alvo.senha_provisoria = True
+    db.commit()
+    db.refresh(alvo)
+    return _usuario_portal_dict(alvo, cliente)
 
 
 # ---------------------------------------------------------------------------
