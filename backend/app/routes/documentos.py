@@ -4,9 +4,9 @@ from pathlib import Path
 from typing import Literal
 
 import requests
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
@@ -21,6 +21,19 @@ from app.services.upload_xml_service import UploadXmlService
 router = APIRouter(prefix="/documentos", tags=["documentos"], dependencies=[Depends(get_current_user)])
 
 
+def _aplicar_exclusao_cnpjs(stmt, excluir_cnpjs: list[str] | None):
+    """Esconde notas cuja CONTRAPARTE (emitente OU destinatário) está na lista de
+    CNPJs bloqueados. Usado pelo PORTAL (bloqueio por empresa) — a área do
+    escritório passa None e vê tudo. `coalesce(.., "")` trata NULL como não
+    bloqueado, então nota sem aquela contraparte é mantida."""
+    if excluir_cnpjs:
+        stmt = stmt.where(
+            func.coalesce(DocumentoFiscal.cnpj_emitente, "").notin_(excluir_cnpjs),
+            func.coalesce(DocumentoFiscal.cnpj_destinatario, "").notin_(excluir_cnpjs),
+        )
+    return stmt
+
+
 @router.get("", response_model=list[DocumentoFiscalRead])
 def listar_documentos(
     empresa_id: int | None = None,
@@ -30,6 +43,7 @@ def listar_documentos(
     data_inicio: str | None = None,
     data_fim: str | None = None,
     limite: int = 500,
+    excluir_cnpjs: list[str] | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> list[DocumentoFiscal]:
     """Lista documentos com filtros opcionais.
@@ -57,6 +71,7 @@ def listar_documentos(
         stmt = stmt.where(DocumentoFiscal.cancelada == cancelada)
     if origem in ("emitida", "recebida"):
         stmt = stmt.where(DocumentoFiscal.origem == origem)
+    stmt = _aplicar_exclusao_cnpjs(stmt, excluir_cnpjs)
     if data_inicio:
         try:
             dt = datetime.strptime(data_inicio, "%Y-%m-%d").replace(tzinfo=timezone.utc)
@@ -83,6 +98,7 @@ def resumo_documentos(
     empresa_id: int | None = None,
     data_inicio: str | None = None,
     data_fim: str | None = None,
+    excluir_cnpjs: list[str] | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> dict:
     """Totalizadores estilo Jettax: separa EMITIDAS (saida) de RECEBIDAS (entrada).
@@ -98,6 +114,7 @@ def resumo_documentos(
     def _periodo(stmt):
         if empresa_id:
             stmt = stmt.where(DocumentoFiscal.empresa_id == empresa_id)
+        stmt = _aplicar_exclusao_cnpjs(stmt, excluir_cnpjs)
         if data_inicio:
             try:
                 dt = datetime.strptime(data_inicio, "%Y-%m-%d").replace(tzinfo=timezone.utc)
@@ -458,6 +475,7 @@ def baixar_zip_lote(
     data_inicio: str | None = None,
     data_fim: str | None = None,
     arquivo: Literal["xml", "pdf", "ambos"] = "xml",
+    excluir_cnpjs: list[str] | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> StreamingResponse:
     """Empacota XMLs e/ou PDFs num ZIP e retorna pra download.
@@ -478,6 +496,7 @@ def baixar_zip_lote(
         stmt = stmt.where(DocumentoFiscal.cancelada == cancelada)
     if origem in ("emitida", "recebida"):
         stmt = stmt.where(DocumentoFiscal.origem == origem)
+    stmt = _aplicar_exclusao_cnpjs(stmt, excluir_cnpjs)
     if data_inicio:
         try:
             dt = datetime.strptime(data_inicio, "%Y-%m-%d").replace(tzinfo=timezone.utc)

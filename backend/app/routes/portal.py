@@ -33,6 +33,7 @@ from app.models.documento_escritorio import DocumentoEscritorio
 from app.models.documento_fiscal import DocumentoFiscal, TipoDocumento
 from app.models.empresa import Empresa
 from app.models.portal_acesso_log import PortalAcessoLog
+from app.models.portal_cnpj_bloqueado import PortalCnpjBloqueado
 from app.models.guia_das import GuiaDAS
 from app.models.guia_dctfweb import GuiaDctfweb
 from app.models.usuario import Usuario
@@ -56,6 +57,18 @@ from app.services.auth_service import (
 )
 
 router = APIRouter(prefix="/portal", tags=["portal-cliente"])
+
+
+def cnpjs_bloqueados_portal(db: Session, empresa_id: int) -> list[str]:
+    """CNPJs de contraparte OCULTOS no portal desta empresa (vale p/ TODOS os
+    logins da empresa). Ex.: Laticínios oculta RCM/ROCA/ZULMA. Lista vazia = nada
+    bloqueado. Enforced no backend em TODO caminho de nota (lista/zip/resumo/
+    download/pdf/manifestar) — o escritório continua vendo tudo."""
+    return list(
+        db.scalars(
+            select(PortalCnpjBloqueado.cnpj).where(PortalCnpjBloqueado.empresa_id == empresa_id)
+        ).all()
+    )
 
 
 @router.post("/login", response_model=TokenResponse)
@@ -346,6 +359,7 @@ def portal_documentos(
         data_inicio=data_inicio,
         data_fim=data_fim,
         limite=limite,
+        excluir_cnpjs=cnpjs_bloqueados_portal(db, cliente.empresa_id) or None,
         db=db,
     )
 
@@ -370,6 +384,7 @@ def portal_baixar_zip(
         data_inicio=data_inicio,
         data_fim=data_fim,
         arquivo=arquivo,
+        excluir_cnpjs=cnpjs_bloqueados_portal(db, cliente.empresa_id) or None,
         db=db,
     )
 
@@ -386,15 +401,22 @@ def portal_resumo(
         empresa_id=cliente.empresa_id,
         data_inicio=data_inicio,
         data_fim=data_fim,
+        excluir_cnpjs=cnpjs_bloqueados_portal(db, cliente.empresa_id) or None,
         db=db,
     )
 
 
 def _doc_do_cliente(documento_id: int, cliente: Usuario, db: Session) -> DocumentoFiscal:
     """Carrega o doc e CONFERE que é da empresa do cliente. 404 (não 403) se não
-    for — não revela a existência de documentos de outras empresas."""
+    for — não revela a existência de documentos de outras empresas.
+
+    Também barra (404) as notas de CNPJ BLOQUEADO no portal — senão o cliente
+    burlaria a lista chutando o ID do documento pra baixar XML/PDF/manifestar."""
     doc = db.get(DocumentoFiscal, documento_id)
     if not doc or doc.empresa_id != cliente.empresa_id:
+        raise HTTPException(status_code=404, detail="Documento não encontrado.")
+    bloq = cnpjs_bloqueados_portal(db, cliente.empresa_id)
+    if bloq and (doc.cnpj_emitente in bloq or doc.cnpj_destinatario in bloq):
         raise HTTPException(status_code=404, detail="Documento não encontrado.")
     return doc
 

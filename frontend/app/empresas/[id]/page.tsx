@@ -7,6 +7,7 @@ import { FormEvent, useCallback, useEffect, useState } from "react";
 import { ClienteAcessoCard } from "../../../components/cliente-acesso-card";
 import { CndCard } from "../../../components/cnd-card";
 import { ConfigFiscalCard } from "../../../components/config-fiscal-card";
+import { PortalBloqueioCard } from "../../../components/portal-bloqueio-card";
 import { PrevencaoCard } from "../../../components/prevencao-card";
 import { ProtectedRoute } from "../../../components/protected-route";
 import { ApiError } from "../../../lib/api";
@@ -163,6 +164,7 @@ function DetalheEmpresaContent() {
       <CndCard empresaId={empresa.id} />
       <PrevencaoCard empresaId={empresa.id} />
       <ClienteAcessoCard empresaId={empresa.id} />
+      <PortalBloqueioCard empresaId={empresa.id} />
     </>
   );
 }
