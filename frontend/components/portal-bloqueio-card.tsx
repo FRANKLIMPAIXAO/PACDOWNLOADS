@@ -23,8 +23,10 @@ export function PortalBloqueioCard({ empresaId }: { empresaId: number }) {
   const [itens, setItens] = useState<PortalBloqueio[] | null>(null);
   const [cnpj, setCnpj] = useState("");
   const [rotulo, setRotulo] = useState("");
+  const [reciproco, setReciproco] = useState(false);
   const [busy, setBusy] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
+  const [aviso, setAviso] = useState<string | null>(null);
 
   const carregar = useCallback(async () => {
     try {
@@ -39,11 +41,17 @@ export function PortalBloqueioCard({ empresaId }: { empresaId: number }) {
   async function adicionar(e: FormEvent) {
     e.preventDefault();
     setErro(null);
+    setAviso(null);
     setBusy(true);
     try {
-      await adicionarBloqueio(empresaId, cnpj, rotulo.trim() || undefined);
+      const r = await adicionarBloqueio(empresaId, cnpj, rotulo.trim() || undefined, reciproco);
       setCnpj("");
       setRotulo("");
+      if (r.reciproco_criado_para) {
+        setAviso(`Ocultado também no portal de ${r.reciproco_criado_para} (nos dois sentidos).`);
+      } else if (reciproco) {
+        setAviso("Bloqueado aqui. (O recíproco só vale se o CNPJ for uma empresa cadastrada com portal.)");
+      }
       await carregar();
     } catch (err) {
       setErro(err instanceof ApiError ? err.message : "Falha ao adicionar o CNPJ.");
@@ -98,6 +106,12 @@ export function PortalBloqueioCard({ empresaId }: { empresaId: number }) {
         </button>
       </form>
 
+      <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, fontSize: "0.86rem", cursor: "pointer" }}>
+        <input type="checkbox" checked={reciproco} onChange={(e) => setReciproco(e.target.checked)} style={{ width: "auto" }} />
+        <span>Bloquear nos <strong>dois sentidos</strong> — se o CNPJ for uma empresa nossa, esconde também no portal dela as notas desta empresa.</span>
+      </label>
+
+      {aviso ? <p className="toast toast-ok" style={{ marginTop: 10 }}>{aviso}</p> : null}
       {erro ? <p className="toast toast-error" style={{ marginTop: 10 }}>{erro}</p> : null}
 
       <div style={{ marginTop: 14 }}>

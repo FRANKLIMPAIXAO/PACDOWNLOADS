@@ -31,6 +31,9 @@ class BloqueioCreate(BaseModel):
     empresa_id: int
     cnpj: str = Field(min_length=11, max_length=20)  # aceita com/sem máscara
     rotulo: str | None = Field(default=None, max_length=160)
+    # Recíproco: se o CNPJ bloqueado for uma EMPRESA nossa (tem portal), esconde
+    # também no portal DELA as notas desta empresa — some nos dois lados de uma vez.
+    reciproco: bool = False
 
 
 class BloqueioRead(BaseModel):
@@ -40,6 +43,28 @@ class BloqueioRead(BaseModel):
     cnpj: str
     rotulo: str | None
     created_at: datetime
+
+
+class BloqueioCreateResp(BaseModel):
+    bloqueio: BloqueioRead
+    # razão social da outra empresa quando o recíproco foi criado (senão None)
+    reciproco_criado_para: str | None = None
+
+
+def _upsert_bloqueio(db: Session, empresa_id: int, cnpj: str, rotulo: str | None) -> PortalCnpjBloqueado:
+    """Cria o bloqueio se ainda não existir (idempotente)."""
+    ja = db.scalar(
+        select(PortalCnpjBloqueado).where(
+            PortalCnpjBloqueado.empresa_id == empresa_id,
+            PortalCnpjBloqueado.cnpj == cnpj,
+        )
+    )
+    if ja:
+        return ja
+    b = PortalCnpjBloqueado(empresa_id=empresa_id, cnpj=cnpj, rotulo=(rotulo or "").strip() or None)
+    db.add(b)
+    db.flush()
+    return b
 
 
 @router.get("", response_model=list[BloqueioRead])
@@ -53,29 +78,32 @@ def listar(empresa_id: int, db: Session = Depends(get_db)) -> list[PortalCnpjBlo
     )
 
 
-@router.post("", response_model=BloqueioRead, status_code=201)
-def adicionar(payload: BloqueioCreate, db: Session = Depends(get_db)) -> PortalCnpjBloqueado:
+@router.post("", response_model=BloqueioCreateResp, status_code=201)
+def adicionar(payload: BloqueioCreate, db: Session = Depends(get_db)) -> BloqueioCreateResp:
     cnpj = _norm_cnpj(payload.cnpj)
     if len(cnpj) != 14:
         raise HTTPException(status_code=400, detail="CNPJ inválido — precisa de 14 dígitos.")
-    if not db.get(Empresa, payload.empresa_id):
+    empresa = db.get(Empresa, payload.empresa_id)
+    if not empresa:
         raise HTTPException(status_code=404, detail="Empresa não encontrada.")
-    ja = db.scalar(
-        select(PortalCnpjBloqueado).where(
-            PortalCnpjBloqueado.empresa_id == payload.empresa_id,
-            PortalCnpjBloqueado.cnpj == cnpj,
-        )
-    )
-    if ja:  # idempotente — já bloqueado
-        return ja
-    b = PortalCnpjBloqueado(
-        empresa_id=payload.empresa_id, cnpj=cnpj,
-        rotulo=(payload.rotulo or "").strip() or None,
-    )
-    db.add(b)
+
+    b = _upsert_bloqueio(db, payload.empresa_id, cnpj, payload.rotulo)
+
+    # Recíproco: se o CNPJ bloqueado for uma EMPRESA nossa, esconde também no
+    # portal DELA as notas desta empresa (o mesmo login trocava de empresa e via).
+    reciproco_para: str | None = None
+    if payload.reciproco:
+        outra = db.scalar(select(Empresa).where(Empresa.cnpj == cnpj))
+        if outra and outra.id != empresa.id:
+            _upsert_bloqueio(
+                db, outra.id, _norm_cnpj(empresa.cnpj),
+                empresa.razao_social or "Empresa",
+            )
+            reciproco_para = outra.razao_social
+
     db.commit()
     db.refresh(b)
-    return b
+    return BloqueioCreateResp(bloqueio=BloqueioRead.model_validate(b), reciproco_criado_para=reciproco_para)
 
 
 @router.delete("/{bloqueio_id}")
