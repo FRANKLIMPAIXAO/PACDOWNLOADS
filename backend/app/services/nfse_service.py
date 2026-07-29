@@ -209,7 +209,7 @@ class NFSeService:
                 resultados.append({"empresa_id": eid, "ok": False, "erro": str(exc)[:200], "novos": 0})
         return resultados
 
-    def cron_sincronizar(self, *, chunk: int = 3, budget_s: int = 40, max_lotes: int = 10) -> dict:
+    def cron_sincronizar(self, *, chunk: int = 3, budget_s: int = 18, max_lotes: int = 6) -> dict:
         """Passo do cron de NFS-e (ADN): avança um PEDAÇO da carteira sincronizando
         o cursor NSU de cada empresa. Cursor round-robin em ARQUIVO (sem migration).
 
