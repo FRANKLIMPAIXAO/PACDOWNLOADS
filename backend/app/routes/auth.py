@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -12,6 +12,7 @@ from app.services.auth_service import (
     hash_password,
     verify_password,
 )
+from app.utils.rate_limit import bloqueado, limpar, registrar_falha
 
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -51,10 +52,20 @@ def register_user(payload: UsuarioCreate, db: Session = Depends(get_db)) -> Toke
 
 
 @router.post("/login", response_model=TokenResponse)
-def login(payload: LoginRequest, db: Session = Depends(get_db)) -> TokenResponse:
+def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)) -> TokenResponse:
+    # Anti brute-force: bloqueia após muitas falhas por ip+email (8) ou por ip (30)
+    # numa janela de 5 min. Login OK zera os contadores.
+    ip = request.client.host if request.client else "?"
+    ke = f"{ip}|{(payload.email or '').strip().lower()}"
+    ki = f"ip|{ip}"
+    if bloqueado(ke, 8) or bloqueado(ki, 30):
+        raise HTTPException(status_code=429, detail="Muitas tentativas de login. Aguarde alguns minutos e tente de novo.")
     user = authenticate_user(db, payload.email, payload.password)
     if not user:
+        registrar_falha(ke)
+        registrar_falha(ki)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Credenciais invalidas")
+    limpar(ke, ki)
     return TokenResponse(access_token=create_access_token(user.email))
 
 

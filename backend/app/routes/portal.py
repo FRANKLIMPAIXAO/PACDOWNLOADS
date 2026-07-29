@@ -76,10 +76,20 @@ def login_cliente(payload: LoginRequest, request: Request, db: Session = Depends
     """Login do PORTAL. Só aceita usuário CLIENTE (equipe do escritório usa o
     /auth/login). Mesmo mecanismo de JWT — o que muda é quem cada área aceita.
     Registra o acesso (controle de quem entra e com que frequência)."""
+    # Anti brute-force (mesma política do /auth/login): bloqueia por ip+email/ip.
+    from app.utils.rate_limit import bloqueado, limpar, registrar_falha
+    _ip = request.client.host if request.client else "?"
+    _ke = f"portal|{_ip}|{(payload.email or '').strip().lower()}"
+    _ki = f"portal|ip|{_ip}"
+    if bloqueado(_ke, 8) or bloqueado(_ki, 30):
+        raise HTTPException(status_code=429, detail="Muitas tentativas de login. Aguarde alguns minutos e tente de novo.")
     user = authenticate_user(db, payload.email, payload.password)
     if not user or not user.is_cliente or not user.empresa_id:
         # Mensagem genérica de propósito (não revela se o e-mail existe / é cliente)
+        registrar_falha(_ke)
+        registrar_falha(_ki)
         raise HTTPException(status_code=401, detail="E-mail ou senha inválidos.")
+    limpar(_ke, _ki)
     try:
         ip = request.client.host if request.client else None
         db.add(PortalAcessoLog(usuario_id=user.id, empresa_id=user.empresa_id, evento="login", ip=ip))

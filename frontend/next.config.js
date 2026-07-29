@@ -12,6 +12,23 @@ const nextConfig = {
       { source: "/definir-senha", destination: "/portal/definir-senha", permanent: false },
     ];
   },
+  // Headers de segurança em todas as páginas (anti clickjacking, MIME-sniffing,
+  // vazamento de referrer) + HSTS. Sem CSP por enquanto (precisa de ajuste fino
+  // pra não quebrar o app; fica como próximo passo).
+  async headers() {
+    return [
+      {
+        source: "/:path*",
+        headers: [
+          { key: "X-Frame-Options", value: "SAMEORIGIN" },
+          { key: "X-Content-Type-Options", value: "nosniff" },
+          { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+          { key: "Strict-Transport-Security", value: "max-age=31536000; includeSubDomains" },
+          { key: "Permissions-Policy", value: "camera=(), microphone=(self), geolocation=()" },
+        ],
+      },
+    ];
+  },
 };
 
 module.exports = nextConfig;

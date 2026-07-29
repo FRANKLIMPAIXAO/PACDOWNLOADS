@@ -38,7 +38,7 @@ settings = get_settings()
 # BUILD_COMMIT no build (commit fica "unknown"), este é o sinal confiável pra
 # saber, via GET /version, se o deploy pegou o código novo (cache stale é
 # recorrente). Formato livre: AAAA-MM-DD + resumo curto.
-APP_BUILD_TAG = "2026-07-18-nfse-cron-rapido"
+APP_BUILD_TAG = "2026-07-19-seg-headers-ratelimit"
 
 
 @asynccontextmanager
@@ -139,6 +139,18 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def _headers_seguranca(request, call_next):
+    """Headers de segurança em toda resposta (defesa em profundidade). HSTS só
+    é honrado pelo browser sob HTTPS (prod via Traefik). Não mexe em CORS."""
+    resp = await call_next(request)
+    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+    resp.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+    resp.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    resp.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    return resp
 
 
 @app.get("/health")
