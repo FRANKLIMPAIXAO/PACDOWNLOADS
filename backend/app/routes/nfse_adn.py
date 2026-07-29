@@ -1,7 +1,10 @@
 """Rotas da busca de NFS-e pelo ADN (Ambiente de Dados Nacional)."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+import hmac
+import os
+
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -12,6 +15,35 @@ from app.services.nfse_service import NFSeService
 router = APIRouter(
     prefix="/nfse-adn", tags=["nfse-adn"], dependencies=[Depends(get_current_user)],
 )
+
+# Router SEM login — chamado por um cron EXTERNO (token no header). Em produção
+# NÃO roda Celery beat (só uvicorn), então a automação é cron externo batendo aqui.
+router_cron = APIRouter(prefix="/nfse-adn", tags=["nfse-adn-cron"])
+
+
+@router_cron.post("/cron")
+def cron_nfse(
+    x_cron_token: str = Header(default=""),
+    chunk: int = 3,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Passo do cron de NFS-e — sincroniza um PEDAÇO da carteira pelo ADN.
+
+    Chamado por cron EXTERNO a cada ~10-15 min. Protegido por `X-Cron-Token`
+    (env `NFSE_CRON_TOKEN`; cai pra `DFE_CRON_TOKEN` se aquele não estiver setado,
+    pra reaproveitar o mesmo cron). `chunk` = empresas por chamada (cap 8)."""
+    esperado = os.getenv("NFSE_CRON_TOKEN", "") or os.getenv("DFE_CRON_TOKEN", "")
+    if not esperado:
+        raise HTTPException(status_code=503, detail="NFSE_CRON_TOKEN (ou DFE_CRON_TOKEN) não configurado no servidor.")
+    if not x_cron_token or not hmac.compare_digest(x_cron_token, esperado):
+        raise HTTPException(status_code=401, detail="Token do cron inválido.")
+    resultado = NFSeService(db).cron_sincronizar(chunk=max(1, min(chunk, 8)))
+    try:
+        from app.services.cron_log import registrar_cron
+        registrar_cron(db, "nfse", resultado)
+    except Exception:  # noqa: BLE001 — log nunca derruba o cron
+        db.rollback()
+    return resultado
 
 
 class SincronizarLotePayload(BaseModel):

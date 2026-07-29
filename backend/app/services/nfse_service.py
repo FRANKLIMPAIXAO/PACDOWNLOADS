@@ -208,3 +208,66 @@ class NFSeService:
                 self.db.rollback()
                 resultados.append({"empresa_id": eid, "ok": False, "erro": str(exc)[:200], "novos": 0})
         return resultados
+
+    def cron_sincronizar(self, *, chunk: int = 3, budget_s: int = 40, max_lotes: int = 10) -> dict:
+        """Passo do cron de NFS-e (ADN): avança um PEDAÇO da carteira sincronizando
+        o cursor NSU de cada empresa. Cursor round-robin em ARQUIVO (sem migration).
+
+        Feito pra um cron EXTERNO chamar a cada ~10-15 min: cada chamada processa
+        `chunk` empresas (limitado por `budget_s` pra caber no Traefik ~60s) e
+        avança o cursor; ao longo do dia drena a carteira toda. Erro numa empresa
+        não derruba as outras."""
+        import json
+        import time
+        from pathlib import Path
+
+        from app.config import get_settings as _gs
+
+        elegiveis = self.listar_elegiveis()
+        n = len(elegiveis)
+        if n == 0:
+            return {"total_elegiveis": 0, "processadas": []}
+
+        cursor_path = Path(_gs().storage_path).parent / "nfse_cron_cursor.json"
+        cursor = 0
+        try:
+            cursor = int(json.loads(cursor_path.read_text()).get("cursor", 0))
+        except Exception:  # noqa: BLE001 — sem estado ainda = começa do 0
+            cursor = 0
+        cursor %= n
+
+        inicio = time.time()
+        processadas: list[dict] = []
+        i = cursor
+        feitas = 0
+        while feitas < chunk and (time.time() - inicio) < budget_s:
+            emp = elegiveis[i % n]
+            item: dict = {"empresa_id": emp.id, "razao_social": emp.razao_social}
+            try:
+                r = self.sincronizar_empresa(emp.id, max_lotes=max_lotes)
+                item["novos"] = r.get("novos")
+                item["canceladas"] = r.get("canceladas")
+                item["motivo_parada"] = r.get("motivo_parada")
+            except HTTPException as exc:
+                self.db.rollback()
+                item["erro"] = str(exc.detail)[:140]
+            except Exception as exc:  # noqa: BLE001
+                self.db.rollback()
+                item["erro"] = str(exc)[:140]
+            processadas.append(item)
+            feitas += 1
+            i += 1
+
+        novo_cursor = i % n
+        try:
+            cursor_path.parent.mkdir(parents=True, exist_ok=True)
+            cursor_path.write_text(json.dumps({"cursor": novo_cursor}))
+        except OSError:
+            pass
+
+        return {
+            "total_elegiveis": n,
+            "cursor_anterior": cursor,
+            "cursor_novo": novo_cursor,
+            "processadas": processadas,
+        }
