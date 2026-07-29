@@ -310,10 +310,22 @@ def definir_empresas_cliente(
         faltando = novos - achadas
         if faltando:
             raise HTTPException(status_code=404, detail=f"Empresa(s) inexistente(s): {sorted(faltando)}")
-    for ce in db.scalars(select(ClienteEmpresa).where(ClienteEmpresa.usuario_id == user.id)).all():
-        db.delete(ce)
+    # DIFF (não delete-e-readicione): só remove o que saiu e só insere o que falta.
+    # Apagar + reinserir a MESMA linha na mesma transação estourava a unique
+    # `uq_cliente_empresa` (o SQLAlchemy faz o INSERT antes do DELETE) → 500 no 2º
+    # save. O diff evita mexer no que já existe.
+    existentes = {
+        ce.empresa_id: ce
+        for ce in db.scalars(
+            select(ClienteEmpresa).where(ClienteEmpresa.usuario_id == user.id)
+        ).all()
+    }
+    for eid, ce in existentes.items():
+        if eid not in novos:
+            db.delete(ce)
     for eid in novos:
-        db.add(ClienteEmpresa(usuario_id=user.id, empresa_id=eid))
+        if eid not in existentes:
+            db.add(ClienteEmpresa(usuario_id=user.id, empresa_id=eid))
     db.commit()
     return {"primaria_id": user.empresa_id, "adicionais": sorted(novos), "total": len(novos) + 1}
 
