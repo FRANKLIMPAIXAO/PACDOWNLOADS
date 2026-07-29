@@ -21,21 +21,23 @@ router = APIRouter(
 router_cron = APIRouter(prefix="/nfse-adn", tags=["nfse-adn-cron"])
 
 
-@router_cron.post("/cron")
+@router_cron.api_route("/cron", methods=["GET", "POST"])
 def cron_nfse(
     x_cron_token: str = Header(default=""),
+    token: str = "",
     chunk: int = 3,
     db: Session = Depends(get_db),
 ) -> dict:
     """Passo do cron de NFS-e — sincroniza um PEDAÇO da carteira pelo ADN.
 
-    Chamado por cron EXTERNO a cada ~10-15 min. Protegido por `X-Cron-Token`
-    (env `NFSE_CRON_TOKEN`; cai pra `DFE_CRON_TOKEN` se aquele não estiver setado,
-    pra reaproveitar o mesmo cron). `chunk` = empresas por chamada (cap 8)."""
+    Chamado por cron EXTERNO a cada ~10-15 min. Aceita GET ou POST. Token pelo
+    header `X-Cron-Token` OU pela URL `?token=...` (facilita agendador/navegador).
+    Env `NFSE_CRON_TOKEN` (cai pra `DFE_CRON_TOKEN`). `chunk` = empresas/chamada (cap 8)."""
     esperado = os.getenv("NFSE_CRON_TOKEN", "") or os.getenv("DFE_CRON_TOKEN", "")
+    recebido = x_cron_token or token
     if not esperado:
         raise HTTPException(status_code=503, detail="NFSE_CRON_TOKEN (ou DFE_CRON_TOKEN) não configurado no servidor.")
-    if not x_cron_token or not hmac.compare_digest(x_cron_token, esperado):
+    if not recebido or not hmac.compare_digest(recebido, esperado):
         raise HTTPException(status_code=401, detail="Token do cron inválido.")
     resultado = NFSeService(db).cron_sincronizar(chunk=max(1, min(chunk, 8)))
     try:

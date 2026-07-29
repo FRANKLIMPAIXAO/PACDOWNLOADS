@@ -20,22 +20,24 @@ router = APIRouter(
 router_cron = APIRouter(prefix="/dfe-nfe", tags=["dfe-nfe-cron"])
 
 
-@router_cron.post("/cron")
+@router_cron.api_route("/cron", methods=["GET", "POST"])
 def cron_diario(
     x_cron_token: str = Header(default=""),
+    token: str = "",
     chunk: int = 2,
     db: Session = Depends(get_db),
 ) -> dict:
     """Passo do cron diário (distribuir + manifestar um pedaço da carteira).
 
-    Chamado por um cron EXTERNO a cada ~10-15 min. Protegido por `X-Cron-Token`
-    (env `DFE_CRON_TOKEN`). `chunk` = empresas por chamada (cap interno por
-    tempo pra caber no proxy).
+    Chamado por um cron EXTERNO a cada ~10-15 min. Aceita GET ou POST. Token pelo
+    header `X-Cron-Token` OU pela URL `?token=...` (facilita agendador/navegador).
+    Env `DFE_CRON_TOKEN`. `chunk` = empresas por chamada (cap interno por tempo).
     """
-    esperado = os.getenv("DFE_CRON_TOKEN", "")
+    esperado = os.getenv("DFE_CRON_TOKEN", "") or os.getenv("NFSE_CRON_TOKEN", "")
+    recebido = x_cron_token or token
     if not esperado:
         raise HTTPException(status_code=503, detail="DFE_CRON_TOKEN não configurado no servidor.")
-    if not x_cron_token or not hmac.compare_digest(x_cron_token, esperado):
+    if not recebido or not hmac.compare_digest(recebido, esperado):
         # compare_digest = comparação de tempo constante (anti timing-attack)
         raise HTTPException(status_code=401, detail="Token do cron inválido.")
     resultado = DfeDistribuicaoService(db).cron_diario(chunk=max(1, min(chunk, 5)))
