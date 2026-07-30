@@ -51,13 +51,19 @@ def create_invite_token(email: str, horas: int = 168) -> str:
     """Token de CONVITE (definir senha) — JWT assinado, scope=set_senha, expira em
     7 dias por padrão. Sem coluna no banco (stateless): o set-senha valida a
     assinatura. Não loga ninguém — só autoriza criar a senha daquele e-mail."""
-    expire = datetime.now(tz=timezone.utc) + timedelta(hours=horas)
-    payload = {"sub": email, "scope": "set_senha", "exp": expire}
+    agora = datetime.now(tz=timezone.utc)
+    expire = agora + timedelta(hours=horas)
+    # `iat` (emitido em) permite USO ÚNICO: depois que o convite é usado, o
+    # usuário guarda `convite_valido_apos` e todo token emitido ANTES disso é
+    # recusado (ver `dados_token_senha` + /portal/definir-senha).
+    payload = {"sub": email, "scope": "set_senha", "exp": expire, "iat": agora}
     return jwt.encode(payload, settings.secret_key, algorithm="HS256")
 
 
-def email_do_token_senha(token: str) -> str:
-    """Valida o token de definir-senha (scope=set_senha) e devolve o e-mail.
+def dados_token_senha(token: str) -> tuple[str, datetime | None]:
+    """Valida o token de definir-senha e devolve (e-mail, emitido_em).
+
+    `emitido_em` é None em tokens antigos (emitidos antes do claim `iat`).
     Levanta 400 se inválido/expirado/escopo errado."""
     erro = HTTPException(
         status_code=status.HTTP_400_BAD_REQUEST,
@@ -69,7 +75,14 @@ def email_do_token_senha(token: str) -> str:
         raise erro from exc
     if payload.get("scope") != "set_senha" or not payload.get("sub"):
         raise erro
-    return payload["sub"]
+    iat = payload.get("iat")
+    emitido_em = datetime.fromtimestamp(iat, tz=timezone.utc) if iat else None
+    return payload["sub"], emitido_em
+
+
+def email_do_token_senha(token: str) -> str:
+    """Compat: só o e-mail (ver `dados_token_senha`)."""
+    return dados_token_senha(token)[0]
 
 
 def authenticate_user(db: Session, email: str, password: str) -> Usuario | None:

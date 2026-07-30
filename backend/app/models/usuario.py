@@ -42,4 +42,10 @@ class Usuario(Base):
     # Motivo da inativação do CLIENTE (ex.: "inadimplente", "saiu do escritório").
     # Só descritivo pro escritório saber por que o acesso está desligado.
     motivo_inativacao: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # CONVITE DE USO ÚNICO: marcado quando o link de definir-senha é consumido.
+    # Todo token emitido ANTES deste instante é recusado (o link não vale 2x).
+    # NULL = nunca usou convite (comportamento antigo, sem quebrar ninguém).
+    convite_valido_apos: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

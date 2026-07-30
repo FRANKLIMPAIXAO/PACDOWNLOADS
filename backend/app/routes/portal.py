@@ -106,12 +106,33 @@ def definir_senha(payload: DefinirSenha, db: Session = Depends(get_db)) -> Token
     token de acesso (login automático). Sem coluna no banco — stateless."""
     if len(payload.senha) < 6:
         raise HTTPException(status_code=400, detail="A senha precisa de ao menos 6 caracteres.")
-    email = email_do_token_senha(payload.token)  # 400 se inválido/expirado
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+
+    from app.services.auth_service import dados_token_senha
+
+    email, emitido_em = dados_token_senha(payload.token)  # 400 se inválido/expirado
     user = db.scalar(select(Usuario).where(Usuario.email == email))
     if not user or not user.is_cliente:
         raise HTTPException(status_code=400, detail="Convite inválido.")
+    # USO ÚNICO: se o convite já foi consumido, todo token emitido ANTES daquele
+    # instante é recusado (link vazado não redefine a senha de novo). Peça um
+    # convite novo — o token novo tem `iat` posterior e volta a valer.
+    if user.convite_valido_apos is not None:
+        _marco = user.convite_valido_apos
+        if _marco.tzinfo is None:
+            _marco = _marco.replace(tzinfo=_tz.utc)
+        if emitido_em is None or emitido_em < _marco:
+            raise HTTPException(
+                status_code=400,
+                detail="Este link de convite já foi usado. Peça um novo ao escritório.",
+            )
     user.senha_hash = hash_password(payload.senha)
     user.ativo = True
+    # Marco ancorado no PRÓPRIO token consumido (+1s), não no relógio do momento:
+    # o `iat` do JWT é truncado pra segundos inteiros, então usar `now()` criava
+    # uma janela morta que recusava até convite recém-reenviado. Assim o token
+    # usado (iat < marco) morre e qualquer convite posterior continua valendo.
+    user.convite_valido_apos = (emitido_em or _dt.now(tz=_tz.utc)) + _td(seconds=1)
     db.commit()
     return TokenResponse(access_token=create_access_token(user.email))
 

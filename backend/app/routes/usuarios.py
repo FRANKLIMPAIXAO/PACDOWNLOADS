@@ -18,7 +18,7 @@ sem caminho de escalonamento de privilégio.
 import secrets
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -78,6 +78,24 @@ def seguranca_diagnostico(
         select(Usuario).where(Usuario.is_admin.is_(True), Usuario.ativo.is_(True))
     ).all()
     admin_loga_com_123 = any(verify_password("admin123", a.senha_hash) for a in admins)
+    # SEGREDO LEGADO EM TEXTO PURO: `decrypt_secret` tolera valor não-cifrado
+    # (migração gradual). Todo token Fernet começa com "gAAAAA" — o que NÃO
+    # começa está salvo em CLARO no banco. Conta quantos (sem expor valor).
+    from app.models.empresa import Empresa as _Emp
+    _cols = [
+        _Emp.focus_token, _Emp.cert_a1_senha_cifrada, _Emp.prefeitura_senha_cifrada,
+        _Emp.emissor_nacional_senha_cifrada, _Emp.simples_codigo_acesso_cifrado,
+    ]
+    _em_claro = 0
+    for _c in _cols:
+        try:
+            _em_claro += int(db.scalar(
+                select(func.count()).select_from(_Emp).where(
+                    _c.isnot(None), _c != "", ~_c.like("gAAAAA%"),
+                )
+            ) or 0)
+        except Exception:  # noqa: BLE001 — diagnóstico nunca derruba
+            pass
     return {
         "ambiente": s.app_env,
         "is_production": s.is_production,
@@ -92,6 +110,9 @@ def seguranca_diagnostico(
             s.use_mock_focus_nfe, s.use_mock_integra, s.use_mock_sefaz, s.use_mock_infosimples,
         ]),
         "resend_configurado": bool(s.resend_api_key),
+        # >0 = ainda existe credencial salva SEM criptografia (legado). Some ao
+        # reabrir e salvar o cadastro da empresa (o save re-cifra).
+        "segredos_em_texto_puro": _em_claro,
     }
 
 
