@@ -41,4 +41,14 @@ COPY --from=builder --chown=nextjs:nodejs /app/public           ./public
 USER nextjs
 EXPOSE 3000
 
+# HEALTHCHECK — resolve o "front caiu e só volta com deploy manual".
+# Sintoma real: o processo Node TRAVAVA (aceitava TCP/TLS mas nunca respondia).
+# Como ele NÃO morria, o Docker/Swarm achava que estava saudável e nunca
+# reiniciava — só o deploy recriava o container. Agora o container é sondado a
+# cada 30s; 3 falhas seguidas (~1,5 min) marcam unhealthy e o orquestrador
+# reinicia sozinho. `--start-period` dá folga pro boot do Next.
+# Usa wget do busybox (já existe no alpine) — sem dependência nova.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
+  CMD wget -q -T 4 -O /dev/null http://127.0.0.1:3000/api/health || exit 1
+
 CMD ["node", "server.js"]
