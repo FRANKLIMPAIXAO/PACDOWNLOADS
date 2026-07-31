@@ -41,14 +41,14 @@ COPY --from=builder --chown=nextjs:nodejs /app/public           ./public
 USER nextjs
 EXPOSE 3000
 
-# HEALTHCHECK — resolve o "front caiu e só volta com deploy manual".
-# Sintoma real: o processo Node TRAVAVA (aceitava TCP/TLS mas nunca respondia).
-# Como ele NÃO morria, o Docker/Swarm achava que estava saudável e nunca
-# reiniciava — só o deploy recriava o container. Agora o container é sondado a
-# cada 30s; 3 falhas seguidas (~1,5 min) marcam unhealthy e o orquestrador
-# reinicia sozinho. `--start-period` dá folga pro boot do Next.
-# Usa wget do busybox (já existe no alpine) — sem dependência nova.
-HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
-  CMD wget -q -T 4 -O /dev/null http://127.0.0.1:3000/api/health || exit 1
+# ATENCAO - NAO reintroduzir HEALTHCHECK aqui sem validar no ambiente real.
+# Tentativa em 30/07/2026 (commit 34ff6e6) coincidiu com o servico fora do ar
+# (502 imediato = sem container saudavel, em vez do timeout de app travado):
+# se a sonda falha, o Swarm MATA o container em loop e o site cai de vez.
+# Suspeita principal: a PORTA. O Easypanel pode injetar PORT != 3000 e a sonda
+# fixa em :3000 falharia sempre. O lugar certo pra configurar isso e a interface
+# do Easypanel (da pra ajustar/desligar sem rebuild).
+# A rota GET /api/health continua existindo, usada pelo monitor EXTERNO
+# (cron-job.org) — que avisa por e-mail e NAO pode derrubar nada.
 
 CMD ["node", "server.js"]
