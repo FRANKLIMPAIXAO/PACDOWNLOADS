@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import hmac
+import logging
 import os
+import threading
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
@@ -11,6 +14,8 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.services.auth_service import get_current_user
 from app.services.nfse_service import NFSeService
+
+logger = logging.getLogger("pac.nfse_cron")
 
 router = APIRouter(
     prefix="/nfse-adn", tags=["nfse-adn"], dependencies=[Depends(get_current_user)],
@@ -21,31 +26,67 @@ router = APIRouter(
 router_cron = APIRouter(prefix="/nfse-adn", tags=["nfse-adn-cron"])
 
 
+# Estado do cron em memória. O trabalho roda em THREAD e a requisição responde
+# na hora — o cron-job.org recebeu 502 porque o Traefik CORTA em ~60s e uma única
+# empresa com atraso grande estourava esse tempo sozinha. Respondendo rápido, o
+# proxy nunca corta e a sincronização pode demorar o quanto precisar.
+_CRON: dict = {"rodando": False, "iniciado_em": None, "ultimo": None}
+
+
+def _rodar_cron_nfse(chunk: int) -> None:
+    """Roda a sincronização FORA da requisição. Sessão de banco PRÓPRIA — a do
+    request é fechada assim que a resposta sai."""
+    from app.database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        resultado = NFSeService(db).cron_sincronizar(chunk=chunk, budget_s=240, max_lotes=12)
+        try:
+            from app.services.cron_log import registrar_cron
+            registrar_cron(db, "nfse", resultado)
+        except Exception:  # noqa: BLE001 — log nunca derruba o cron
+            db.rollback()
+        _CRON["ultimo"] = {"em": datetime.now(timezone.utc).isoformat(), **resultado}
+        logger.info("Cron NFS-e concluído: %s", resultado.get("processadas"))
+    except Exception as exc:  # noqa: BLE001 — nunca deixa a thread morrer calada
+        logger.exception("Cron NFS-e falhou")
+        _CRON["ultimo"] = {"em": datetime.now(timezone.utc).isoformat(), "erro": str(exc)[:300]}
+    finally:
+        db.close()
+        _CRON["rodando"] = False
+
+
 @router_cron.api_route("/cron", methods=["GET", "POST"])
 def cron_nfse(
     x_cron_token: str = Header(default=""),
     token: str = "",
-    chunk: int = 3,
-    db: Session = Depends(get_db),
+    chunk: int = 6,
 ) -> dict:
-    """Passo do cron de NFS-e — sincroniza um PEDAÇO da carteira pelo ADN.
+    """Dispara um passo do cron de NFS-e e responde NA HORA (202-like).
 
     Chamado por cron EXTERNO a cada ~10-15 min. Aceita GET ou POST. Token pelo
-    header `X-Cron-Token` OU pela URL `?token=...` (facilita agendador/navegador).
-    Env `NFSE_CRON_TOKEN` (cai pra `DFE_CRON_TOKEN`). `chunk` = empresas/chamada (cap 8)."""
+    header `X-Cron-Token` OU pela URL `?token=...`. Env `NFSE_CRON_TOKEN` (cai
+    pra `DFE_CRON_TOKEN`). `chunk` = empresas por rodada (cap 15).
+
+    A sincronização roda em THREAD: a resposta é imediata (não dá 502 do Traefik)
+    e o resultado da rodada ANTERIOR volta em `ultimo` — é assim que se acompanha.
+    Se ainda estiver rodando, não empilha outra (devolve `ja_rodando`)."""
     esperado = os.getenv("NFSE_CRON_TOKEN", "") or os.getenv("DFE_CRON_TOKEN", "")
     recebido = x_cron_token or token
     if not esperado:
         raise HTTPException(status_code=503, detail="NFSE_CRON_TOKEN (ou DFE_CRON_TOKEN) não configurado no servidor.")
     if not recebido or not hmac.compare_digest(recebido, esperado):
         raise HTTPException(status_code=401, detail="Token do cron inválido.")
-    resultado = NFSeService(db).cron_sincronizar(chunk=max(1, min(chunk, 8)))
-    try:
-        from app.services.cron_log import registrar_cron
-        registrar_cron(db, "nfse", resultado)
-    except Exception:  # noqa: BLE001 — log nunca derruba o cron
-        db.rollback()
-    return resultado
+
+    if _CRON["rodando"]:
+        return {"ok": True, "ja_rodando": True, "iniciado_em": _CRON["iniciado_em"], "ultimo": _CRON["ultimo"]}
+
+    _CRON["rodando"] = True
+    _CRON["iniciado_em"] = datetime.now(timezone.utc).isoformat()
+    threading.Thread(
+        target=_rodar_cron_nfse, args=(max(1, min(chunk, 15)),), daemon=True,
+    ).start()
+    return {"ok": True, "disparado": True, "iniciado_em": _CRON["iniciado_em"], "ultimo": _CRON["ultimo"]}
 
 
 class SincronizarLotePayload(BaseModel):
