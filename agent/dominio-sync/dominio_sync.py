@@ -36,7 +36,7 @@ import logging
 import os
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
@@ -85,12 +85,45 @@ class Config:
         self.data_max = os.environ.get("DATA_MAX", "").strip()  # override cru
         if self.competencia:
             import calendar
-            try:
-                ano, mes = (int(x) for x in self.competencia.split("-"))
-                self.data_min = self.data_min or f"{ano:04d}-{mes:02d}-01"
-                self.data_max = self.data_max or f"{ano:04d}-{mes:02d}-{calendar.monthrange(ano, mes)[1]:02d}"
-            except (ValueError, TypeError):
-                raise SystemExit(f"COMPETENCIA inválida (use AAAA-MM): {self.competencia!r}")
+            # AUTOMÁTICO: evita editar o config.env todo mês (o agendamento roda
+            # sozinho e sempre no período certo). Valores aceitos:
+            #   AAAA-MM    -> mês fixo
+            #   auto/atual -> mês corrente
+            #   anterior   -> mês passado
+            #   recente    -> mês passado + mês atual  (RECOMENDADO p/ agendar)
+            _c = self.competencia.lower()
+            hoje = date.today()
+            if _c in ("recente", "rolante", "rolling"):
+                # JANELA ROLANTE — cobre os dois meses numa execução só.
+                # POR QUE NÃO alternar "auto" e "anterior" em runs separados: a
+                # janela é enviada ao SERVIDOR como filtro e o cursor do
+                # estado.json é GLOBAL (ultimo_id). Rodar um mês avança o cursor;
+                # o outro mês começaria depois dele e PULARIA notas. Uma janela
+                # única + um cursor único não tem esse furo. O arquivamento não
+                # muda: cada nota vai pra pasta da competência DELA.
+                ini = (hoje.replace(day=1) - timedelta(days=1)).replace(day=1)
+                fim_dia = calendar.monthrange(hoje.year, hoje.month)[1]
+                self.data_min = self.data_min or f"{ini.year:04d}-{ini.month:02d}-01"
+                self.data_max = self.data_max or f"{hoje.year:04d}-{hoje.month:02d}-{fim_dia:02d}"
+                self.competencia = f"{ini.year:04d}-{ini.month:02d}..{hoje.year:04d}-{hoje.month:02d}"
+            else:
+                if _c in ("auto", "atual", "corrente"):
+                    alvo = hoje
+                elif _c in ("anterior", "passado"):
+                    alvo = hoje.replace(day=1) - timedelta(days=1)
+                else:
+                    alvo = None
+                if alvo is not None:
+                    self.competencia = f"{alvo.year:04d}-{alvo.month:02d}"
+                try:
+                    ano, mes = (int(x) for x in self.competencia.split("-"))
+                    self.data_min = self.data_min or f"{ano:04d}-{mes:02d}-01"
+                    self.data_max = self.data_max or f"{ano:04d}-{mes:02d}-{calendar.monthrange(ano, mes)[1]:02d}"
+                except (ValueError, TypeError):
+                    raise SystemExit(
+                        f"COMPETENCIA inválida: {self.competencia!r} "
+                        "(use AAAA-MM, ou auto / anterior / recente)"
+                    )
         # MODELOS=55 = só Nota Fiscal (exclui cupom NFC-e mod 65). Vazio = todos.
         self.modelos = os.environ.get("MODELOS", "").strip()
         # CNPJs (14 díg, csv) a IGNORAR — empresas de altíssimo volume tratadas à parte.
@@ -413,10 +446,21 @@ def main() -> int:
     ap.add_argument("--reset", action="store_true", help="zera o cursor (re-baixa tudo)")
     ap.add_argument("--so-incremental", action="store_true", help="pula o rescan")
     ap.add_argument("--rescan-dias", type=int, default=None, help="sobrescreve DIAS_RESCAN")
+    ap.add_argument(
+        "--competencia", default=None,
+        help="AAAA-MM, ou 'auto' (mês atual) / 'anterior' (mês passado). "
+             "Sobrescreve o config.env — usado pelo agendamento automático.",
+    )
     args = ap.parse_args()
 
     _setup_logging()
     _carregar_env()
+    # CLI vence o config.env: o .bat agendado passa --competencia e o arquivo
+    # não precisa ser editado todo mês.
+    if args.competencia:
+        os.environ["COMPETENCIA"] = args.competencia
+        os.environ.pop("DATA_MIN", None)   # senão a janela antiga do .env prevaleceria
+        os.environ.pop("DATA_MAX", None)
     cfg = Config()
     cfg.validar()
 
