@@ -38,7 +38,7 @@ settings = get_settings()
 # BUILD_COMMIT no build (commit fica "unknown"), este é o sinal confiável pra
 # saber, via GET /version, se o deploy pegou o código novo (cache stale é
 # recorrente). Formato livre: AAAA-MM-DD + resumo curto.
-APP_BUILD_TAG = "2026-08-01-nfse-cron-async"
+APP_BUILD_TAG = "2026-08-03-rescan-paginado"
 
 
 @asynccontextmanager

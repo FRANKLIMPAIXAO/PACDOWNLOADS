@@ -44,6 +44,9 @@ import httpx
 AQUI = Path(__file__).resolve().parent
 ESTADO_PATH = AQUI / "estado.json"
 LOG_PATH = AQUI / "logs" / "dominio_sync.log"
+# Teto de páginas do rescan — trava de segurança contra loop, não limite de
+# cobertura: 60 x LIMITE_PAGINA(2000) = 120k documentos na janela de rescan.
+MAX_PAGINAS_RESCAN = 60
 
 logger = logging.getLogger("dominio_sync")
 
@@ -194,9 +197,11 @@ class PacSyncClient:
         self._c.headers["Authorization"] = f"Bearer {token}"
         logger.info("Autenticado no PAC como %s", self.cfg.email)
 
-    def manifesto(self, *, desde_id: int = 0, dias: int = 0) -> dict:
+    def manifesto(self, *, desde_id: int = 0, antes_id: int = 0, dias: int = 0) -> dict:
         params: dict[str, object] = {
             "desde_id": desde_id,
+            # cursor DESCENDENTE do rescan (id < antes_id). 0 = primeira página.
+            "antes_id": antes_id,
             "dias": dias,
             "tipos": self.cfg.tipos,
             "limite": self.cfg.limite_pagina,
@@ -390,14 +395,41 @@ def sincronizar(cfg: Config, *, dry_run: bool, so_incremental: bool, rescan_dias
         dias = rescan_dias if rescan_dias is not None else cfg.dias_rescan
         if not so_incremental and dias > 0:
             logger.info("Rescan dos últimos %s dias (manifestação tardia)", dias)
-            m = cli.manifesto(desde_id=0, dias=dias)
-            docs = m.get("documentos", [])
-            _processar_lote(cli, cfg, docs, stats, mapa, dry_run=dry_run)
-            if m.get("tem_mais"):
-                logger.warning(
-                    "Rescan truncado em %s docs (LIMITE_PAGINA). Reduza DIAS_RESCAN "
-                    "ou aumente o limite se faltar nota.", cfg.limite_pagina,
-                )
+            # PAGINA o rescan. Antes era UMA chamada só: quando passava de
+            # LIMITE_PAGINA (2000) ele TRUNCAVA e avisava "pode faltar nota" —
+            # ou seja, nota tardia podia ficar de fora silenciosamente. Aumentar
+            # o limite não resolve (o endpoint tem teto próprio); paginar resolve.
+            # Cursor LOCAL de propósito: o estado.json é do incremental e não
+            # pode ser movido por esta varredura (que começa do id 0).
+            # O rescan vem do mais NOVO pro mais antigo (id DESC), então o cursor
+            # é `antes_id` (id < antes_id) — e NÃO o `desde_id`, que é do
+            # incremental (id ASC). Servidor devolve `proximo_antes_id`.
+            cursor_rescan = 0
+            paginas = 0
+            while True:
+                m = cli.manifesto(antes_id=cursor_rescan, dias=dias)
+                docs = m.get("documentos", [])
+                if docs:
+                    _processar_lote(cli, cfg, docs, stats, mapa, dry_run=dry_run)
+                paginas += 1
+                prox = int(m.get("proximo_antes_id") or 0)
+                if not m.get("tem_mais") or prox <= 0:
+                    break  # fim
+                if cursor_rescan and prox >= cursor_rescan:
+                    # não desceu = backend antigo (sem paginação de rescan).
+                    logger.warning(
+                        "Rescan sem paginação no servidor (backend desatualizado?) — "
+                        "pode truncar em %s docs.", cfg.limite_pagina,
+                    )
+                    break
+                cursor_rescan = prox
+                if paginas >= MAX_PAGINAS_RESCAN:
+                    logger.warning(
+                        "Rescan parou em %s páginas (trava de segurança). Se ainda "
+                        "faltar nota, reduza DIAS_RESCAN.", MAX_PAGINAS_RESCAN,
+                    )
+                    break
+            logger.info("Rescan concluído em %s página(s)", paginas)
 
         if not dry_run:
             estado["ultima_execucao"] = datetime.now(timezone.utc).isoformat()

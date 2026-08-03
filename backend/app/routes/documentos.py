@@ -558,6 +558,7 @@ def baixar_zip_lote(
 @router.get("/sync-manifest")
 def sync_manifest(
     desde_id: int = 0,
+    antes_id: int = 0,
     tipos: str = "NFE,CTE",
     dias: int = 0,
     data_min: str | None = None,
@@ -647,12 +648,16 @@ def sync_manifest(
     if modo_rescan:
         # RESCAN: docs criados nos últimos N dias (pega manifestação TARDIA de
         # RECEBIDA — entra como resumo de id antigo e só vira XML completo
-        # depois). Ignora o cursor; dedup é por arquivo no agente. Single-shot,
-        # do mais novo pro mais antigo.
+        # depois). Vai do mais novo pro mais antigo (id DESC).
+        # PAGINÁVEL por `antes_id` (cursor DESCENDENTE, id < antes_id). Antes era
+        # single-shot e TRUNCAVA no `limite`: passando de 2000 docs, a nota tardia
+        # excedente sumia silenciosamente. O `desde_id` (cursor CRESCENTE) não
+        # serve aqui porque a ordem é inversa — daí um cursor próprio.
         corte = datetime.now(timezone.utc) - timedelta(days=dias)
-        stmt = stmt.where(DocumentoFiscal.created_at >= corte).order_by(
-            DocumentoFiscal.id.desc()
-        ).limit(teto)
+        stmt = stmt.where(DocumentoFiscal.created_at >= corte)
+        if antes_id > 0:
+            stmt = stmt.where(DocumentoFiscal.id < antes_id)
+        stmt = stmt.order_by(DocumentoFiscal.id.desc()).limit(teto)
     else:
         # INCREMENTAL: cursor por id, paginável (avança proximo_desde_id).
         stmt = stmt.where(DocumentoFiscal.id > desde_id).order_by(
@@ -661,6 +666,7 @@ def sync_manifest(
 
     docs: list[dict] = []
     max_id = desde_id
+    min_id = 0  # rescan: menor id da página = cursor da PRÓXIMA (id DESC)
     for doc, cnpj_emp in db.execute(stmt).all():
         docs.append({
             "id": doc.id,
@@ -676,14 +682,20 @@ def sync_manifest(
             "eh_saida": doc.eh_saida,
             "cancelada": doc.cancelada,
         })
-        # No rescan o cursor NÃO avança (ids podem ser antigos).
-        if not modo_rescan and doc.id > max_id:
+        # Incremental sobe (id ASC); rescan desce (id DESC) — cada modo tem o seu.
+        if modo_rescan:
+            if min_id == 0 or doc.id < min_id:
+                min_id = doc.id
+        elif doc.id > max_id:
             max_id = doc.id
 
     return {
         "total": len(docs),
         "modo": "rescan" if modo_rescan else "incremental",
         "proximo_desde_id": max_id,
+        # Cursor do RESCAN: mande no `antes_id` da próxima chamada enquanto
+        # `tem_mais` for true. 0 = acabou.
+        "proximo_antes_id": min_id,
         "tem_mais": len(docs) >= teto,
         "tipos": [t.value for t in tipos_validos],
         "documentos": docs,
