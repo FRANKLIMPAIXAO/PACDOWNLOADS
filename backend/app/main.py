@@ -28,7 +28,7 @@ from app.models.receita_mensal import ReceitaMensal  # noqa: F401
 from app.models.situacao_fiscal import SituacaoFiscal  # noqa: F401
 from app.models.solicitacao_admissao import SolicitacaoAdmissao  # noqa: F401
 from app.models.usuario import Usuario
-from app.routes import admissoes, agenda, apuracoes, auth, certidoes, cobrancas, conector_email, cte_distribuicao, dashboard, dfe_distribuicao, docs_escritorio, documentos, empresas, guias_das, guias_dctfweb, guias_fgts, integra, integracao, nfse_adn, pac_indica, pacchat_webhook, parcelamentos_pgfn, parcelamentos_simples, portal, portal_bloqueios, prevencao, receitas_mensais, relatorios, robo, robo_sefaz, usuarios
+from app.routes import admissoes, agenda, apuracoes, auth, certidoes, cobrancas, conector_email, cte_distribuicao, dashboard, dfe_distribuicao, docs_escritorio, documentos, empresas, front_watchdog, guias_das, guias_dctfweb, guias_fgts, integra, integracao, nfse_adn, pac_indica, pacchat_webhook, parcelamentos_pgfn, parcelamentos_simples, portal, portal_bloqueios, prevencao, receitas_mensais, relatorios, robo, robo_sefaz, usuarios
 from app.services.auth_service import hash_password
 
 
@@ -38,7 +38,7 @@ settings = get_settings()
 # BUILD_COMMIT no build (commit fica "unknown"), este é o sinal confiável pra
 # saber, via GET /version, se o deploy pegou o código novo (cache stale é
 # recorrente). Formato livre: AAAA-MM-DD + resumo curto.
-APP_BUILD_TAG = "2026-08-03-rescan-paginado"
+APP_BUILD_TAG = "2026-08-04-front-watchdog"
 
 
 @asynccontextmanager
@@ -243,6 +243,7 @@ app.include_router(portal.router, prefix=settings.api_v1_prefix)
 app.include_router(pac_indica.router_public, prefix=settings.api_v1_prefix)
 app.include_router(pac_indica.router, prefix=settings.api_v1_prefix)
 app.include_router(portal_bloqueios.router, prefix=settings.api_v1_prefix)
+app.include_router(front_watchdog.router, prefix=settings.api_v1_prefix)
 app.include_router(pacchat_webhook.router, prefix=settings.api_v1_prefix)
 app.include_router(prevencao.router, prefix=settings.api_v1_prefix)
 app.include_router(conector_email.router, prefix=settings.api_v1_prefix)
